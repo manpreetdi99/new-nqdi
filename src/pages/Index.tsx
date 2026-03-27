@@ -7,22 +7,19 @@ import ResultsTable from "@/components/ResultsTable";
 import type { BenchmarkResult } from "@/types/benchmark";
 import BenchmarkCharts from "@/components/BenchmarkCharts";
 import StatsCards from "@/components/StatsCards";
-import CallsList from "@/components/CallsList";
 import CallDetail from "@/components/CallDetail";
-import CallsFilter, { type CallFilters } from "@/components/CallsFilter";
-import CallsSummary from "@/components/CallsSummary";
 import CallsMap from "@/components/CallsMap";
-import { generateCallRecords, type CallRecord } from "@/lib/callData";
+import type { CallRecord } from "@/lib/callData";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ApiClientError, fetchDatabases, runBenchmarkApi } from "@/lib/api";
-
-const defaultFilters: CallFilters = {
-  operator: "all",
-  status: "all",
-  technology: "all",
-  region: "all",
-  callType: "all",
-};
+import {
+  ApiClientError,
+  fetchAllCalls,
+  fetchCollectionNames,
+  fetchDatabases,
+  fetchLocations,
+  runBenchmarkApi,
+  type AllCallsRow,
+} from "@/lib/api";
 
 const formatApiError = (error: unknown, fallbackTitle: string) => {
   if (error instanceof ApiClientError) {
@@ -45,18 +42,66 @@ const formatApiError = (error: unknown, fallbackTitle: string) => {
   };
 };
 
+const normalizeStatus = (status: string | null | undefined): CallRecord["status"] => {
+  const normalized = (status || "").toLowerCase();
+  if (normalized.includes("drop")) return "dropped";
+  if (normalized.includes("fail")) return "failed";
+  return "completed";
+};
+
+const mapAllCallsRows = (rows: AllCallsRow[]): CallRecord[] => {
+  return rows.map((row, index) => {
+    const status = normalizeStatus(row.status);
+
+    return {
+      id: `session-${row.SessionId}-${index}`,
+      callId: row.SessionId,
+      startTime: new Date().toISOString(),
+      endTime: new Date().toISOString(),
+      duration_s: 0,
+      operator: "N/A",
+      region: row.Location || "Unknown",
+      technology: "N/A",
+      callType: "Session",
+      status,
+      setupTime_ms: 0,
+      avgMos: 0,
+      downloadSpeed: 0,
+      uploadSpeed: 0,
+      latency: 0,
+      jitter: 0,
+      packetLoss: 0,
+      events: [
+        {
+          timestamp: new Date().toISOString(),
+          event: "Session Loaded",
+          duration_ms: 0,
+          status: "success",
+          details: `Collection: ${row.CollectionName || "N/A"} | Latitude: ${row.latitude ?? "N/A"} | Longitude: ${row.longitude ?? "N/A"}`,
+        },
+      ],
+    };
+  });
+};
+
 const Index = () => {
   const [databases, setDatabases] = useState<string[]>([]);
   const [selectedDatabase, setSelectedDatabase] = useState("");
+  const [collectionNames, setCollectionNames] = useState<string[]>([]);
+  const [collectionsLoading, setCollectionsLoading] = useState(false);
+  const [selectedCallsCollection, setSelectedCallsCollection] = useState("");
+  const [locations, setLocations] = useState<string[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(false);
+  const [selectedLocation, setSelectedLocation] = useState("");
+  const [callsLoading, setCallsLoading] = useState(false);
+  const [allCallsRows, setAllCallsRows] = useState<AllCallsRow[]>([]);
+  const [callRecords, setCallRecords] = useState<CallRecord[]>([]);
 
   const [results, setResults] = useState<BenchmarkResult[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [totalTime, setTotalTime] = useState(0);
   const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null);
   const [activeTab, setActiveTab] = useState("queries");
-  const [filters, setFilters] = useState<CallFilters>(defaultFilters);
-
-  const callRecords = useMemo(() => generateCallRecords(35), []);
 
   useEffect(() => {
     const loadDatabases = async () => {
@@ -78,16 +123,117 @@ const Index = () => {
     loadDatabases();
   }, []);
 
-  const filteredCalls = useMemo(() => {
-    return callRecords.filter((c) => {
-      if (filters.operator !== "all" && c.operator !== filters.operator) return false;
-      if (filters.status !== "all" && c.status !== filters.status) return false;
-      if (filters.technology !== "all" && c.technology !== filters.technology) return false;
-      if (filters.region !== "all" && c.region !== filters.region) return false;
-      if (filters.callType !== "all" && c.callType !== filters.callType) return false;
-      return true;
-    });
-  }, [callRecords, filters]);
+  useEffect(() => {
+    const loadCollections = async () => {
+      if (!selectedDatabase) {
+        setCollectionNames([]);
+        return;
+      }
+
+      setCollectionsLoading(true);
+
+      try {
+        const names = await fetchCollectionNames(selectedDatabase);
+        setCollectionNames(names);
+      } catch (err: any) {
+        console.error("Failed to fetch collections:", err);
+        setCollectionNames([]);
+        const toastError = formatApiError(err, "Collections Fetch Failed");
+        toast({
+          title: toastError.title,
+          description: toastError.description,
+          variant: "destructive",
+        });
+      } finally {
+        setCollectionsLoading(false);
+      }
+    };
+
+    loadCollections();
+  }, [selectedDatabase]);
+
+  useEffect(() => {
+    setSelectedCallsCollection("");
+    setSelectedLocation("");
+    setLocations([]);
+    setAllCallsRows([]);
+    setCallRecords([]);
+    setSelectedCall(null);
+  }, [selectedDatabase]);
+
+  useEffect(() => {
+    setSelectedCallsCollection((prev) =>
+      prev && collectionNames.includes(prev) ? prev : "",
+    );
+  }, [collectionNames]);
+
+  useEffect(() => {
+    const loadLocations = async () => {
+      if (!selectedDatabase || !selectedCallsCollection) {
+        setLocations([]);
+        setSelectedLocation("");
+        return;
+      }
+
+      setLocationsLoading(true);
+
+      try {
+        const names = await fetchLocations(selectedDatabase, selectedCallsCollection);
+        setLocations(names);
+        setSelectedLocation((prev) => (prev && names.includes(prev) ? prev : ""));
+      } catch (err: any) {
+        console.error("Failed to fetch locations:", err);
+        setLocations([]);
+        setSelectedLocation("");
+        const toastError = formatApiError(err, "Locations Fetch Failed");
+        toast({
+          title: toastError.title,
+          description: toastError.description,
+          variant: "destructive",
+        });
+      } finally {
+        setLocationsLoading(false);
+      }
+    };
+
+    loadLocations();
+  }, [selectedDatabase, selectedCallsCollection]);
+
+  useEffect(() => {
+    const loadAllCalls = async () => {
+      if (!selectedDatabase || !selectedCallsCollection || !selectedLocation) {
+        setAllCallsRows([]);
+        setCallRecords([]);
+        setSelectedCall(null);
+        return;
+      }
+
+      setCallsLoading(true);
+
+      try {
+        const rows = await fetchAllCalls(selectedDatabase, selectedCallsCollection, selectedLocation);
+        setAllCallsRows(rows);
+        const mapped = mapAllCallsRows(rows);
+        setCallRecords(mapped);
+        setSelectedCall(null);
+      } catch (err: any) {
+        console.error("Failed to fetch calls:", err);
+        setAllCallsRows([]);
+        setCallRecords([]);
+        setSelectedCall(null);
+        const toastError = formatApiError(err, "All Calls Fetch Failed");
+        toast({
+          title: toastError.title,
+          description: toastError.description,
+          variant: "destructive",
+        });
+      } finally {
+        setCallsLoading(false);
+      }
+    };
+
+    loadAllCalls();
+  }, [selectedDatabase, selectedCallsCollection, selectedLocation]);
 
   const handleRunQueries = async (queries: string[]) => {
     if (!selectedDatabase) return;
@@ -119,11 +265,11 @@ const Index = () => {
         <div className="container max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <div className="h-8 w-8 rounded-md bg-primary/10 flex items-center justify-center glow-primary">
-              <Activity className="h-4 w-4 text-primary" />
+              <Activity className="h-4 w-4 text-red-500" />
             </div>
             <div>
               <h1 className="text-sm font-bold text-foreground tracking-tight">
-                SmartBench<span className="text-primary">Analytics</span>
+                FASMETRICS <span className="text-red-500">Analytics</span>
               </h1>
               <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
                 Network Quality Benchmarking
@@ -181,7 +327,12 @@ const Index = () => {
                 </p>
               </div>
 
-              <QueryEditor onRunQueries={handleRunQueries} isRunning={isRunning} />
+              <QueryEditor
+                onRunQueries={handleRunQueries}
+                isRunning={isRunning}
+                collectionNames={collectionNames}
+                collectionsLoading={collectionsLoading}
+              />
             </section>
 
             {isRunning && (
@@ -216,33 +367,92 @@ const Index = () => {
 
           <TabsContent value="calls" className="space-y-4">
             <div className="bg-card border border-border rounded-lg p-4">
-              <CallsFilter calls={callRecords} filters={filters} onFiltersChange={setFilters} />
-            </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-medium">Collection</label>
+                  <select
+                    value={selectedCallsCollection}
+                    onChange={(e) => setSelectedCallsCollection(e.target.value)}
+                    className="mt-1 w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                  >
+                    <option value="">Select collection</option>
+                    {collectionNames.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
 
-            <CallsSummary calls={filteredCalls} />
+                <div>
+                  <label className="text-xs font-medium">Location</label>
+                  <select
+                    value={selectedLocation}
+                    onChange={(e) => setSelectedLocation(e.target.value)}
+                    disabled={!selectedCallsCollection || locationsLoading}
+                    className="mt-1 w-full bg-muted border border-border rounded-md px-3 py-2 text-sm disabled:opacity-60"
+                  >
+                    <option value="">{locationsLoading ? "Loading locations..." : "Select location"}</option>
+                    {locations.map((name) => (
+                      <option key={name} value={name}>
+                        {name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            </div>
 
             <div className="bg-card border border-border rounded-lg overflow-hidden">
               <div className="px-4 py-3 border-b border-border flex items-center justify-between">
                 <div>
                   <h2 className="text-sm font-semibold text-foreground">All Calls</h2>
                   <p className="text-xs text-muted-foreground">
-                    {filteredCalls.length} κλήσεις {filteredCalls.length !== callRecords.length && `(από ${callRecords.length} συνολικά)`}
+                    {callsLoading
+                      ? "Loading..."
+                      : `${allCallsRows.length} rows`}
                   </p>
                 </div>
               </div>
-              <CallsList
-                calls={filteredCalls}
-                onSelectCall={(call) => {
-                  setSelectedCall(call);
-                  setActiveTab("detail");
-                }}
-              />
+              <div className="overflow-x-auto">
+                <table className="w-full text-xs">
+                  <thead>
+                    <tr className="border-b border-border bg-muted/30 text-left text-muted-foreground uppercase tracking-wider">
+                      <th className="px-4 py-2 font-semibold">SessionId</th>
+                      <th className="px-4 py-2 font-semibold">Status</th>
+                      <th className="px-4 py-2 font-semibold">CollectionName</th>
+                      <th className="px-4 py-2 font-semibold">Location</th>
+                      <th className="px-4 py-2 font-semibold">Latitude</th>
+                      <th className="px-4 py-2 font-semibold">Longitude</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {!callsLoading && allCallsRows.length === 0 && (
+                      <tr>
+                        <td colSpan={6} className="px-4 py-6 text-center text-muted-foreground">
+                          Select collection and location to load calls.
+                        </td>
+                      </tr>
+                    )}
+                    {allCallsRows.map((row, idx) => (
+                      <tr key={`${row.SessionId}-${idx}`} className="border-b border-border/60 hover:bg-muted/20">
+                        <td className="px-4 py-2 font-mono text-foreground">{row.SessionId}</td>
+                        <td className="px-4 py-2 text-foreground">{row.status ?? "N/A"}</td>
+                        <td className="px-4 py-2 text-foreground">{row.CollectionName ?? "N/A"}</td>
+                        <td className="px-4 py-2 text-foreground">{row.Location ?? "N/A"}</td>
+                        <td className="px-4 py-2 font-mono text-foreground">{row.latitude ?? "N/A"}</td>
+                        <td className="px-4 py-2 font-mono text-foreground">{row.longitude ?? "N/A"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
             </div>
           </TabsContent>
 
           <TabsContent value="map">
             <CallsMap
-              calls={filteredCalls}
+              calls={callRecords}
               onSelectCall={(call) => {
                 setSelectedCall(call);
                 setActiveTab("detail");

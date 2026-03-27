@@ -1,5 +1,5 @@
-import { useState } from "react";
-import { Play, Plus, X, Database, Code, Settings2 } from "lucide-react";
+import { useEffect, useState } from "react";
+import { Play, Plus, X, Database, Code, Settings2, ChevronDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { motion, AnimatePresence } from "framer-motion";
 import {
@@ -10,10 +10,20 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
+import {
+  DropdownMenu,
+  DropdownMenuCheckboxItem,
+  DropdownMenuContent,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 
 interface QueryEditorProps {
   onRunQueries: (queries: string[]) => void;
   isRunning: boolean;
+  collectionNames: string[];
+  collectionsLoading: boolean;
 }
 
 type QueryMode = "default" | "builder";
@@ -77,11 +87,25 @@ function buildQueryString(b: BuilderQuery): string {
   return sql;
 }
 
-const QueryEditor = ({ onRunQueries, isRunning }: QueryEditorProps) => {
+function escapeSqlString(value: string): string {
+  return value.replace(/'/g, "''");
+}
+
+const QueryEditor = ({
+  onRunQueries,
+  isRunning,
+  collectionNames,
+  collectionsLoading,
+}: QueryEditorProps) => {
   const [mode, setMode] = useState<QueryMode>("default");
 
   // Default mode state
   const [queries, setQueries] = useState<string[]>([SAMPLE_QUERIES[0]]);
+  const [selectedCollections, setSelectedCollections] = useState<string[]>([]);
+
+  useEffect(() => {
+    setSelectedCollections((prev) => prev.filter((name) => collectionNames.includes(name)));
+  }, [collectionNames]);
 
   // Builder mode state
   const [builders, setBuilders] = useState<BuilderQuery[]>([{ ...defaultBuilder }]);
@@ -123,9 +147,24 @@ const QueryEditor = ({ onRunQueries, isRunning }: QueryEditorProps) => {
     updateBuilder(builderIndex, { selectFields: next });
   };
 
+  const toggleCollection = (value: string) => {
+    setSelectedCollections((prev) =>
+      prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value],
+    );
+  };
+
+  const removeCollection = (value: string) => {
+    setSelectedCollections((prev) => prev.filter((item) => item !== value));
+  };
+
+  const collectionQueries = selectedCollections.map(
+    (name) => `SELECT * FROM filelist WHERE collection_name = '${escapeSqlString(name)}'`,
+  );
+
   const handleRun = () => {
     if (mode === "default") {
-      onRunQueries(queries);
+      const sqlQueries = queries.filter((q) => q.trim());
+      onRunQueries([...collectionQueries, ...sqlQueries]);
     } else {
       onRunQueries(builders.map(buildQueryString));
     }
@@ -133,7 +172,7 @@ const QueryEditor = ({ onRunQueries, isRunning }: QueryEditorProps) => {
 
   const allValid =
     mode === "default"
-      ? queries.every((q) => q.trim())
+      ? (queries.some((q) => q.trim()) || collectionQueries.length > 0)
       : builders.every((b) => b.selectFields.length > 0 && b.fromTable);
 
   return (
@@ -194,6 +233,63 @@ const QueryEditor = ({ onRunQueries, isRunning }: QueryEditorProps) => {
             exit={{ opacity: 0 }}
             className="space-y-2"
           >
+            <div className="rounded-md border border-border bg-muted/40 p-3 space-y-2">
+              <div className="flex items-center justify-between">
+                <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">
+                  Collection Queries (from filelist)
+                </p>
+                {collectionsLoading && (
+                  <span className="text-[10px] text-muted-foreground">Loading collections...</span>
+                )}
+              </div>
+
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm" className="w-full justify-between text-xs">
+                    {selectedCollections.length > 0
+                      ? `${selectedCollections.length} collection(s) selected`
+                      : "Select collection_name values"}
+                    <ChevronDown className="h-3.5 w-3.5" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent className="w-[320px] max-h-72 overflow-y-auto" align="start">
+                  <DropdownMenuLabel>collection_name</DropdownMenuLabel>
+                  <DropdownMenuSeparator />
+                  {collectionNames.length === 0 ? (
+                    <div className="px-2 py-1.5 text-xs text-muted-foreground">
+                      {collectionsLoading ? "Loading..." : "No collections found for this database."}
+                    </div>
+                  ) : (
+                    collectionNames.map((name) => (
+                      <DropdownMenuCheckboxItem
+                        key={name}
+                        checked={selectedCollections.includes(name)}
+                        onSelect={(e) => e.preventDefault()}
+                        onCheckedChange={() => toggleCollection(name)}
+                      >
+                        {name}
+                      </DropdownMenuCheckboxItem>
+                    ))
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+
+              {selectedCollections.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {selectedCollections.map((name) => (
+                    <Badge
+                      key={name}
+                      variant="secondary"
+                      className="text-[10px] cursor-pointer hover:bg-destructive/20 hover:text-destructive transition-colors"
+                      onClick={() => removeCollection(name)}
+                    >
+                      {name} <X className="h-2.5 w-2.5 ml-1" />
+                    </Badge>
+                  ))}
+                </div>
+              )}
+            </div>
+
             {queries.map((query, index) => (
               <div key={index} className="relative group flex items-start gap-2">
                 <span className="mt-3 text-xs font-mono text-muted-foreground w-6 text-right shrink-0">

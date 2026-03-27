@@ -75,6 +75,37 @@ export async function fetchDatabases(): Promise<string[]> {
   return json.databases;
 }
 
+export async function fetchCollectionNames(database: string): Promise<string[]> {
+  const params = new URLSearchParams({ database });
+  const json = await requestJson<{ collections: string[] }>(`/api/collections?${params.toString()}`);
+  return json.collections;
+}
+
+export async function fetchLocations(database: string, collection: string): Promise<string[]> {
+  const params = new URLSearchParams({ database, collection });
+  const json = await requestJson<{ locations: string[] }>(`/api/locations?${params.toString()}`);
+  return json.locations;
+}
+
+export interface AllCallsRow {
+  SessionId: string;
+  status: string | null;
+  CollectionName: string | null;
+  Location: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+export async function fetchAllCalls(
+  database: string,
+  collection: string,
+  location: string,
+): Promise<AllCallsRow[]> {
+  const params = new URLSearchParams({ database, collection, location });
+  const json = await requestJson<{ rows: AllCallsRow[] }>(`/api/calls?${params.toString()}`);
+  return json.rows;
+}
+
 export async function runBenchmarkApi(
   database: string,
   queries: string[]
