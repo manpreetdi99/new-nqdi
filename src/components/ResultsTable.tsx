@@ -1,14 +1,6 @@
 import { motion } from "framer-motion";
 import { TrendingUp, TrendingDown, Minus } from "lucide-react";
-
-export interface BenchmarkResult {
-  id: string;
-  queryLabel: string;
-  executionTime: number;
-  rowsReturned: number;
-  data: Record<string, string | number>[];
-  columns: string[];
-}
+import type { BenchmarkResult } from "@/types/benchmark";
 
 interface ResultsTableProps {
   results: BenchmarkResult[];
@@ -27,7 +19,6 @@ const ResultsTable = ({ results }: ResultsTableProps) => {
           transition={{ delay: idx * 0.1 }}
           className="bg-card border border-border rounded-lg overflow-hidden"
         >
-          {/* Header */}
           <div className="px-4 py-3 border-b border-border flex items-center justify-between">
             <div className="flex items-center gap-3">
               <span className="text-xs font-mono bg-primary/10 text-primary px-2 py-0.5 rounded">
@@ -50,7 +41,6 @@ const ResultsTable = ({ results }: ResultsTableProps) => {
             </div>
           </div>
 
-          {/* Table */}
           <div className="overflow-x-auto">
             <table className="w-full text-xs">
               <thead>
@@ -74,10 +64,10 @@ const ResultsTable = ({ results }: ResultsTableProps) => {
                     {result.columns.map((col) => (
                       <td key={col} className="px-4 py-2 font-mono text-foreground">
                         {typeof row[col] === "number"
-                          ? (row[col] as number).toLocaleString("el-GR", {
+                          ? row[col].toLocaleString("el-GR", {
                               maximumFractionDigits: 2,
                             })
-                          : row[col]}
+                          : String(row[col] ?? "")}
                       </td>
                     ))}
                   </tr>

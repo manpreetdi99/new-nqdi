@@ -26,44 +26,47 @@ interface BuilderQuery {
 }
 
 const SAMPLE_QUERIES = [
-  "SELECT region, AVG(latency_ms) as avg_latency, COUNT(*) as samples FROM network_measurements GROUP BY region ORDER BY avg_latency",
-  "SELECT operator, test_type, PERCENTILE_CONT(0.95) WITHIN GROUP (ORDER BY throughput_mbps) as p95_throughput FROM benchmarks GROUP BY operator, test_type",
-  "SELECT DATE_TRUNC('hour', measured_at) as hour, AVG(download_speed) as avg_dl, AVG(upload_speed) as avg_ul FROM speed_tests WHERE measured_at > NOW() - INTERVAL '24 hours' GROUP BY hour ORDER BY hour",
+  "SELECT TOP 100 * FROM CallTable ORDER BY StartTime DESC",
+  "SELECT Operator, COUNT(*) as TotalCalls, SUM(CASE WHEN CallStatus = 'Dropped' THEN 1 ELSE 0 END) as DroppedCalls FROM CallTable GROUP BY Operator",
+  "SELECT Technology, AVG(DL_Throughput) as Avg_DL, AVG(UL_Throughput) as Avg_UL, COUNT(*) as Samples FROM CallTable GROUP BY Technology ORDER BY Avg_DL DESC",
 ];
 
 const AVAILABLE_FIELDS = [
-  { value: "region", label: "Region" },
-  { value: "operator", label: "Operator" },
-  { value: "test_type", label: "Test Type" },
-  { value: "latency_ms", label: "Latency (ms)" },
-  { value: "throughput_mbps", label: "Throughput (Mbps)" },
-  { value: "download_speed", label: "Download Speed" },
-  { value: "upload_speed", label: "Upload Speed" },
-  { value: "jitter_ms", label: "Jitter (ms)" },
-  { value: "packet_loss", label: "Packet Loss" },
-  { value: "signal_strength", label: "Signal Strength" },
-  { value: "measured_at", label: "Measured At" },
-  { value: "AVG(latency_ms)", label: "AVG(latency_ms)" },
-  { value: "AVG(download_speed)", label: "AVG(download_speed)" },
-  { value: "AVG(upload_speed)", label: "AVG(upload_speed)" },
+  { value: "Operator", label: "Operator" },
+  { value: "Technology", label: "Technology" },
+  { value: "CallType", label: "Call Type" },
+  { value: "CallStatus", label: "Call Status" },
+  { value: "Region", label: "Region" },
+  { value: "StartTime", label: "Start Time" },
+  { value: "EndTime", label: "End Time" },
+  { value: "Duration", label: "Duration" },
+  { value: "DL_Throughput", label: "DL Throughput" },
+  { value: "UL_Throughput", label: "UL Throughput" },
+  { value: "Latency", label: "Latency" },
+  { value: "RSRP", label: "RSRP" },
+  { value: "RSRQ", label: "RSRQ" },
+  { value: "SINR", label: "SINR" },
   { value: "COUNT(*)", label: "COUNT(*)" },
-  { value: "MAX(throughput_mbps)", label: "MAX(throughput_mbps)" },
-  { value: "MIN(latency_ms)", label: "MIN(latency_ms)" },
+  { value: "AVG(DL_Throughput)", label: "AVG(DL_Throughput)" },
+  { value: "AVG(UL_Throughput)", label: "AVG(UL_Throughput)" },
+  { value: "AVG(Latency)", label: "AVG(Latency)" },
+  { value: "MAX(DL_Throughput)", label: "MAX(DL_Throughput)" },
+  { value: "MIN(Latency)", label: "MIN(Latency)" },
 ];
 
 const AVAILABLE_TABLES = [
-  { value: "network_measurements", label: "network_measurements" },
-  { value: "benchmarks", label: "benchmarks" },
-  { value: "speed_tests", label: "speed_tests" },
-  { value: "call_records", label: "call_records" },
-  { value: "signal_samples", label: "signal_samples" },
+  { value: "CallTable", label: "CallTable" },
+  { value: "EventTable", label: "EventTable" },
+  { value: "MeasurementTable", label: "MeasurementTable" },
+  { value: "CellInfo", label: "CellInfo" },
+  { value: "SignalSamples", label: "SignalSamples" },
 ];
 
 const defaultBuilder: BuilderQuery = {
-  selectFields: ["region", "AVG(latency_ms)"],
-  fromTable: "network_measurements",
+  selectFields: ["Operator", "AVG(DL_Throughput)"],
+  fromTable: "CallTable",
   whereClause: "",
-  groupByClause: "region",
+  groupByClause: "Operator",
 };
 
 function buildQueryString(b: BuilderQuery): string {

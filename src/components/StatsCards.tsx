@@ -1,6 +1,6 @@
 import { motion } from "framer-motion";
 import { Clock, Zap, Activity, BarChart3 } from "lucide-react";
-import type { BenchmarkResult } from "./ResultsTable";
+import type { BenchmarkResult } from "@/types/benchmark";
 
 interface StatsCardsProps {
   results: BenchmarkResult[];

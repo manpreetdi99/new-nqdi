@@ -1,4 +1,4 @@
-import type { BenchmarkResult } from "@/components/ResultsTable";
+import type { BenchmarkResult } from "@/types/benchmark";
 
 // Simulated data generator for benchmarking demo
 const OPERATORS = ["Cosmote", "Vodafone", "Wind", "Nova"];

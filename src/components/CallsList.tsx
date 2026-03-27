@@ -1,5 +1,5 @@
 import { motion } from "framer-motion";
-import { Phone, PhoneOff, PhoneForwarded, Clock, Signal, ChevronRight } from "lucide-react";
+import { Phone, PhoneOff, PhoneForwarded, ChevronRight } from "lucide-react";
 import type { CallRecord } from "@/lib/callData";
 
 interface CallsListProps {
@@ -34,7 +34,6 @@ function formatTime(iso: string): string {
 const CallsList = ({ calls, onSelectCall }: CallsListProps) => {
   return (
     <div className="space-y-1">
-      {/* Header row */}
       <div className="grid grid-cols-[2.5rem_1fr_1fr_1fr_1fr_5rem_5rem_2rem] gap-2 px-4 py-2 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold border-b border-border">
         <span></span>
         <span>Call ID</span>
@@ -83,9 +82,11 @@ const CallsList = ({ calls, onSelectCall }: CallsListProps) => {
               {formatDuration(call.duration_s)}
             </span>
 
-            <span className={`text-xs font-mono text-right ${
-              call.avgMos >= 3.5 ? "text-success" : call.avgMos >= 2.5 ? "text-warning" : "text-destructive"
-            }`}>
+            <span
+              className={`text-xs font-mono text-right ${
+                call.avgMos >= 3.5 ? "text-success" : call.avgMos >= 2.5 ? "text-warning" : "text-destructive"
+              }`}
+            >
               {call.avgMos > 0 ? call.avgMos.toFixed(1) : "—"}
             </span>
 

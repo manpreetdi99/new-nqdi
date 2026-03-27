@@ -4,7 +4,7 @@ import {
   LineChart, Line, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
   Legend, AreaChart, Area,
 } from "recharts";
-import type { BenchmarkResult } from "./ResultsTable";
+import type { BenchmarkResult } from "@/types/benchmark";
 
 interface BenchmarkChartsProps {
   results: BenchmarkResult[];

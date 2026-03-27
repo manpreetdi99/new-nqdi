@@ -1,9 +1,9 @@
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { motion } from "framer-motion";
 import { Activity, BarChart3, Phone, Database, MapPin } from "lucide-react";
 import QueryEditor from "@/components/QueryEditor";
 import ResultsTable from "@/components/ResultsTable";
-import type { BenchmarkResult } from "@/components/ResultsTable";
+import type { BenchmarkResult } from "@/types/benchmark";
 import BenchmarkCharts from "@/components/BenchmarkCharts";
 import StatsCards from "@/components/StatsCards";
 import CallsList from "@/components/CallsList";
@@ -11,9 +11,9 @@ import CallDetail from "@/components/CallDetail";
 import CallsFilter, { type CallFilters } from "@/components/CallsFilter";
 import CallsSummary from "@/components/CallsSummary";
 import CallsMap from "@/components/CallsMap";
-import { runBenchmark } from "@/lib/benchmarkEngine";
 import { generateCallRecords, type CallRecord } from "@/lib/callData";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
+import { fetchDatabases, runBenchmarkApi } from "@/lib/api";
 
 const defaultFilters: CallFilters = {
   operator: "all",
@@ -24,6 +24,9 @@ const defaultFilters: CallFilters = {
 };
 
 const Index = () => {
+  const [databases, setDatabases] = useState<string[]>([]);
+  const [selectedDatabase, setSelectedDatabase] = useState("");
+
   const [results, setResults] = useState<BenchmarkResult[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [totalTime, setTotalTime] = useState(0);
@@ -32,6 +35,20 @@ const Index = () => {
   const [filters, setFilters] = useState<CallFilters>(defaultFilters);
 
   const callRecords = useMemo(() => generateCallRecords(35), []);
+
+  useEffect(() => {
+    const loadDatabases = async () => {
+      try {
+        const dbs = await fetchDatabases();
+        setDatabases(dbs);
+        if (dbs.length > 0) setSelectedDatabase(dbs[0]);
+      } catch (err) {
+        console.error(err);
+      }
+    };
+
+    loadDatabases();
+  }, []);
 
   const filteredCalls = useMemo(() => {
     return callRecords.filter((c) => {
@@ -45,12 +62,17 @@ const Index = () => {
   }, [callRecords, filters]);
 
   const handleRunQueries = async (queries: string[]) => {
+    if (!selectedDatabase) return;
+
     setIsRunning(true);
     setResults([]);
+
     try {
-      const { results: newResults, totalTime: time } = await runBenchmark(queries);
+      const { results: newResults, totalTime: time } = await runBenchmarkApi(selectedDatabase, queries);
       setResults(newResults);
       setTotalTime(time);
+    } catch (err) {
+      console.error(err);
     } finally {
       setIsRunning(false);
     }
@@ -58,7 +80,6 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-background">
-      {/* Header */}
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="container max-w-7xl mx-auto px-4 py-3 flex items-center justify-between">
           <div className="flex items-center gap-3">
@@ -74,6 +95,7 @@ const Index = () => {
               </p>
             </div>
           </div>
+
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <span>{callRecords.length} calls recorded</span>
             {results.length > 0 && (
@@ -103,9 +125,24 @@ const Index = () => {
             </TabsTrigger>
           </TabsList>
 
-          {/* TAB 1: Queries */}
           <TabsContent value="queries" className="space-y-6">
-            <section className="bg-card border border-border rounded-lg p-4">
+            <section className="bg-card border border-border rounded-lg p-4 space-y-4">
+              <div>
+                <label className="text-sm font-medium">Database</label>
+                <select
+                  value={selectedDatabase}
+                  onChange={(e) => setSelectedDatabase(e.target.value)}
+                  className="mt-2 w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                >
+                  <option value="">Select database</option>
+                  {databases.map((db) => (
+                    <option key={db} value={db}>
+                      {db}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
               <QueryEditor onRunQueries={handleRunQueries} isRunning={isRunning} />
             </section>
 
@@ -139,7 +176,6 @@ const Index = () => {
             )}
           </TabsContent>
 
-          {/* TAB 2: All Calls */}
           <TabsContent value="calls" className="space-y-4">
             <div className="bg-card border border-border rounded-lg p-4">
               <CallsFilter calls={callRecords} filters={filters} onFiltersChange={setFilters} />
@@ -166,7 +202,6 @@ const Index = () => {
             </div>
           </TabsContent>
 
-          {/* TAB 3: Map */}
           <TabsContent value="map">
             <CallsMap
               calls={filteredCalls}
@@ -177,7 +212,6 @@ const Index = () => {
             />
           </TabsContent>
 
-          {/* TAB 4: Call Detail */}
           <TabsContent value="detail">
             {selectedCall ? (
               <CallDetail call={selectedCall} onBack={() => setActiveTab("calls")} />
