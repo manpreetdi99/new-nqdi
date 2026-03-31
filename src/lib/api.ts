@@ -81,27 +81,45 @@ export async function fetchCollectionNames(database: string): Promise<string[]> 
   return json.collections;
 }
 
-export async function fetchLocations(database: string, collection: string): Promise<string[]> {
-  const params = new URLSearchParams({ database, collection });
+export async function fetchLocations(database: string, collections: string[] = []): Promise<string[]> {
+  const params = new URLSearchParams({ database });
+  for (const collection of collections) {
+    if (collection) params.append("collection", collection);
+  }
   const json = await requestJson<{ locations: string[] }>(`/api/locations?${params.toString()}`);
   return json.locations;
 }
 
 export interface AllCallsRow {
-  SessionId: string;
-  status: string | null;
-  CollectionName: string | null;
   Location: string | null;
+  SessionId: string;
+  callType: string | null;
+  technology: string | null;
+  callDir: string | null;
+  status: string | null;
+  setupTime: number | null;
+  CollectionName: string | null;
+  callDuration: number | null;
+  callStartTimeStamp: string | null;
+  Avg_mos: number | null;
   latitude: number | null;
   longitude: number | null;
+  ASideFileName?: string | null;
+  comment: string | null;
 }
 
 export async function fetchAllCalls(
   database: string,
-  collection: string,
-  location: string,
+  collections: string[] = [],
+  locations: string[] = [],
 ): Promise<AllCallsRow[]> {
-  const params = new URLSearchParams({ database, collection, location });
+  const params = new URLSearchParams({ database });
+  for (const collection of collections) {
+    if (collection) params.append("collection", collection);
+  }
+  for (const location of locations) {
+    params.append("location", location);
+  }
   const json = await requestJson<{ rows: AllCallsRow[] }>(`/api/calls?${params.toString()}`);
   return json.rows;
 }

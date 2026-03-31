@@ -5,7 +5,7 @@ A full-stack benchmarking dashboard for **SQL Server query execution** and **net
 The project has two main parts:
 
 - **Frontend**: React + TypeScript + Vite + shadcn/ui + Tailwind
-- **Backend**: FastAPI + pyodbc for SQL Server access
+- **Backend**: FastAPI(python) + pyodbc for SQL Server access
 
 It allows a user to:
 
