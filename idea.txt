@@ -1,0 +1,56 @@
+Οι non-temp πίνακες/objects που χρησιμοποιεί το script είναι αυτοί:
+
+Sessions
+SessionsB
+CallSession
+ResultsKPI
+ResultsLQ08Avg
+TestInfo
+NetworkInfo
+Markers
+NetworkIdRelation
+Position
+MsgGSMReport
+WCDMAActiveSet
+LTEMeasurementReport
+vVoiceCodecTest
+FileList
+ErrorCodes
+wcdmaBLER
+wcdmaAGC
+Αν θες, μπορώ να στα δώσω και ομαδοποιημένα ανά χρήση (call setup, radio, MOS, codec, geography).
+
+
+
+
+Ομαδοποιημένα ανά χρήση:
+
+Core κλήσης και session
+Sessions
+SessionsB
+CallSession
+ResultsKPI
+
+
+
+Ποιότητα φωνής / MOS / codec
+ResultsLQ08Avg
+TestInfo
+vVoiceCodecTest
+
+Radio / δίκτυο / θέση
+NetworkInfo
+NetworkIdRelation
+Position
+MsgGSMReport
+WCDMAActiveSet
+LTEMeasurementReport
+Markers
+
+
+Metadata αρχείων και μηνύματα σφαλμάτων
+FileList
+ErrorCodes
+Επιπλέον RF KPIs
+wcdmaBLER
+wcdmaAGC

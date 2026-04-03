@@ -1,11 +1,20 @@
+/**
+ * Το CallEvent ορίζει τη δομή για κάθε γεγονός (γεγονός κατά τη διάρκεια μιας κλήσης).
+ * Χρησιμοποιούνται αυστηροί τύποι (π.χ. status: "success" | "warning" | "error")
+ * αντί για απλό string, ώστε η TypeScript να "χτυπήσει" αν βάλουμε λάθος τιμή.
+ */
 export interface CallEvent {
-  timestamp: string;
+  timestamp: string; // ISO string ημερομηνίας/ώρας
   event: string;
   duration_ms: number;
-  status: "success" | "warning" | "error";
+  status: "success" | "warning" | "error"; // Union Type: Μόνο αυτές οι 3 επιλογές επιτρέπονται
   details: string;
 }
 
+/**
+ * Το CallRecord αντιπροσωπεύει μια ολόκληρη κλήση (ή data session) 
+ * και θα χρησιμοποιηθεί σε όλο το application σου.
+ */
 export interface CallRecord {
   id: string;
   callId: string;
@@ -15,8 +24,9 @@ export interface CallRecord {
   operator: string;
   region: string;
   technology: string;
+  callMode?: string | null;
   callType: string;
-  status: "completed" | "dropped" | "failed";
+  status: "completed" | "dropped" | "failed"; // Ενεργοποιούμε το auto-complete του IDE
   setupTime_ms: number;
   avgMos: number;
   downloadSpeed: number;
@@ -24,7 +34,7 @@ export interface CallRecord {
   latency: number;
   jitter: number;
   packetLoss: number;
-  events: CallEvent[];
+  events: CallEvent[]; // Ένας πίνακας που περιέχει αντικείμενα τύπου CallEvent
 }
 
 const OPERATORS = ["Cosmote", "Vodafone", "Wind", "Nova"];
@@ -170,10 +180,11 @@ export function generateCallRecords(count: number = 30): CallRecord[] {
       callType,
       status,
       setupTime_ms: Math.round(rand(80, 1200)),
-      avgMos: status === "failed" ? 0 : rand(2.5, 4.5),
+      avgMos: rand(2.5, 4.5),
       downloadSpeed: rand(5, 250),
       uploadSpeed: rand(1, 60),
       latency: rand(8, 120),
+      
       jitter: rand(1, 30),
       packetLoss: rand(0, 5),
       events: generateEvents(callType, duration_s, status),

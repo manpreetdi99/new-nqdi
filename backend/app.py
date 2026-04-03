@@ -33,7 +33,8 @@ def list_calls(
             SELECT
                 DF.ASideLocation AS Location,
                 CA.SessionId,
-                CONCAT(CA.technology,' -- ',CA.callmode) as technology,
+                CA.technology as technology,
+                CA.callmode AS callMode,
                 CA.callType,
                 CA.callDir,
                 CA.callStatus AS status,
@@ -47,7 +48,8 @@ def list_calls(
                 COALESCE (AC.Comment, s.InvalidReason) AS comment,
                 DF.ASideFileName,
                 POS.Latitude AS latitude,
-                POS.Longitude AS longitude
+                POS.Longitude AS longitude,
+                S.Valid AS isValid
             FROM CallAnalysis CA
             LEFT JOIN FileList DF ON CA.FileId = DF.FileId
             LEFT JOIN Position POS ON CA.PosId = POS.PosId
@@ -192,5 +194,84 @@ def list_collections(database: str = Query(..., min_length=1)):
         conn.close()
 
         return {"collections": [row[0] for row in rows if row[0]]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/lte_values")
+def get_lte_values(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT [MsgId]
+                  ,[SessionId]
+                  ,[MsgTime]
+                  ,[PosId]
+                  ,[NetworkId]
+                  ,[EARFCN]
+                  ,[PhyCellId]
+                  ,round([RSRP], 2) AS [RSRP]
+                  ,round([RSRQ], 2) AS [RSRQ]
+                  ,round([SINR0], 2) AS [SINR0]
+                  ,round([SINR1], 2) AS [SINR1]
+                  ,[LTEServingCellInfoId]
+              FROM [LTEMeasurementReport]
+              WHERE [SessionId] = ?
+              ORDER BY MsgTime
+        """
+
+        cursor.execute(query, (session_id,))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+
+        data = []
+        for row in rows:
+            data.append({columns[idx]: row[idx] for idx in range(len(columns))})
+
+        conn.close()
+
+        return {"lteValues": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/gsm_values")
+def get_gsm_values(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT [MsgId]
+                  ,[SessionId]
+                  ,[MsgTime]
+                  ,[PosId]
+                  ,[NetworkId]
+                  ,[RxLevSub]
+                  ,[RxQualSub]
+              FROM [GSMMeasReport]
+              WHERE [SessionId] = ?
+              ORDER BY MsgTime
+        """
+
+        cursor.execute(query, (session_id,))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+
+        data = []
+        for row in rows:
+            data.append({columns[idx]: row[idx] for idx in range(len(columns))})
+
+        conn.close()
+
+        return {"gsmValues": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

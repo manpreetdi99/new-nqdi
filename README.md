@@ -18,6 +18,43 @@ It allows a user to:
 
 ---
 
+## 0. Quick Start: Πώς να τρέξετε την εφαρμογή (Local vs LAN)
+
+### Α. Για 1 Χρήστη Τοπικά (Στον ίδιο υπολογιστή - Single Local User)
+Ιδανικό για ανάπτυξη (development). Το frontend και το backend βρίσκονται στο ίδιο PC.
+
+1. **Backend (Python):** Στο τερματικό τρέξτε τον server για τοπικό reload.
+   ```bash
+   cd backend
+   uvicorn app:app --reload --port 8000
+   ```
+2. **Frontend (React):** Βεβαιωθείτε ότι στο αρχείο `src/lib/api.ts` το URL του API είναι: `const API_BASE_URL = "http://localhost:8000";`
+   ```bash
+   npm run dev
+   ```
+3. Ανοίξτε το `http://localhost:5173` στον browser σας.
+*(Για προεπισκόπηση μέσω **Lovable**, κάντε public Port Forwarding της θύρας 8000 μέσω VS Code και αλλάξτε το `API_BASE_URL` σε αυτό).*
+
+### Β. Για Πολλαπλούς Χρήστες & Κινητά (Στο ίδιο WiFi - Multi Local User)
+Ιδανικό για testing από άλλα κινητά ή PC του σπιτιού/γραφείου σας, χωρίς να περνάτε από cloud tunnels που καθυστερούν την εφαρμογή.
+
+1. **Βρείτε την τοπική TCP/IPv4 IP σας:** Ανοίξτε το τερματικό και πληκτρολογήστε `ipconfig` (π.χ. `192.168.x.x`).
+2. **Backend (Python):** Τρέξτε τον server, ώστε να ακούει σε όλες τις διευθύνσεις (`0.0.0.0`) και να δέχεται πολλαπλά αιτήματα ταυτόχρονα με 4 workers (ταχύτητα).
+   ```bash
+   cd backend
+   uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4
+   ```
+3. **Frontend (React):** Αλλάξτε το αρχείο `src/lib/api.ts` ώστε το URL να δείχνει στην IPv4 του υπολογιστή σας:
+   `const API_BASE_URL = "http://192.168.x.x:8000";`
+   
+   Στη συνέχεια, "ανοίξτε" το Vite στο δίκτυο με την εντολή:
+   ```bash
+   npm run dev -- --host
+   ```
+4. Πάρτε τα κινητά και **ανοίξτε τον browser**: `http://192.168.x.x:5173`. Θα δείτε την εφαρμογή να φορτώνει και να παίζει απρόσκοπτα από το τοπικό δίκτυο (LAN)!
+
+---
+
 ## 1. High-level architecture
 
 ```text

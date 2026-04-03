@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, Fragment } from "react";
 import { motion } from "framer-motion";
-import { Activity, BarChart3, Phone, Database, MapPin } from "lucide-react";
+import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import QueryEditor from "@/components/QueryEditor";
 import ResultsTable from "@/components/ResultsTable";
@@ -51,8 +51,28 @@ const normalizeStatus = (status: string | null | undefined): CallRecord["status"
   return "completed";
 };
 
-const getAllCallsRowClass = (status: string | null | undefined): string => {
+type StatusFilterKey = "completed" | "dropped" | "failed" | "system release";
+
+const matchesStatusFilter = (status: string | null | undefined, filter: StatusFilterKey): boolean => {
   const normalized = (status || "").toLowerCase();
+
+  if (filter === "completed") {
+    return normalized.includes("completed") || normalized === "";
+  }
+  if (filter === "dropped") {
+    return normalized.includes("drop");
+  }
+  if (filter === "failed") {
+    return normalized.includes("fail");
+  }
+  return normalized.includes("system release") || normalized.includes("system realase");
+};
+
+const getAllCallsRowClass = (row: AllCallsRow): string => {
+  if (row.isValid === 0) {
+    return "bg-red-500/25 hover:bg-red-500/35 border-red-500/40";
+  }
+  const normalized = (row.status || "").toLowerCase();
   if (normalized.includes("system release") || normalized.includes("system realase")) {
     return "bg-violet-500/25 hover:bg-violet-500/35 border-violet-500/40";
   }
@@ -81,6 +101,7 @@ const mapAllCallsRows = (rows: AllCallsRow[]): CallRecord[] => {
       operator: "N/A",
       region: row.Location || "Unknown",
       technology: row.technology || "N/A",
+      callMode: row.callMode || "N/A",
       callType: row.callType || "Session",
       status,
       setupTime_ms: row.setupTime != null ? Number(row.setupTime) : 0,
@@ -150,6 +171,20 @@ const Index = () => {
   const [totalTime, setTotalTime] = useState(0);
   const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null);
   const [activeTab, setActiveTab] = useLocalStorage<string>("perf-insights-active-tab", "queries");
+  const [sessionValidFilter, setSessionValidFilter] = useState<"all" | "1" | "0">("all");
+  const [statusFilters, setStatusFilters] = useState<StatusFilterKey[]>([]);
+  const [lastClickedRowId, setLastClickedRowId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (activeTab === "calls" && lastClickedRowId) {
+      setTimeout(() => {
+        const el = document.getElementById(lastClickedRowId);
+        if (el) {
+          el.scrollIntoView({ behavior: "auto", block: "center" });
+        }
+      }, 100);
+    }
+  }, [activeTab, lastClickedRowId]);
 
   const toggleCollection = (collectionName: string) => {
     setSelectedCallsCollections((prev) =>
@@ -184,16 +219,28 @@ const Index = () => {
     setSelectedLocations([]);
   };
 
+  const toggleStatusFilter = (filter: StatusFilterKey) => {
+    setStatusFilters((prev) =>
+      prev.includes(filter)
+        ? prev.filter((item) => item !== filter)
+        : [...prev, filter],
+    );
+  };
+
   const clearCallsFilters = () => {
     setSelectedDatabase("");
     setSelectedCallsCollections([]);
     setSelectedLocations([]);
+    setSessionValidFilter("all");
+    setStatusFilters([]);
   };
 
   const handleDatabaseChange = (newDb: string) => {
     setSelectedDatabase(newDb);
     setSelectedCallsCollections([]);
     setSelectedLocations([]);
+    setSessionValidFilter("all");
+    setStatusFilters([]);
     setLocations([]);
     setAllCallsRows([]);
     setCallRecords([]);
@@ -343,6 +390,29 @@ const Index = () => {
       setIsRunning(false);
     }
   };
+  const filteredAllCallsRows = useMemo(() => {
+    return allCallsRows.filter((row) => {
+      // Filter by session valid
+      if (sessionValidFilter === "1" && row.isValid !== 1) return false;
+      if (sessionValidFilter === "0" && row.isValid !== 0) return false;
+
+      // Filter by status
+      if (statusFilters.length > 0) {
+        const hasMatchingStatus = statusFilters.some((filter) =>
+          matchesStatusFilter(row.status, filter),
+        );
+        if (!hasMatchingStatus) return false;
+      }
+
+      return true;
+    });
+  }, [allCallsRows, sessionValidFilter, statusFilters]);
+
+  const filteredCallRecords = useMemo(() => {
+    if (sessionValidFilter === "all" && statusFilters.length === 0) return callRecords;
+    const validIds = new Set(filteredAllCallsRows.map((r) => r.SessionId));
+    return callRecords.filter((c) => validIds.has(c.callId));
+  }, [callRecords, filteredAllCallsRows, sessionValidFilter, statusFilters]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -384,7 +454,7 @@ const Index = () => {
                 >
                 Clear filters
               </button>
-            <span>{callRecords.length} calls recorded</span>
+            <span>{filteredCallRecords.length} calls recorded</span>
             {results.length > 0 && (
               <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse-glow" />
@@ -397,20 +467,22 @@ const Index = () => {
 
       <main className="w-full px-4 sm:px-6 lg:px-10 mx-auto py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <TabsList className="bg-muted border border-border mb-6">
-            <TabsTrigger value="queries" className="gap-1.5 text-xs">
-              <Database className="h-3.5 w-3.5" /> Queries
-            </TabsTrigger>
-            <TabsTrigger value="calls" className="gap-1.5 text-xs">
-              <Phone className="h-3.5 w-3.5" /> All Calls
-            </TabsTrigger>
-            <TabsTrigger value="map" className="gap-1.5 text-xs">
-              <MapPin className="h-3.5 w-3.5" /> Map
-            </TabsTrigger>
-            <TabsTrigger value="detail" className="gap-1.5 text-xs" disabled={!selectedCall}>
-              <BarChart3 className="h-3.5 w-3.5" /> Call Detail
-            </TabsTrigger>
-          </TabsList>
+          <div className="flex items-center justify-between mb-2">
+            <TabsList className="bg-muted border border-border">
+              <TabsTrigger value="queries" className="gap-1.5 text-xs">
+                <Database className="h-3.5 w-3.5" /> Queries
+              </TabsTrigger>
+              <TabsTrigger value="calls" className="gap-1.5 text-xs">
+                <Phone className="h-3.5 w-3.5" /> All Calls
+              </TabsTrigger>
+              <TabsTrigger value="map" className="gap-1.5 text-xs">
+                <MapPin className="h-3.5 w-3.5" /> Map
+              </TabsTrigger>
+              <TabsTrigger value="detail" className="gap-1.5 text-xs" disabled={!selectedCall}>
+                <BarChart3 className="h-3.5 w-3.5" /> Call Detail
+              </TabsTrigger>
+            </TabsList>
+          </div>
 
           <TabsContent value="queries" className="space-y-6">
             <section className="bg-card border border-border rounded-lg p-4 space-y-4">
@@ -610,6 +682,78 @@ const Index = () => {
                         If no location is selected, all locations are included.
                       </p>
                     </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-medium">Session Valid</label>
+                      </div>
+                      <div className="flex gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setSessionValidFilter("all")}
+                          className={`text-[10px] px-2 py-1 rounded border ${sessionValidFilter === "all" ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
+                        >
+                          All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSessionValidFilter("1")}
+                          className={`text-[10px] px-2 py-1 rounded border ${sessionValidFilter === "1" ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
+                        >
+                          Valid
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSessionValidFilter("0")}
+                          className={`text-[10px] px-2 py-1 rounded border ${sessionValidFilter === "0" ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
+                        >
+                          Invalid
+                        </button>
+                      </div>
+                    </div>
+
+                    <div>
+                      <div className="flex items-center justify-between mb-1">
+                        <label className="text-xs font-medium">Status</label>
+                      </div>
+                      <div className="flex flex-wrap gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => setStatusFilters([])}
+                          className={`text-[10px] px-2 py-1 rounded border ${statusFilters.length === 0 ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
+                        >
+                          All
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleStatusFilter("completed")}
+                          className={`text-[10px] px-2 py-1 rounded border ${statusFilters.includes("completed") ? "bg-success/50 text-success-foreground border-success" : "border-border bg-muted hover:bg-muted/70"}`}
+                        >
+                          Completed
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleStatusFilter("dropped")}
+                          className={`text-[10px] px-2 py-1 rounded border ${statusFilters.includes("dropped") ? "bg-destructive/50 text-destructive-foreground border-destructive" : "border-border bg-muted hover:bg-muted/70"}`}
+                        >
+                          Drop
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleStatusFilter("failed")}
+                          className={`text-[10px] px-2 py-1 rounded border ${statusFilters.includes("failed") ? "bg-warning/50 text-warning-foreground border-warning" : "border-border bg-muted hover:bg-muted/70"}`}
+                        >
+                          Fail
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => toggleStatusFilter("system release")}
+                          className={`text-[10px] px-2 py-1 rounded border ${statusFilters.includes("system release") ? "bg-violet-500/50 text-violet-100 border-violet-500" : "border-border bg-muted hover:bg-muted/70"}`}
+                        >
+                          System Release
+                        </button>
+                      </div>
+                    </div>
                   </div>
                 </div>
 
@@ -621,6 +765,16 @@ const Index = () => {
                     <Badge variant="secondary" className="text-[10px]">
                       Locations: {selectedLocations.length === 0 ? "All" : selectedLocations.length}
                     </Badge>
+                    {sessionValidFilter !== "all" && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        Session: {sessionValidFilter === "1" ? "Valid" : "Invalid"}
+                      </Badge>
+                    )}
+                    {statusFilters.length > 0 && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        Status: {statusFilters.join(", ")}
+                      </Badge>
+                    )}
                   </div>
                 </div>
               </aside>
@@ -632,7 +786,7 @@ const Index = () => {
                     <p className="text-xs text-muted-foreground">
                       {callsLoading
                         ? "Loading..."
-                        : `${allCallsRows.length} rows`}
+                        : `${filteredAllCallsRows.length} rows`}
                     </p>
                   </div>
                 </div>
@@ -643,6 +797,7 @@ const Index = () => {
                         <th className="px-2 py-2 font-semibold">Location</th>
                         <th className="px-2 py-2 font-semibold">SessionId</th> 
                         <th className="px-2 py-2 font-semibold">Technology</th>
+                        <th className="px-2 py-2 font-semibold">Call Mode</th>
                         <th className="px-2 py-2 font-semibold">Call Type</th>
                         <th className="px-2 py-2 font-semibold">Call Dir</th>
                         <th className="px-2 py-2 font-semibold">Status</th>
@@ -659,20 +814,20 @@ const Index = () => {
                       </tr>
                     </thead>
                     <tbody>
-                      {!callsLoading && allCallsRows.length === 0 && (
+                      {!callsLoading && filteredAllCallsRows.length === 0 && (
                         <tr>
-                          <td colSpan={12} className="px-2 py-6 text-center text-muted-foreground">
-                            Select a collection to load calls.
+                          <td colSpan={13} className="px-2 py-6 text-center text-muted-foreground">
+                            {allCallsRows.length === 0 ? "Select a collection to load calls." : "No rows match the selected filters."}
                           </td>
                         </tr>
                       )}
                       {/* να βγαζει την γραμμη end of file*/}
-                      {allCallsRows.map((row, idx) => {
+                      {filteredAllCallsRows.map((row, idx) => {
                         const currentFileTime = getFileDateTime(row.ASideFileName);
                         let showEndOfFile = false;
                         
                         if (idx > 0) {
-                          const prevFileTime = getFileDateTime(allCallsRows[idx - 1].ASideFileName);
+                          const prevFileTime = getFileDateTime(filteredAllCallsRows[idx - 1].ASideFileName);
                           // Show "End of File" if the date/time part of the filename changed
                           if (prevFileTime !== null && currentFileTime !== null && prevFileTime !== currentFileTime) {
                             showEndOfFile = true;
@@ -684,7 +839,7 @@ const Index = () => {
                             {showEndOfFile && (
                               <tr className="bg-muted/50 border-y border-border">
                                 <td 
-                                  colSpan={12} 
+                                  colSpan={13} 
                                   className="px-2 py-10 text-center text-xs font-semibold text-red-500 uppercase tracking-widest"
                                   >
                                   End of File
@@ -692,12 +847,23 @@ const Index = () => {
                               </tr>
                             )}
                             <tr
-                              className={`border-b border-border/60 ${getAllCallsRowClass(row.status)}`}
+                              
+                              id={`call-row-${row.SessionId}-${idx}`}
+                              className={`border-b border-border/60 ${getAllCallsRowClass(row)} cursor-pointer transition-colors`}
+                              onClick={() => {
+                                setLastClickedRowId(`call-row-${row.SessionId}-${idx}`);
+                                const record = callRecords.find((c) => c.callId === row.SessionId);
+                                if (record) {
+                                  setSelectedCall(record);
+                                  setActiveTab("detail");
+                                }
+                              }}
                             >
                               <td className="px-2 py-2 text-foreground">{row.Location ?? "N/A"}</td>
                               <td className="px-2 py-2 font-mono text-foreground break-words max-w-[120px]">{row.SessionId}</td>
                               
                               <td className="px-2 py-2 text-foreground">{row.technology ?? "N/A"}</td>
+                              <td className="px-2 py-2 text-foreground">{row.callMode ?? "N/A"}</td>
                               <td className="px-2 py-2 text-foreground">{row.callType ?? "N/A"}</td>
                               <td className="px-2 py-2 text-foreground">{row.callDir ?? "N/A"}</td>
                               <td className="px-2 py-2 text-foreground">{row.status ?? "N/A"}</td>
@@ -720,7 +886,7 @@ const Index = () => {
 
           <TabsContent value="map">
             <CallsMap
-              calls={callRecords}
+              calls={filteredCallRecords}
               onSelectCall={(call) => {
                 setSelectedCall(call);
                 setActiveTab("detail");
@@ -730,7 +896,7 @@ const Index = () => {
 
           <TabsContent value="detail">
             {selectedCall ? (
-              <CallDetail call={selectedCall} onBack={() => setActiveTab("calls")} />
+              <CallDetail call={selectedCall} database={selectedDatabase} onBack={() => setActiveTab("calls")} />
             ) : (
               <div className="flex flex-col items-center justify-center py-20 text-center">
                 <Phone className="h-10 w-10 text-muted-foreground mb-3" />
