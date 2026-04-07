@@ -105,12 +105,13 @@ const mapAllCallsRows = (rows: AllCallsRow[]): CallRecord[] => {
       callType: row.callType || "Session",
       status,
       setupTime_ms: row.setupTime != null ? Number(row.setupTime) : 0,
-      avgMos: 0,
+      avgMos: row.Avg_mos != null ? Number(row.Avg_mos) : 0,
       downloadSpeed: 0,
       uploadSpeed: 0,
       latency: 0,
       jitter: 0,
       packetLoss: 0,
+      comment: row.comment,
       events: [
         {
           timestamp: new Date().toISOString(),

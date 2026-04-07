@@ -135,6 +135,14 @@ export async function fetchLteValues(
   return requestJson(`/api/lte_values?${params.toString()}`);
 }
 
+export async function fetchLteValuesBSide(
+  database: string,
+  session_id: string
+): Promise<{ lteValuesBSide: any[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/lte_values_b_side?${params.toString()}`);
+}
+
 export async function fetchGsmValues(
   database: string,
   session_id: string
@@ -143,6 +151,52 @@ export async function fetchGsmValues(
   return requestJson(`/api/gsm_values?${params.toString()}`);
 }
 
+export async function fetchMosValues(
+  database: string,
+  session_id: string
+): Promise<{ mosValues: any[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/mos_values?${params.toString()}`);
+}
+
+export async function fetchKpiValues(
+  database: string,
+  session_id?: string
+): Promise<{ kpiValues: any[] }> {
+  const params = new URLSearchParams({ database });
+  if (session_id) params.append("session_id", session_id);
+  return requestJson(`/api/results_kpi?${params.toString()}`);
+}
+
+export interface CallSideComparisonRow {
+  Side: string | null;
+  callStatus: string | null;
+  code: string | null;
+  codeDescription: string | null;
+  calls: number | null;
+}
+
+export async function fetchCallSideComparison(
+  database: string,
+  session_id: string
+): Promise<{ comparison: CallSideComparisonRow[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/call_side_comparison?${params.toString()}`);
+}
+
+export async function updateCallComment(
+  database: string,
+  session_id: string,
+  comment: string
+): Promise<{ message: string }> {
+  return requestJson("/api/calls/comment", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ database, session_id, comment }),
+  });
+}
 
 export async function runBenchmarkApi(
   database: string,

@@ -2,22 +2,24 @@ import { useMemo } from "react";
 import { motion } from "framer-motion";
 import { MapPin, Phone, PhoneOff, PhoneForwarded } from "lucide-react";
 import type { CallRecord } from "@/lib/callData";
+import { MapContainer, TileLayer, CircleMarker, Tooltip } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
 
 interface CallsMapProps {
   calls: CallRecord[];
   onSelectCall: (call: CallRecord) => void;
 }
 
-// Approximate coordinates for Greek cities (normalized to SVG viewBox)
-const CITY_COORDS: Record<string, { x: number; y: number }> = {
-  Athens: { x: 310, y: 370 },
-  Thessaloniki: { x: 290, y: 180 },
-  Patras: { x: 230, y: 360 },
-  Heraklion: { x: 330, y: 520 },
-  Larissa: { x: 280, y: 250 },
-  Volos: { x: 300, y: 270 },
-  Ioannina: { x: 210, y: 210 },
-  Kavala: { x: 330, y: 170 },
+// Real GPS coordinates for Greek cities
+const CITY_COORDS: Record<string, [number, number]> = {
+  Athens: [37.9838, 23.7275],
+  Thessaloniki: [40.6401, 22.9444],
+  Patras: [38.2466, 21.7346],
+  Heraklion: [35.3387, 25.1442],
+  Larissa: [39.6390, 22.4191],
+  Volos: [39.3620, 22.9429],
+  Ioannina: [39.6644, 20.8521],
+  Kavala: [40.9396, 24.4069],
 };
 
 const statusColors = {
@@ -55,76 +57,51 @@ const CallsMap = ({ calls, onSelectCall }: CallsMapProps) => {
       </p>
 
       <div className="flex gap-6">
-        {/* SVG Map */}
-        <div className="flex-1 relative">
-          <svg viewBox="100 80 350 500" className="w-full h-auto max-h-[520px]">
-            {/* Simplified Greece outline */}
-            <path
-              d="M200,100 L240,95 L280,100 L320,95 L350,110 L370,140 L360,160 L340,155 L330,170 L350,180 L340,200 L320,190 L300,200 L310,220 L300,240 L310,260 L300,280 L310,300 L300,320 L280,310 L270,330 L280,350 L300,360 L320,370 L330,390 L310,400 L280,390 L260,400 L240,380 L220,370 L210,350 L220,330 L200,310 L190,280 L200,260 L190,240 L200,220 L190,200 L210,190 L200,170 L210,150 L200,130 Z"
-              className="fill-muted/30 stroke-border"
-              strokeWidth="1.5"
+        {/* Real Map with React-Leaflet */}
+        <div className="flex-1 relative h-[520px] min-h-[520px] rounded-lg overflow-hidden border border-border">
+          <MapContainer 
+            center={[39.07, 23.73]} 
+            zoom={6} 
+            scrollWheelZoom={true} 
+            style={{ height: "100%", width: "100%" }}
+          >
+            <TileLayer
+              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
             />
-            {/* Crete */}
-            <path
-              d="M270,490 L300,485 L340,490 L370,500 L380,510 L360,520 L320,525 L280,520 L260,510 L265,500 Z"
-              className="fill-muted/30 stroke-border"
-              strokeWidth="1.5"
-            />
-            {/* Peloponnese hint */}
-            <path
-              d="M220,370 L240,380 L260,400 L250,420 L230,430 L210,420 L200,400 L210,380 Z"
-              className="fill-muted/30 stroke-border"
-              strokeWidth="1.5"
-            />
-
-            {/* City bubbles */}
             {Object.entries(CITY_COORDS).map(([city, coords]) => {
               const stat = regionStats[city];
               if (!stat) return null;
-              const radius = Math.max(12, Math.min(30, stat.total * 4));
+              
+              const radius = Math.max(10, Math.min(25, stat.total * 2));
               const failRate = (stat.dropped + stat.failed) / stat.total;
+              const hasHighFailRate = failRate > 0.3;
 
               return (
-                <g key={city}>
-                  {/* Glow */}
-                  <circle
-                    cx={coords.x}
-                    cy={coords.y}
-                    r={radius + 4}
-                    className={failRate > 0.3 ? "fill-warning/10" : "fill-primary/10"}
-                  />
-                  {/* Main bubble */}
-                  <circle
-                    cx={coords.x}
-                    cy={coords.y}
-                    r={radius}
-                    className={`${failRate > 0.3 ? "fill-warning/20 stroke-warning/60" : "fill-primary/20 stroke-primary/60"} cursor-pointer hover:fill-primary/40 transition-colors`}
-                    strokeWidth="1.5"
-                    onClick={() => stat.calls[0] && onSelectCall(stat.calls[0])}
-                  />
-                  {/* Count text */}
-                  <text
-                    x={coords.x}
-                    y={coords.y + 1}
-                    textAnchor="middle"
-                    dominantBaseline="middle"
-                    className="fill-foreground text-[11px] font-bold font-mono pointer-events-none"
-                  >
-                    {stat.total}
-                  </text>
-                  {/* City label */}
-                  <text
-                    x={coords.x}
-                    y={coords.y + radius + 12}
-                    textAnchor="middle"
-                    className="fill-muted-foreground text-[9px] pointer-events-none"
-                  >
-                    {city}
-                  </text>
-                </g>
+                <CircleMarker
+                  key={city}
+                  center={coords}
+                  radius={radius}
+                  pathOptions={{
+                    fillColor: hasHighFailRate ? "#f59e0b" : "#3b82f6",
+                    fillOpacity: 0.6,
+                    color: hasHighFailRate ? "#ea580c" : "#2563eb",
+                    weight: 2,
+                  }}
+                  eventHandlers={{
+                    click: () => stat.calls[0] && onSelectCall(stat.calls[0]),
+                  }}
+                >
+                  <Tooltip direction="top" offset={[0, -10]} opacity={0.9}>
+                    <div className="text-center font-sans space-y-1">
+                      <div className="font-bold text-sm">{city}</div>
+                      <div className="text-xs text-muted-foreground">{stat.total} calls</div>
+                    </div>
+                  </Tooltip>
+                </CircleMarker>
               );
             })}
-          </svg>
+          </MapContainer>
         </div>
 
         {/* Side panel: region breakdown */}

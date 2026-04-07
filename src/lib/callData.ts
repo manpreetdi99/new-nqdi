@@ -34,6 +34,7 @@ export interface CallRecord {
   latency: number;
   jitter: number;
   packetLoss: number;
+  comment?: string | null; // Optional comment field
   events: CallEvent[]; // Ένας πίνακας που περιέχει αντικείμενα τύπου CallEvent
 }
 
