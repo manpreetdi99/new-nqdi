@@ -66,7 +66,7 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
       endpoint,
       message: error instanceof Error ? error.message : "Failed to fetch",
       hint:
-        "The Lovable preview cannot reach localhost on your computer. Run the frontend locally too, or expose the Python API with a public tunnel URL.",
+        "The preview cannot reach localhost on your computer. Run the frontend locally too, or expose the Python API with a public tunnel URL.",
     });
   }
 }
@@ -151,6 +151,14 @@ export async function fetchGsmValues(
   return requestJson(`/api/gsm_values?${params.toString()}`);
 }
 
+export async function fetchGsmValuesBSide(
+  database: string,
+  session_id: string
+): Promise<{ gsmValuesBSide: any[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/gsm_values_b_side?${params.toString()}`);
+}
+
 export async function fetchMosValues(
   database: string,
   session_id: string
@@ -212,4 +220,22 @@ export async function runBenchmarkApi(
     },
     body: JSON.stringify({ database, queries }),
   });
+}
+
+export interface TraceLogRow {
+  // FactId: number | null;
+  FullDate: string | null;
+  SessionId: string | null;
+  Info: string | null;
+  Side: string | null; // Added Side field to include it in TraceLogRow
+  
+}
+
+export async function fetchTracelogValues(
+  database: string,
+  session_id?: string
+): Promise<{ tracelogValues: TraceLogRow[] }> {
+  const params = new URLSearchParams({ database });
+  if (session_id) params.append("session_id", session_id);
+  return requestJson(`/api/tracelog_values?${params.toString()}`);
 }

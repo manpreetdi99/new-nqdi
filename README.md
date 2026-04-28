@@ -33,7 +33,6 @@ It allows a user to:
    npm run dev
    ```
 3. Ανοίξτε το `http://localhost:5173` στον browser σας.
-*(Για προεπισκόπηση μέσω **Lovable**, κάντε public Port Forwarding της θύρας 8000 μέσω VS Code και αλλάξτε το `API_BASE_URL` σε αυτό).*
 
 ### Β. Για Πολλαπλούς Χρήστες & Κινητά (Στο ίδιο WiFi - Multi Local User)
 Ιδανικό για testing από άλλα κινητά ή PC του σπιτιού/γραφείου σας, χωρίς να περνάτε από cloud tunnels που καθυστερούν την εφαρμογή.
@@ -186,7 +185,7 @@ http://localhost:5173
 
 ---
 
-## 4.3 Important note about Lovable/web preview
+## 4.3 Important note about preview
 
 The frontend API client is hardcoded to:
 
@@ -198,8 +197,6 @@ This means:
 
 - it works when the frontend is running **on your own machine**, and
 - the FastAPI backend is also running **on your own machine**.
-
-It may **not** work inside remote previews such as Lovable preview, because the preview environment cannot automatically access `localhost` on your computer.
 
 That case is already handled in `src/lib/api.ts` with error code:
 

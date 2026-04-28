@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, Fragment } from "react";
 import { motion } from "framer-motion";
-import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft } from "lucide-react";
+import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import QueryEditor from "@/components/QueryEditor";
 import ResultsTable from "@/components/ResultsTable";
@@ -48,6 +48,7 @@ const normalizeStatus = (status: string | null | undefined): CallRecord["status"
   const normalized = (status || "").toLowerCase();
   if (normalized.includes("drop")) return "dropped";
   if (normalized.includes("fail")) return "failed";
+  if (normalized.includes("system release") || normalized.includes("system realase")) return "system release";
   return "completed";
 };
 
@@ -111,7 +112,10 @@ const mapAllCallsRows = (rows: AllCallsRow[]): CallRecord[] => {
       latency: 0,
       jitter: 0,
       packetLoss: 0,
+      latitude: row.latitude,
+      longitude: row.longitude,
       comment: row.comment,
+      asideFileName: row.ASideFileName ?? null,
       events: [
         {
           timestamp: new Date().toISOString(),
@@ -829,8 +833,8 @@ const Index = () => {
                         
                         if (idx > 0) {
                           const prevFileTime = getFileDateTime(filteredAllCallsRows[idx - 1].ASideFileName);
-                          // Show "End of File" if the date/time part of the filename changed
-                          if (prevFileTime !== null && currentFileTime !== null && prevFileTime !== currentFileTime) {
+                          // Show "End of File" if the date/time part of the filename changed and no status filters or invalid session filters are applied
+                          if (statusFilters.length === 0 && sessionValidFilter !== "0" && prevFileTime !== null && currentFileTime !== null && prevFileTime !== currentFileTime) {
                             showEndOfFile = true;
                           }
                         }
@@ -860,7 +864,16 @@ const Index = () => {
                                 }
                               }}
                             >
-                              <td className="px-2 py-2 text-foreground">{row.Location ?? "N/A"}</td>
+                              <td className="px-2 py-2 text-foreground">
+                                <div className="flex items-center gap-1">
+                                  {lastClickedRowId === `call-row-${row.SessionId}-${idx}` ? (
+                                    <ChevronRight className="h-4 w-4 text-primary" />
+                                  ) : (
+                                    <div className="w-4 h-4" />
+                                  )}
+                                  <span>{row.Location ?? "N/A"}</span>
+                                </div>
+                              </td>
                               <td className="px-2 py-2 font-mono text-foreground break-words max-w-[120px]">{row.SessionId}</td>
                               
                               <td className="px-2 py-2 text-foreground">{row.technology ?? "N/A"}</td>
