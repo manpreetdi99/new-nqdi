@@ -34,8 +34,8 @@ interface CallDetailProps {
  */
 function rsrpColor(val: number | null | undefined): string {
   if (val == null) return "#6b7280";
-  if (val >= -100) return "#22c55e";
-  if (val >= -115) return "#f97316";
+  if (val >= -115) return "#22c55e";
+  if (val >= -120) return "#f97316";
   return "#ef4444";
 }
 
@@ -504,12 +504,26 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                 <span className="text-muted-foreground">eNB <span className="text-foreground font-bold">{cellInfo.eNBId}</span></span>
                 <span className="text-muted-foreground">EARFCN <span className="text-primary font-bold">{cellInfo.EARFCN}</span></span>
                 <span className="text-muted-foreground">PCI <span className="text-accent font-bold">{cellInfo.PCI}</span></span>
-                {matchedAntenna && (
+                {mapActiveAntenna && (
                   <>
-                    <span className="text-muted-foreground">Dist <span className="text-yellow-400 font-bold">{fmtDist(matchedAntenna.distanceM)}</span></span>
-                    {matchedAntenna.cellName && (
-                      <span className="text-muted-foreground truncate max-w-[160px]">{matchedAntenna.cellName}</span>
+                    <span className="text-muted-foreground">Dist <span className="text-yellow-400 font-bold">{fmtDist(mapActiveAntenna.distanceM)}</span></span>
+                    {mapActiveAntenna.cellName && (
+                      <span className="text-muted-foreground truncate max-w-[160px]">{mapActiveAntenna.cellName}</span>
                     )}
+                  </>
+                )}
+                {sideComparison.length > 0 && (
+                  <>
+                    <span className="text-border">│</span>
+                    {sideComparison.map((row, idx) => (
+                      <span key={idx} className="text-muted-foreground whitespace-nowrap">
+                        <span className="text-foreground font-bold">{row.Side}</span>
+                        {" "}{row.callStatus}{" "}
+                        <span className="text-foreground">{row.code}</span>
+                        {row.codeDescription ? ` ${row.codeDescription}` : ""}
+                        {idx < sideComparison.length - 1 && <span className="text-border mx-1">·</span>}
+                      </span>
+                    ))}
                   </>
                 )}
               </div>
@@ -566,33 +580,6 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           </div>
         </div>
 
-        {sideComparison.length > 0 && (
-          <div className="mt-1 overflow-x-auto">
-            <table className="w-full text-[10px]">
-              <thead>
-                <tr className="text-left text-muted-foreground border-b border-border/60">
-                  <th className="py-0.5 pr-2 font-medium">Side</th>
-                  <th className="py-0.5 pr-2 font-medium">Status</th>
-                  <th className="py-0.5 pr-2 font-medium">Code</th>
-                  <th className="py-0.5 pr-2 font-medium">Description</th>
-                  <th className="py-0.5 text-right font-medium">Calls</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sideComparison.map((row, idx) => (
-                  <tr key={`${row.Side || "N"}-${row.code || "NA"}-${idx}`} className="border-b border-border/30">
-                    <td className="py-0.5 pr-2 text-foreground font-mono">{row.Side || "N/A"}</td>
-                    <td className="py-0.5 pr-2 text-muted-foreground">{row.callStatus || "N/A"}</td>
-                    <td className="py-0.5 pr-2 font-mono text-foreground">{row.code || "N/A"}</td>
-                    <td className="py-0.5 pr-2 text-muted-foreground">{row.codeDescription || "N/A"}</td>
-                    <td className="py-0.5 text-right font-mono text-foreground">{row.calls ?? 0}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
         {/* Chart inside the top card */}
         {activeRadioValues && activeRadioValues.length > 0 && (
           <div className="mt-1 pt-1 border-t border-border">
@@ -600,9 +587,9 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               <Activity className="h-3 w-3 text-primary" />
               {isGSMMode ? "GSM (RxLev / RxQual)" : "LTE (RSRP / RSRQ)"}
             </h3>
-            <div className="flex gap-2 h-[180px]">
-            {/* Chart — 3/4 */}
-            <div className="h-full" style={{ flex: 3 }}>
+            <div className="flex gap-2 items-end">
+            {/* Chart — flex 3 */}
+            <div style={{ flex: 3, height: 240 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" opacity={0.2} vertical={false} />
@@ -662,7 +649,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               const antennaColor = selectedLteSide === "B" ? "#c48105" : "#b200f8";
 
               if (mapFitPts.length === 0) return (
-                <div className="h-full rounded border border-border/50 bg-muted/30 flex items-center justify-center" style={{ flex: 1 }}>
+                <div className="rounded border border-border/50 bg-muted/30 flex items-center justify-center" style={{ flex: 1, height: "250px" }}>
                   <span className="text-[10px] text-muted-foreground">Χωρίς GPS</span>
                 </div>
               );
@@ -682,11 +669,11 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               }) : null;
 
               return (
-                <div className="h-full rounded overflow-hidden border border-border/50" style={{ flex: 1 }}>
+                <div className="rounded overflow-hidden border border-border/50" style={{ flex: 1, height: "250px" }}>
                   <MapContainer
                     center={mapFitPts[0]}
                     zoom={13}
-                    style={{ height: "100%", width: "100%" }}
+                    style={{ height: "250px", width: "100%" }}
                     zoomControl={false}
                     attributionControl={false}
                   >
