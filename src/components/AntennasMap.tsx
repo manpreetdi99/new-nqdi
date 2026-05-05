@@ -152,6 +152,20 @@ export default function AntennasMap() {
     const data = allDataRef.current;
     if (!data.length) { setShown(0); return; }
 
+    // Group by site+azimuth → one marker per (site, direction).
+    // Co-directional frequencies share the same axis and get concentric rings.
+    const noAzimuth: AntennaRow[] = [];
+    const groupMap = new Map<string, AntennaRow[]>();
+    data.forEach((a) => {
+      if (a.azimuth == null) { noAzimuth.push(a); return; }
+      const siteKey = a.siteId != null
+        ? `s${a.siteId}`
+        : `ll${a.lat.toFixed(4)}_${a.lon.toFixed(4)}`;
+      const key = `${siteKey}_az${a.azimuth}`;
+      if (!groupMap.has(key)) groupMap.set(key, []);
+      groupMap.get(key)!.push(a);
+    });
+
     const cluster = L.markerClusterGroup({
       chunkedLoading: true,
       chunkInterval: 50,
@@ -168,33 +182,99 @@ export default function AntennasMap() {
       },
     });
 
-    data.forEach((a) => {
-      const color = freqColor(a.freq);
-      const icon = L.divIcon({
-        html: `<div style="width:8px;height:8px;border-radius:50%;background:${color};border:1.5px solid rgba(255,255,255,0.8);box-shadow:0 1px 3px rgba(0,0,0,0.5)"></div>`,
-        className: "",
-        iconSize: [8, 8],
-        iconAnchor: [4, 4],
-      });
+    // Build a 60° sector SVG (±30° from azimuth axis) with one concentric ring per frequency.
+    // sin30=0.5, cos30=0.866. North = −y in SVG coords.
+    // Ring 0: solid sector from center to outerR.
+    // Ring k>0: annular sector — M−ox,−oy A outerR 0,1 ox,−oy L ix,−iy A innerR 0,0 −ix,−iy Z
+    const BASE_R = 7;
+    const RING_W = 5;
+    const GAP    = 1;
 
-      const marker = L.marker([a.lat, a.lon], { icon });
+    const buildIcon = (antennas: AntennaRow[], az: number) => {
+      const n    = antennas.length;
+      const maxR = BASE_R + (n - 1) * (RING_W + GAP) + RING_W;
+      const sz   = (maxR + 4) * 2;
+      const c    = sz / 2;
+      let paths  = '';
+
+      antennas.forEach((a, rank) => {
+        const color  = freqColor(a.freq);
+        const outerR = BASE_R + rank * (RING_W + GAP) + RING_W;
+        const innerR = rank === 0 ? 0 : BASE_R + rank * (RING_W + GAP);
+        const ox = (outerR * 0.5).toFixed(1);
+        const oy = (outerR * 0.866).toFixed(1);
+
+        if (innerR === 0) {
+          paths += `<path d="M0,0 L-${ox},-${oy} A${outerR},${outerR} 0 0,1 ${ox},-${oy} Z" fill="${color}" stroke="white" stroke-width="0.6" fill-opacity="0.88"/>`;
+        } else {
+          const ix = (innerR * 0.5).toFixed(1);
+          const iy = (innerR * 0.866).toFixed(1);
+          paths += `<path d="M-${ox},-${oy} A${outerR},${outerR} 0 0,1 ${ox},-${oy} L${ix},-${iy} A${innerR},${innerR} 0 0,0 -${ix},-${iy} Z" fill="${color}" stroke="white" stroke-width="0.6" fill-opacity="0.88"/>`;
+        }
+      });
+      paths += `<circle cx="0" cy="0" r="2" fill="white" stroke="rgba(0,0,0,0.3)" stroke-width="0.5"/>`;
+
+      return {
+        sz, c,
+        html: `<svg width="${sz}" height="${sz}" viewBox="${-c} ${-c} ${sz} ${sz}" xmlns="http://www.w3.org/2000/svg"><g transform="rotate(${az})">${paths}</g></svg>`,
+      };
+    };
+
+    // One marker per (site, azimuth) group
+    groupMap.forEach((antennas) => {
+      const a0 = antennas[0];
+      const az = a0.azimuth!;
+      const { sz, c, html } = buildIcon(antennas, az);
+
+      const freqRows = antennas.map(a => {
+        const col = freqColor(a.freq);
+        return `<div style="display:flex;align-items:center;gap:5px;padding:2px 0;border-top:1px solid #eee">
+          <div style="width:9px;height:9px;border-radius:50%;background:${col};flex-shrink:0"></div>
+          <b style="color:${col}">${a.freq ?? "—"} MHz</b>
+          <span style="color:#888">${a.cellName ?? "N/A"}</span>
+          <span style="color:#666">PCI:${a.pci ?? "—"}</span>
+        </div>`;
+      }).join('');
+
+      const marker = L.marker([a0.lat, a0.lon], {
+        icon: L.divIcon({ html, className: "", iconSize: [sz, sz], iconAnchor: [c, c] }),
+      });
+      marker.bindPopup(`
+        <div style="font-family:monospace;font-size:12px;line-height:1.6;min-width:220px">
+          <b style="font-size:13px">Site ${a0.siteId ?? "?"} &middot; ${az}°</b>
+          <span style="color:#888;font-size:10px"> (${antennas.length} freq)</span><br/>
+          <span style="color:#888">eNB:</span> ${a0.enbName ?? "—"} &nbsp;|&nbsp;
+          <span style="color:#888">Vendor:</span> ${a0.vendor ?? "—"}<br/>
+          <span style="color:#888">Height:</span> ${a0.height ?? "—"} m &nbsp;|&nbsp;
+          <span style="color:#888">Tilt:</span> ${a0.downtilt ?? "—"}°<br/>
+          <div style="margin-top:4px">${freqRows}</div>
+          <span style="color:#666;font-size:10px">${a0.lat.toFixed(6)}, ${a0.lon.toFixed(6)}</span>
+        </div>
+      `, { maxWidth: 300 });
+      cluster.addLayer(marker);
+    });
+
+    // Antennas without azimuth → simple dot
+    noAzimuth.forEach((a) => {
+      const color = freqColor(a.freq);
+      const marker = L.marker([a.lat, a.lon], {
+        icon: L.divIcon({
+          html: `<div style="width:8px;height:8px;border-radius:50%;background:${color};border:1.5px solid rgba(255,255,255,0.8);box-shadow:0 1px 3px rgba(0,0,0,0.5)"></div>`,
+          className: "", iconSize: [8, 8], iconAnchor: [4, 4],
+        }),
+      });
       marker.bindPopup(`
         <div style="font-family:monospace;font-size:12px;line-height:1.6;min-width:200px">
           <b style="font-size:13px">${a.cellName ?? "N/A"}</b><br/>
           <span style="color:#888">Site:</span> ${a.siteId ?? "—"} &nbsp;|&nbsp;
           <span style="color:#888">Cell:</span> ${a.cellId ?? "—"}<br/>
-          <span style="color:#888">Azimuth:</span> ${a.azimuth ?? "—"}°&nbsp;|&nbsp;
-          <span style="color:#888">Tilt:</span> ${a.downtilt ?? "—"}°<br/>
           <span style="color:#888">Freq:</span> <b style="color:${color}">${a.freq ?? "—"} MHz</b>&nbsp;|&nbsp;
           <span style="color:#888">PCI:</span> ${a.pci ?? "—"}<br/>
-          <span style="color:#888">Vendor:</span> ${a.vendor ?? "—"}<br/>
+          <span style="color:#888">Vendor:</span> ${a.vendor ?? "—"}&nbsp;|&nbsp;
           <span style="color:#888">Status:</span> ${a.status ?? "—"}<br/>
-          <span style="color:#888">Height:</span> ${a.height ?? "—"} m<br/>
-          <span style="color:#888">eNB:</span> ${a.enbName ?? "—"}<br/>
           <span style="color:#666;font-size:10px">${a.lat.toFixed(6)}, ${a.lon.toFixed(6)}</span>
         </div>
       `, { maxWidth: 280 });
-
       cluster.addLayer(marker);
     });
 
