@@ -402,6 +402,52 @@ def get_cell_info(
         return {"eNBId": None, "EARFCN": None, "PCI": None}
 
 
+@app.get("/api/cell_info_b_side")
+def get_cell_info_b_side(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE
+                        WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                        ELSE CA.SessionId
+                    END AS ASessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+            ),
+            b_side AS (
+                SELECT TOP (1)
+                    CA.SessionId AS BSessionId
+                FROM CallAnalysis CA
+                INNER JOIN pair_root PR
+                    ON CA.SessionIdA = PR.ASessionId
+                WHERE CA.Side = 'B'
+            )
+            SELECT TOP 1
+                dci.eNBId,
+                fl.EARFCN,
+                fl.PhyCellId
+            FROM FactLTERadio fl
+            INNER JOIN b_side B ON fl.SessionId = B.BSessionId
+            LEFT JOIN DmnCellInformation dci ON fl.DmnIdCellInformation = dci.DmnId
+            WHERE dci.eNBId IS NOT NULL
+            ORDER BY fl.FullDate
+        """, (session_id, session_id))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {"eNBId": row[0], "EARFCN": row[1], "PCI": row[2]}
+        return {"eNBId": None, "EARFCN": None, "PCI": None}
+    except Exception as e:
+        return {"eNBId": None, "EARFCN": None, "PCI": None}
+
+
 @app.get("/api/lte_values_b_side")
 def get_lte_values_b_side(
     database: str = Query(..., min_length=1),

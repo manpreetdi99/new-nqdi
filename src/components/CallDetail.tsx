@@ -4,13 +4,14 @@ import {
   ArrowLeft, Signal, Activity, Gauge, ArrowDown, ArrowUp,
   Wifi, Timer, Save, Edit2
 } from "lucide-react";
-import { MapContainer, TileLayer, CircleMarker, Polyline, useMap } from "react-leaflet";
+import L from "leaflet";
+import { MapContainer, TileLayer, CircleMarker, Marker, Polyline, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchAntennas, type CallSideComparisonRow, type TraceLogRow, type AntennaRow } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, type CallSideComparisonRow, type TraceLogRow, type AntennaRow } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine } from "recharts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 //ReferenceLine για γραμμες στο διαγραμμα, πχ για thresholds. 
@@ -96,7 +97,9 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
   const [srvccNetwork, setSrvccNetwork] = useState<"LTE" | "GSM">("LTE");
 
   const [cellInfo, setCellInfo] = useState<{ eNBId: number | null; EARFCN: number | null; PCI: number | null } | null>(null);
+  const [bSideCellInfo, setBSideCellInfo] = useState<{ eNBId: number | null; EARFCN: number | null; PCI: number | null } | null>(null);
   const [matchedAntenna, setMatchedAntenna] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number } | null>(null);
+  const [matchedAntennaBSide, setMatchedAntennaBSide] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number } | null>(null);
 
   const isGSMMode = call.callMode === "CS" || (call.callMode === "SRVCC" && srvccNetwork === "GSM");
   const [isLoadingRadio, setIsLoadingRadio] = useState(false);
@@ -144,7 +147,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
-        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes] = await Promise.allSettled([
+        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes] = await Promise.allSettled([
           call.callMode !== "CS" ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
           fetchMosValues(database, call.callId),
@@ -153,7 +156,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           call.callMode === "CS" ? Promise.resolve({ lteValuesBSide: [] }) : fetchLteValuesBSide(database, call.callId),
           fetchTracelogValues(database, call.callId),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValuesBSide(database, call.callId) : Promise.resolve({ gsmValuesBSide: [] }),
-          call.callMode !== "CS" ? fetchCellInfo(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null })
+          call.callMode !== "CS" ? fetchCellInfo(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
+          call.callMode !== "CS" ? fetchCellInfoBSide(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null })
         ]);
 
         if (lteRes.status === "fulfilled") {
@@ -199,6 +203,10 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         if (cellInfoRes.status === "fulfilled") {
           setCellInfo(cellInfoRes.value as any);
         }
+
+        if (bSideCellInfoRes.status === "fulfilled") {
+          setBSideCellInfo(bSideCellInfoRes.value as any);
+        }
       } catch (err) {
         console.error("Failed to load metrics", err);
       } finally {
@@ -236,6 +244,31 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       setMatchedAntenna({ lat: best.lat, lon: best.lon, cellName: best.cellName, distanceM: bestDist });
     }).catch(() => setMatchedAntenna(null));
   }, [cellInfo, radioValues, call.region]);
+
+  useEffect(() => {
+    const isCosmoteFree = call.region?.toLowerCase().includes("cosmote free");
+    if (!isCosmoteFree || !bSideCellInfo || bSideCellInfo.PCI === null) {
+      setMatchedAntennaBSide(null);
+      return;
+    }
+    const gpsPoints = bSideLteValues
+      .filter((v: any) => v.Latitude != null && v.Longitude != null)
+      .map((v: any) => ({ lat: Number(v.Latitude), lon: Number(v.Longitude) }));
+    if (gpsPoints.length === 0) { setMatchedAntennaBSide(null); return; }
+    const avgLat = gpsPoints.reduce((s: number, p: any) => s + p.lat, 0) / gpsPoints.length;
+    const avgLon = gpsPoints.reduce((s: number, p: any) => s + p.lon, 0) / gpsPoints.length;
+    fetchAntennas().then(({ antennas }) => {
+      const matches = antennas.filter((a: AntennaRow) => a.pci === bSideCellInfo.PCI);
+      if (matches.length === 0) { setMatchedAntennaBSide(null); return; }
+      let best = matches[0];
+      let bestDist = haversineM(avgLat, avgLon, best.lat, best.lon);
+      for (const ant of matches.slice(1)) {
+        const d = haversineM(avgLat, avgLon, ant.lat, ant.lon);
+        if (d < bestDist) { bestDist = d; best = ant; }
+      }
+      setMatchedAntennaBSide({ lat: best.lat, lon: best.lon, cellName: best.cellName, distanceM: bestDist });
+    }).catch(() => setMatchedAntennaBSide(null));
+  }, [bSideCellInfo, bSideLteValues, call.region]);
 
   const activeRadioValues = useMemo(() => {
     if (call.callMode === "CS") return selectedLteSide === "B" ? bSideGsmValues : gsmValues;
@@ -302,43 +335,35 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     };
   }, [bSideLteValues]);
 
+  const isCosmoteFree = call.region?.toLowerCase().includes("cosmote free");
+
+  const mapActivePts = useMemo(() => {
+    if (!isCosmoteFree) return [];
+    const source = selectedLteSide === "B"
+      ? (isGSMMode ? bSideGsmValues : bSideLteValues)
+      : (isGSMMode ? gsmValues : radioValues);
+    return source
+      .filter((v: any) => v.Latitude != null && v.Longitude != null)
+      .map((v: any) => ({
+        pos: [Number(v.Latitude), Number(v.Longitude)] as [number, number],
+        color: isGSMMode ? rxLevColor(v.RxLevSub) : rsrpColor(v.RSRP),
+      }));
+  }, [isCosmoteFree, selectedLteSide, isGSMMode, bSideGsmValues, bSideLteValues, gsmValues, radioValues]);
+
+  const mapActiveAntenna = selectedLteSide === "B" ? matchedAntennaBSide : matchedAntenna;
+
+  const mapFitPts = useMemo((): [number, number][] => {
+    const pts: [number, number][] = mapActivePts.map(p => p.pos);
+    if (mapActiveAntenna) pts.push([mapActiveAntenna.lat, mapActiveAntenna.lon]);
+    return pts;
+  }, [mapActivePts, mapActiveAntenna]);
+
   return (
     <motion.div
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       className="space-y-2"
     >
-      {/* Cell Info Overlay — εμφανίζεται μόνο σε LTE mode */}
-      {cellInfo && cellInfo.eNBId !== null && (
-        <div className="fixed bottom-4 right-4 z-50 bg-card border border-border rounded-lg px-3 py-2 shadow-lg text-[11px] font-mono">
-          <div className="text-muted-foreground text-[9px] uppercase font-semibold mb-1 tracking-wide">Serving Cell</div>
-          <div className="flex flex-col gap-0.5">
-            <div className="flex gap-2">
-              <span className="text-muted-foreground">eNBId</span>
-              <span className="text-foreground font-bold">{cellInfo.eNBId}</span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-muted-foreground">EARFCN</span>
-              <span className="text-primary font-bold">{cellInfo.EARFCN}</span>
-            </div>
-            <div className="flex gap-2">
-              <span className="text-muted-foreground">PCI</span>
-              <span className="text-accent font-bold">{cellInfo.PCI}</span>
-            </div>
-            {matchedAntenna && (
-              <div className="mt-1 pt-1 border-t border-border/50 flex flex-col gap-0.5">
-                <div className="flex gap-2">
-                  <span className="text-muted-foreground">Dist</span>
-                  <span className="text-yellow-400 font-bold">{fmtDist(matchedAntenna.distanceM)}</span>
-                </div>
-                {matchedAntenna.cellName && (
-                  <div className="text-[9px] text-muted-foreground truncate max-w-[120px]">{matchedAntenna.cellName}</div>
-                )}
-              </div>
-            )}
-          </div>
-        </div>
-      )}
 
       {/* Top Controls (Back button, Metrics inline & Status) */}
       <div className="flex flex-wrap md:flex-nowrap items-center justify-between gap-2 bg-card border border-border rounded-lg px-2 py-1">
@@ -474,6 +499,21 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               <span>Λήξη: {formatDateTime(call.endTime)}</span>
               <span className="font-mono text-foreground">{Math.floor(call.duration_s / 60)}m {call.duration_s % 60}s</span>
             </div>
+            {cellInfo && cellInfo.eNBId !== null && (
+              <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap mt-0.5 text-[10px] font-mono">
+                <span className="text-muted-foreground">eNB <span className="text-foreground font-bold">{cellInfo.eNBId}</span></span>
+                <span className="text-muted-foreground">EARFCN <span className="text-primary font-bold">{cellInfo.EARFCN}</span></span>
+                <span className="text-muted-foreground">PCI <span className="text-accent font-bold">{cellInfo.PCI}</span></span>
+                {matchedAntenna && (
+                  <>
+                    <span className="text-muted-foreground">Dist <span className="text-yellow-400 font-bold">{fmtDist(matchedAntenna.distanceM)}</span></span>
+                    {matchedAntenna.cellName && (
+                      <span className="text-muted-foreground truncate max-w-[160px]">{matchedAntenna.cellName}</span>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Right: Comment */}
@@ -617,30 +657,42 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               </ResponsiveContainer>
             </div>
             {/* Map — 1/4 */}
-            {(() => {
-              const mapPts = activeRadioValues
-                .filter((v: any) => v.Latitude != null && v.Longitude != null)
-                .map((v: any) => ({
-                  pos: [Number(v.Latitude), Number(v.Longitude)] as [number, number],
-                  color: isGSMMode ? rxLevColor(v.RxLevSub) : rsrpColor(v.RSRP),
-                }));
-              if (mapPts.length === 0) return (
+            {/*Εμφανίζεται μόνο αν είναι Cosmote Free και υπάρχουν GPS σημεία */}
+            {isCosmoteFree && (() => {
+              const antennaColor = selectedLteSide === "B" ? "#c48105" : "#b200f8";
+
+              if (mapFitPts.length === 0) return (
                 <div className="h-full rounded border border-border/50 bg-muted/30 flex items-center justify-center" style={{ flex: 1 }}>
                   <span className="text-[10px] text-muted-foreground">Χωρίς GPS</span>
                 </div>
               );
+
+              const antennaIcon = mapActiveAntenna ? L.divIcon({
+                className: "",
+                html: `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="${antennaColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/>
+                  <path d="M7.8 13.2c-2.3-2.3-2.3-6.1 0-8.5"/>
+                  <path d="M19.1 1.9c3.9 3.9 3.9 10.2 0 14.1"/>
+                  <path d="M16.2 4.8c2.3 2.3 2.3 6.1 0 8.5"/>
+                  <line x1="12" x2="12" y1="12" y2="22"/>
+                  <line x1="8" x2="16" y1="22" y2="22"/>
+                </svg>`,
+                iconSize: [22, 22],
+                iconAnchor: [11, 22],
+              }) : null;
+
               return (
                 <div className="h-full rounded overflow-hidden border border-border/50" style={{ flex: 1 }}>
                   <MapContainer
-                    center={mapPts[0].pos}
+                    center={mapFitPts[0]}
                     zoom={13}
                     style={{ height: "100%", width: "100%" }}
                     zoomControl={false}
                     attributionControl={false}
                   >
                     <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
-                    <MapAutoFit points={mapPts.map(p => p.pos)} />
-                    {mapPts.map((pt, i) => (
+                    <MapAutoFit points={mapFitPts} />
+                    {mapActivePts.map((pt, i) => (
                       <CircleMarker
                         key={i}
                         center={pt.pos}
@@ -651,25 +703,21 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                         weight={0}
                       />
                     ))}
-                    {matchedAntenna && (
+                    {mapActiveAntenna && antennaIcon && (
                       <>
                         <Polyline
                           positions={[
-                            mapPts[mapPts.length - 1].pos,
-                            [matchedAntenna.lat, matchedAntenna.lon],
+                            mapActivePts.length > 0 ? mapActivePts[mapActivePts.length - 1].pos : mapFitPts[0],
+                            [mapActiveAntenna.lat, mapActiveAntenna.lon],
                           ]}
-                          color="#facc15"
+                          color="#000000"
                           weight={1.5}
                           dashArray="6 5"
                           opacity={0.8}
                         />
-                        <CircleMarker
-                          center={[matchedAntenna.lat, matchedAntenna.lon]}
-                          radius={7}
-                          fillColor="#facc15"
-                          color="#92400e"
-                          fillOpacity={1}
-                          weight={2}
+                        <Marker
+                          position={[mapActiveAntenna.lat, mapActiveAntenna.lon]}
+                          icon={antennaIcon}
                         />
                       </>
                     )}

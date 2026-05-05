@@ -260,6 +260,14 @@ export async function fetchCellInfo(
   return requestJson(`/api/cell_info?${params.toString()}`);
 }
 
+export async function fetchCellInfoBSide(
+  database: string,
+  session_id: string
+): Promise<{ eNBId: number | null; EARFCN: number | null; PCI: number | null }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/cell_info_b_side?${params.toString()}`);
+}
+
 export async function fetchTracelogValues(
   database: string,
   session_id?: string
