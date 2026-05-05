@@ -231,6 +231,43 @@ export interface TraceLogRow {
   
 }
 
+export interface AntennaRow {
+  lat: number;
+  lon: number;
+  siteId: number | null;
+  cellId: number | null;
+  cellName: string | null;
+  azimuth: number | null;
+  freq: number | null;
+  vendor: string | null;
+  enbName: string | null;
+  tech: string | null;
+  status: string | null;
+  pci: number | null;
+  downtilt: number | null;
+  height: number | null;
+}
+
+export async function fetchAntennas(): Promise<{ antennas: AntennaRow[]; total: number }> {
+  return requestJson("/api/antennas");
+}
+
+export async function fetchCellInfo(
+  database: string,
+  session_id: string
+): Promise<{ eNBId: number | null; EARFCN: number | null; PCI: number | null }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/cell_info?${params.toString()}`);
+}
+
+export async function fetchCellInfoBSide(
+  database: string,
+  session_id: string
+): Promise<{ eNBId: number | null; EARFCN: number | null; PCI: number | null }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/cell_info_b_side?${params.toString()}`);
+}
+
 export async function fetchTracelogValues(
   database: string,
   session_id?: string

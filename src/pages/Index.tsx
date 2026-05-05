@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, Fragment } from "react";
 import { motion } from "framer-motion";
-import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight } from "lucide-react";
+import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, SlidersHorizontal, X } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import QueryEditor from "@/components/QueryEditor";
 import ResultsTable from "@/components/ResultsTable";
@@ -9,6 +9,7 @@ import BenchmarkCharts from "@/components/BenchmarkCharts";
 import StatsCards from "@/components/StatsCards";
 import CallDetail from "@/components/CallDetail";
 import CallsMap from "@/components/CallsMap";
+import AntennasMap from "@/components/AntennasMap";
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import type { CallRecord } from "@/lib/callData";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -140,14 +141,14 @@ const formatCallStartTime = (dateStr: string | null | undefined): string => {
   if (!dateStr) return "N/A";
   const d = new Date(dateStr);
   if (isNaN(d.getTime())) return dateStr;
-  
+
   const h = String(d.getHours()).padStart(2, "0");
   const m = String(d.getMinutes()).padStart(2, "0");
   const s = String(d.getSeconds()).padStart(2, "0");
   const day = String(d.getDate()).padStart(2, "0");
   const month = String(d.getMonth() + 1).padStart(2, "0");
   const year = d.getFullYear();
-  
+
   return `${h}:${m}:${s} ${day}/${month}/${year}`;
 };
 // μετατροπη του ονόματος του αρχείου σε ημερομηνία και ώρα για να βγαζει την γραμμη end of file οταν αλλάζει το αρχείο
@@ -179,6 +180,7 @@ const Index = () => {
   const [sessionValidFilter, setSessionValidFilter] = useState<"all" | "1" | "0">("all");
   const [statusFilters, setStatusFilters] = useState<StatusFilterKey[]>([]);
   const [lastClickedRowId, setLastClickedRowId] = useState<string | null>(null);
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
 
   useEffect(() => {
     if (activeTab === "calls" && lastClickedRowId) {
@@ -421,6 +423,156 @@ const Index = () => {
 
   return (
     <div className="min-h-screen bg-background">
+      {/* Global Filter Panel Overlay */}
+      {showFilterPanel && (
+        <div className="fixed inset-0 z-[100] flex">
+          {/* Backdrop */}
+          <div
+            className="absolute inset-0 bg-black/50 backdrop-blur-sm"
+            onClick={() => setShowFilterPanel(false)}
+          />
+          {/* Slide-over panel */}
+          <motion.aside
+            initial={{ x: -320, opacity: 0 }}
+            animate={{ x: 0, opacity: 1 }}
+            exit={{ x: -320, opacity: 0 }}
+            transition={{ type: "spring", stiffness: 300, damping: 30 }}
+            className="relative z-10 w-80 h-full bg-card border-r border-border shadow-2xl flex flex-col overflow-y-auto"
+          >
+            <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-muted/40">
+              <div className="flex items-center gap-2">
+                <SlidersHorizontal className="h-4 w-4 text-primary" />
+                <span className="text-sm font-semibold text-foreground">Filters</span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={clearCallsFilters}
+                  className="text-[10px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70"
+                >
+                  Clear all
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setShowFilterPanel(false)}
+                  className="p-1 rounded hover:bg-muted/70"
+                >
+                  <X className="h-4 w-4 text-muted-foreground" />
+                </button>
+              </div>
+            </div>
+
+            <div className="p-4 space-y-4 flex-1">
+              {/* Database */}
+              <div>
+                <label className="text-xs font-medium text-foreground">Database (Global)</label>
+                <select
+                  value={selectedDatabase}
+                  onChange={(e) => handleDatabaseChange(e.target.value)}
+                  className="mt-1 w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                >
+                  <option value="">Select database</option>
+                  {databases.map((db) => (
+                    <option key={db} value={db}>{db}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Collections */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-medium text-foreground">Collections</label>
+                  <span className="text-[10px] text-muted-foreground">
+                    {formatLocationSelectionLabel(selectedCallsCollections.length, collectionNames.length)}
+                  </span>
+                </div>
+                <div className="flex gap-1.5 mb-2">
+                  <button type="button" onClick={selectAllCollections} disabled={collectionNames.length === 0 || collectionsLoading} className="text-[10px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70 disabled:opacity-50">Select all</button>
+                  <button type="button" onClick={clearCollectionSelection} disabled={collectionNames.length === 0 || collectionsLoading} className="text-[10px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70 disabled:opacity-50">Clear</button>
+                </div>
+                <div className="w-full bg-muted/30 border border-border rounded-md p-2 text-sm h-32 overflow-y-auto space-y-1">
+                  {!selectedDatabase && <p className="text-[11px] text-muted-foreground">Select database first.</p>}
+                  {selectedDatabase && collectionsLoading && <p className="text-[11px] text-muted-foreground">Loading...</p>}
+                  {selectedDatabase && !collectionsLoading && collectionNames.length === 0 && <p className="text-[11px] text-muted-foreground">No collections found.</p>}
+                  {selectedDatabase && !collectionsLoading && collectionNames.map((name) => (
+                    <label key={name} className="flex items-center gap-2 text-xs text-foreground cursor-pointer hover:bg-muted/50 p-1 rounded-sm">
+                      <input type="checkbox" checked={selectedCallsCollections.includes(name)} onChange={() => toggleCollection(name)} className="h-3.5 w-3.5 rounded-sm border-primary text-primary focus:ring-primary" />
+                      <span className="truncate">{name}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              {/* Locations */}
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-medium text-foreground">Locations</label>
+                  <span className="text-[10px] text-muted-foreground">
+                    {formatLocationSelectionLabel(selectedLocations.length, locations.length)}
+                  </span>
+                </div>
+                <div className="flex gap-1.5 mb-2">
+                  <button type="button" onClick={selectAllLocations} disabled={selectedCallsCollections.length === 0 || locations.length === 0 || locationsLoading} className="text-[10px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70 disabled:opacity-50">Select all</button>
+                  <button type="button" onClick={clearLocationSelection} disabled={selectedCallsCollections.length === 0 || locations.length === 0 || locationsLoading} className="text-[10px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70 disabled:opacity-50">All rows</button>
+                </div>
+                <div className="max-h-48 overflow-auto rounded-md border border-border bg-muted/30 p-2 space-y-1">
+                  {selectedCallsCollections.length === 0 && <p className="text-[11px] text-muted-foreground">Select collection first.</p>}
+                  {selectedCallsCollections.length > 0 && locationsLoading && <p className="text-[11px] text-muted-foreground">Loading...</p>}
+                  {selectedCallsCollections.length > 0 && !locationsLoading && locations.length === 0 && <p className="text-[11px] text-muted-foreground">No locations found.</p>}
+                  {selectedCallsCollections.length > 0 && !locationsLoading && locations.map((name) => (
+                    <label key={name} className="flex items-center gap-2 text-xs text-foreground cursor-pointer hover:bg-muted/50 p-1 rounded-sm">
+                      <input type="checkbox" checked={selectedLocations.includes(name)} onChange={() => toggleLocation(name)} className="h-3.5 w-3.5" />
+                      <span>{name}</span>
+                    </label>
+                  ))}
+                </div>
+                <p className="mt-1 text-[11px] text-muted-foreground">Empty selection = all locations.</p>
+              </div>
+
+              {/* Session Valid */}
+              <div>
+                <label className="text-xs font-medium text-foreground block mb-1">Session Valid</label>
+                <div className="flex gap-1.5">
+                  <button type="button" onClick={() => setSessionValidFilter("all")} className={`text-[10px] px-2 py-1 rounded border ${sessionValidFilter === "all" ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}>All</button>
+                  <button type="button" onClick={() => setSessionValidFilter("1")} className={`text-[10px] px-2 py-1 rounded border ${sessionValidFilter === "1" ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}>Valid</button>
+                  <button type="button" onClick={() => setSessionValidFilter("0")} className={`text-[10px] px-2 py-1 rounded border ${sessionValidFilter === "0" ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}>Invalid</button>
+                </div>
+              </div>
+
+              {/* Status */}
+              <div>
+                <label className="text-xs font-medium text-foreground block mb-1">Status</label>
+                <div className="flex flex-wrap gap-1.5">
+                  <button type="button" onClick={() => setStatusFilters([])} className={`text-[10px] px-2 py-1 rounded border ${statusFilters.length === 0 ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}>All</button>
+                  <button type="button" onClick={() => toggleStatusFilter("completed")} className={`text-[10px] px-2 py-1 rounded border ${statusFilters.includes("completed") ? "bg-success/50 text-success-foreground border-success" : "border-border bg-muted hover:bg-muted/70"}`}>Completed</button>
+                  <button type="button" onClick={() => toggleStatusFilter("dropped")} className={`text-[10px] px-2 py-1 rounded border ${statusFilters.includes("dropped") ? "bg-destructive/50 text-destructive-foreground border-destructive" : "border-border bg-muted hover:bg-muted/70"}`}>Drop</button>
+                  <button type="button" onClick={() => toggleStatusFilter("failed")} className={`text-[10px] px-2 py-1 rounded border ${statusFilters.includes("failed") ? "bg-warning/50 text-warning-foreground border-warning" : "border-border bg-muted hover:bg-muted/70"}`}>Fail</button>
+                  <button type="button" onClick={() => toggleStatusFilter("system release")} className={`text-[10px] px-2 py-1 rounded border ${statusFilters.includes("system release") ? "bg-violet-500/50 text-violet-100 border-violet-500" : "border-border bg-muted hover:bg-muted/70"}`}>System Release</button>
+                </div>
+              </div>
+
+              {/* Active filter badges */}
+              <div className="pt-2 border-t border-border">
+                <p className="text-[10px] text-muted-foreground mb-1.5">Active filters</p>
+                <div className="flex flex-wrap gap-1.5">
+                  <Badge variant="secondary" className="text-[10px]">DB: {selectedDatabase || "—"}</Badge>
+                  <Badge variant="secondary" className="text-[10px]">Collections: {selectedCallsCollections.length === 0 ? "None" : selectedCallsCollections.length}</Badge>
+                  <Badge variant="secondary" className="text-[10px]">Locations: {selectedLocations.length === 0 ? "All" : selectedLocations.length}</Badge>
+                  {sessionValidFilter !== "all" && <Badge variant="secondary" className="text-[10px]">Session: {sessionValidFilter === "1" ? "Valid" : "Invalid"}</Badge>}
+                  {statusFilters.length > 0 && <Badge variant="secondary" className="text-[10px]">Status: {statusFilters.join(", ")}</Badge>}
+                </div>
+              </div>
+            </div>
+
+            <div className="p-4 border-t border-border">
+              <p className="text-[11px] text-muted-foreground text-center">
+                {filteredCallRecords.length} κλήσεις ταιριάζουν
+              </p>
+            </div>
+          </motion.aside>
+        </div>
+      )}
+
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="w-full px-4 sm:px-6 lg:px-10 mx-auto flex items-center justify-between py-3">
           <div className="flex items-center gap-3">
@@ -436,29 +588,41 @@ const Index = () => {
               </p>
             </div>
           </div>
-          
-          <div className="bg-card border border-border rounded-lg p-3">
-            <p className="text-[11px] text-muted-foreground mb-1">Active filters</p>
+
+          <div className="flex items-center gap-2">
+            {/* Edit Filters button */}
+            <button
+              type="button"
+              onClick={() => setShowFilterPanel(true)}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border bg-muted hover:bg-muted/70 text-xs font-medium text-foreground transition-colors"
+            >
+              <SlidersHorizontal className="h-3.5 w-3.5 text-primary" />
+              Edit Filters
+              {(selectedCallsCollections.length > 0 || sessionValidFilter !== "all" || statusFilters.length > 0) && (
+                <span className="ml-1 h-4 w-4 rounded-full bg-primary text-primary-foreground text-[9px] flex items-center justify-center font-bold">
+                  {selectedCallsCollections.length + (sessionValidFilter !== "all" ? 1 : 0) + statusFilters.length}
+                </span>
+              )}
+            </button>
+
+            <div className="bg-card border border-border rounded-lg px-3 py-2">
+              <p className="text-[11px] text-muted-foreground mb-1">Active filters</p>
               <div className="flex flex-wrap gap-1.5">
-                <Badge variant="secondary" className="text-[10px]">DB: {selectedDatabase || "-"}</Badge>
-                {/* <Badge variant="secondary" className="text-[10px]">Collections: {selectedCallsCollections.length === 0 ? "None" : selectedCallsCollections}</Badge> */}
-                <Badge variant="secondary" className="text-[10px]">
-                  Collections: {selectedCallsCollections.length === 0 ? "None" : selectedCallsCollections.join(', ')}
-                </Badge>
-                <Badge variant="secondary" className="text-[10px]">
-                  Locations: {selectedLocations.length === 0 ? "All" : selectedLocations.length}
-                </Badge>
+                <Badge variant="secondary" className="text-[10px]">DB: {selectedDatabase || "—"}</Badge>
+                <Badge variant="secondary" className="text-[10px]">Collections: {selectedCallsCollections.length === 0 ? "None" : selectedCallsCollections.join(', ')}</Badge>
+                <Badge variant="secondary" className="text-[10px]">Locations: {selectedLocations.length === 0 ? "All" : selectedLocations.length}</Badge>
               </div>
+            </div>
           </div>
-          
+
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
             <button
-                type="button"
-                onClick={clearCallsFilters}
-                className="text-[20px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70"
-                >
-                Clear filters
-              </button>
+              type="button"
+              onClick={clearCallsFilters}
+              className="text-[15px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70"
+            >
+              Clear filters
+            </button>
             <span>{filteredCallRecords.length} calls recorded</span>
             {results.length > 0 && (
               <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-1.5">
@@ -485,6 +649,9 @@ const Index = () => {
               </TabsTrigger>
               <TabsTrigger value="detail" className="gap-1.5 text-xs" disabled={!selectedCall}>
                 <BarChart3 className="h-3.5 w-3.5" /> Call Detail
+              </TabsTrigger>
+              <TabsTrigger value="map2" className="gap-1.5 text-xs">
+                <MapPin className="h-3.5 w-3.5 text-cyan-400" /> Antennas
               </TabsTrigger>
             </TabsList>
           </div>
@@ -515,36 +682,18 @@ const Index = () => {
                 isRunning={isRunning}
                 collectionNames={collectionNames}
                 collectionsLoading={collectionsLoading}
+                results={results}
+                totalTime={totalTime}
               />
             </section>
 
             {isRunning && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center justify-center py-16">
+              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center justify-center py-10">
                 <div className="flex flex-col items-center gap-3">
                   <div className="h-8 w-8 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                  <p className="text-sm text-muted-foreground">Εκτέλεση benchmarks...</p>
+                  <p className="text-sm text-muted-foreground">Running queries…</p>
                 </div>
               </motion.div>
-            )}
-
-            {!isRunning && results.length > 0 && (
-              <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-6">
-                <StatsCards results={results} totalTime={totalTime} />
-                <BenchmarkCharts results={results} />
-                <ResultsTable results={results} />
-              </motion.div>
-            )}
-
-            {!isRunning && results.length === 0 && (
-              <div className="flex flex-col items-center justify-center py-20 text-center">
-                <div className="h-16 w-16 rounded-full bg-muted flex items-center justify-center mb-4">
-                  <BarChart3 className="h-7 w-7 text-muted-foreground" />
-                </div>
-                <h3 className="text-lg font-medium text-foreground mb-1">Έτοιμο για Benchmarking</h3>
-                <p className="text-sm text-muted-foreground max-w-md">
-                  Προσθέστε τα queries σας και πατήστε "Run Benchmark" για αποτελέσματα.
-                </p>
-              </div>
             )}
           </TabsContent>
 
@@ -552,18 +701,18 @@ const Index = () => {
             <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4 items-start">
               <aside className="space-y-3 lg:sticky lg:top-24">
                 <div className="bg-card border border-border rounded-lg p-3">
-                    <div className="mb-2 flex items-center justify-between">
-                      <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-                        Filters
-                      </h3>
-                      <button
-                        type="button"
-                        onClick={clearCallsFilters}
-                        className="text-[10px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70"
-                      >
-                        Clear filters
-                      </button>
-                    </div>
+                  <div className="mb-2 flex items-center justify-between">
+                    <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
+                      Filters
+                    </h3>
+                    <button
+                      type="button"
+                      onClick={clearCallsFilters}
+                      className="text-[10px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70"
+                    >
+                      Clear filters
+                    </button>
+                  </div>
 
                   <div className="space-y-3">
                     <div>
@@ -800,7 +949,7 @@ const Index = () => {
                     <thead>
                       <tr className="border-b border-border bg-muted/30 text-left text-muted-foreground uppercase tracking-wider">
                         <th className="px-2 py-2 font-semibold">Location</th>
-                        <th className="px-2 py-2 font-semibold">SessionId</th> 
+                        <th className="px-2 py-2 font-semibold">SessionId</th>
                         <th className="px-2 py-2 font-semibold">Technology</th>
                         <th className="px-2 py-2 font-semibold">Call Mode</th>
                         <th className="px-2 py-2 font-semibold">Call Type</th>
@@ -812,8 +961,8 @@ const Index = () => {
                         <th className="px-2 py-2 font-semibold">Call Start Time</th>
                         <th className="px-2 py-2 font-semibold">Call Duration</th>
                         <th className="px-2 py-2 font-semibold">CollectionName</th>
-                        
-                        
+
+
                         {/* <th className="px-2 py-2 font-semibold">Latitude</th>
                         <th className="px-2 py-2 font-semibold">Longitude</th> */}
                       </tr>
@@ -830,7 +979,7 @@ const Index = () => {
                       {filteredAllCallsRows.map((row, idx) => {
                         const currentFileTime = getFileDateTime(row.ASideFileName);
                         let showEndOfFile = false;
-                        
+
                         if (idx > 0) {
                           const prevFileTime = getFileDateTime(filteredAllCallsRows[idx - 1].ASideFileName);
                           // Show "End of File" if the date/time part of the filename changed and no status filters or invalid session filters are applied
@@ -843,16 +992,16 @@ const Index = () => {
                           <Fragment key={`${row.SessionId}-${idx}`}>
                             {showEndOfFile && (
                               <tr className="bg-muted/50 border-y border-border">
-                                <td 
-                                  colSpan={13} 
+                                <td
+                                  colSpan={13}
                                   className="px-2 py-10 text-center text-xs font-semibold text-red-500 uppercase tracking-widest"
-                                  >
+                                >
                                   End of File
                                 </td>
                               </tr>
                             )}
                             <tr
-                              
+
                               id={`call-row-${row.SessionId}-${idx}`}
                               className={`border-b border-border/60 ${getAllCallsRowClass(row)} cursor-pointer transition-colors`}
                               onClick={() => {
@@ -875,7 +1024,7 @@ const Index = () => {
                                 </div>
                               </td>
                               <td className="px-2 py-2 font-mono text-foreground break-words max-w-[120px]">{row.SessionId}</td>
-                              
+
                               <td className="px-2 py-2 text-foreground">{row.technology ?? "N/A"}</td>
                               <td className="px-2 py-2 text-foreground">{row.callMode ?? "N/A"}</td>
                               <td className="px-2 py-2 text-foreground">{row.callType ?? "N/A"}</td>
@@ -884,7 +1033,7 @@ const Index = () => {
                               <td className="px-2 py-2 text-foreground">{row.comment ?? "N/A"}</td>
                               <td className="px-2 py-2 font-mono text-foreground">{row.setupTime ?? "N/A"}</td>
                               <td className="px-2 py-2 font-mono text-foreground">{row.Avg_mos ?? "N/A"}</td>
-                              <td className="px-2 py-2 font-mono text-foreground break-words max-w-[100px]">{formatCallStartTime(row.callStartTimeStamp )}</td>
+                              <td className="px-2 py-2 font-mono text-foreground break-words max-w-[100px]">{formatCallStartTime(row.callStartTimeStamp)}</td>
                               <td className="px-2 py-2 font-mono text-foreground foreground break-words max-w-[150px]">{row.callDuration ?? "N/A"}</td>
                               <td className="px-2 py-2 text-foreground break-words max-w-[150px]">{row.CollectionName ?? "N/A"}</td>
                             </tr>
@@ -919,6 +1068,10 @@ const Index = () => {
                 </p>
               </div>
             )}
+          </TabsContent>
+
+          <TabsContent value="map2">
+            <AntennasMap />
           </TabsContent>
         </Tabs>
       </main>

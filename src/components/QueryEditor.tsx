@@ -1,438 +1,560 @@
-import { useEffect, useState } from "react";
-import { Play, Plus, X, Database, Code, Settings2, ChevronDown } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import {
+  Play,
+  Plus,
+  X,
+  Database,
+  ChevronDown,
+  Copy,
+  Download,
+  Clock,
+  Rows,
+  AlertCircle,
+  ChevronRight,
+  Trash2,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { motion, AnimatePresence } from "framer-motion";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import {
-  DropdownMenu,
-  DropdownMenuCheckboxItem,
-  DropdownMenuContent,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from "@/components/ui/dropdown-menu";
+import { motion, AnimatePresence } from "framer-motion";
+
+// ──────────────────────────────────────────────
+// Types
+// ──────────────────────────────────────────────
+interface QueryTab {
+  id: string;
+  label: string;
+  sql: string;
+}
+
+interface QueryResult {
+  id: string;
+  label: string;
+  executionTime: number;
+  rowsReturned: number;
+  columns: string[];
+  data: Record<string, unknown>[];
+  error?: string;
+}
 
 interface QueryEditorProps {
   onRunQueries: (queries: string[]) => void;
   isRunning: boolean;
   collectionNames: string[];
   collectionsLoading: boolean;
+  results?: QueryResult[];
+  totalTime?: number;
 }
 
-type QueryMode = "default" | "builder";
-
-interface BuilderQuery {
-  selectFields: string[];
-  fromTable: string;
-  whereClause: string;
-  groupByClause: string;
-}
-
-const SAMPLE_QUERIES = [
-  "SELECT TOP 100 * FROM CallTable ORDER BY StartTime DESC",
-  "SELECT Operator, COUNT(*) as TotalCalls, SUM(CASE WHEN CallStatus = 'Dropped' THEN 1 ELSE 0 END) as DroppedCalls FROM CallTable GROUP BY Operator",
-  "SELECT Technology, AVG(DL_Throughput) as Avg_DL, AVG(UL_Throughput) as Avg_UL, COUNT(*) as Samples FROM CallTable GROUP BY Technology ORDER BY Avg_DL DESC",
+// ──────────────────────────────────────────────
+// Quick-pick templates
+// ──────────────────────────────────────────────
+const TEMPLATES = [
+  {
+    label: "All calls (top 200)",
+    sql: `SELECT TOP 200
+  CA.SessionId,
+  CA.technology,
+  CA.callMode,
+  CA.callType,
+  CA.callDir,
+  CA.callStatus,
+  ROUND(CA.setupTime, 2) AS setupTime,
+  (CA.callDuration / 1000) AS callDuration_s,
+  FL.CollectionName,
+  FL.ASideLocation AS Location
+FROM CallAnalysis CA
+LEFT JOIN FileList FL ON CA.FileId = FL.FileId
+LEFT JOIN Sessions S  ON S.SessionId = CA.SessionId
+WHERE S.Valid IN (0, 1)
+ORDER BY CA.SessionId DESC`,
+  },
+  {
+    label: "Drop / Fail summary",
+    sql: `SELECT
+  CA.callStatus,
+  CA.callType,
+  CA.technology,
+  COUNT(*) AS total
+FROM CallAnalysis CA
+LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+WHERE S.Valid IN (0, 1)
+  AND (CA.callStatus LIKE '%Drop%' OR CA.callStatus LIKE '%Fail%')
+GROUP BY CA.callStatus, CA.callType, CA.technology
+ORDER BY total DESC`,
+  },
+  {
+    label: "Avg setup time per technology",
+    sql: `SELECT
+  CA.technology,
+  COUNT(*)              AS calls,
+  ROUND(AVG(CA.setupTime), 2) AS avg_setup_ms,
+  ROUND(MIN(CA.setupTime), 2) AS min_setup_ms,
+  ROUND(MAX(CA.setupTime), 2) AS max_setup_ms
+FROM CallAnalysis CA
+LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+WHERE S.Valid IN (0, 1)
+GROUP BY CA.technology
+ORDER BY avg_setup_ms`,
+  },
+  {
+    label: "Avg MOS per collection",
+    sql: `SELECT
+  FL.CollectionName,
+  COUNT(*)                  AS calls,
+  ROUND(AVG(LQ.OptionalWB), 3) AS avg_mos,
+  ROUND(MIN(LQ.OptionalWB), 3) AS min_mos,
+  ROUND(MAX(LQ.OptionalWB), 3) AS max_mos
+FROM CallAnalysis CA
+LEFT JOIN FileList FL ON CA.FileId = FL.FileId
+LEFT JOIN ResultsLQ08Avg LQ ON LQ.SessionId = CA.SessionId
+WHERE LQ.OptionalWB IS NOT NULL
+GROUP BY FL.CollectionName
+ORDER BY avg_mos DESC`,
+  },
+  {
+    label: "LTE signal per session",
+    sql: `SELECT TOP 500
+  LM.SessionId,
+  LM.MsgTime,
+  ROUND(LM.RSRP,  2) AS RSRP,
+  ROUND(LM.RSRQ,  2) AS RSRQ,
+  ROUND(LM.SINR0, 2) AS SINR0
+FROM LTEMeasurementReport LM
+ORDER BY LM.SessionId, LM.MsgTime`,
+  },
+  {
+    label: "Collections in filelist",
+    sql: `SELECT
+  CollectionName,
+  COUNT(*) AS files,
+  MIN(StartTime) AS first_file,
+  MAX(StartTime) AS last_file
+FROM FileList
+WHERE CollectionName IS NOT NULL
+GROUP BY CollectionName
+ORDER BY last_file DESC`,
+  },
 ];
 
-const AVAILABLE_FIELDS = [
-  { value: "Operator", label: "Operator" },
-  { value: "Technology", label: "Technology" },
-  { value: "CallType", label: "Call Type" },
-  { value: "CallStatus", label: "Call Status" },
-  { value: "Region", label: "Region" },
-  { value: "StartTime", label: "Start Time" },
-  { value: "EndTime", label: "End Time" },
-  { value: "Duration", label: "Duration" },
-  { value: "DL_Throughput", label: "DL Throughput" },
-  { value: "UL_Throughput", label: "UL Throughput" },
-  { value: "Latency", label: "Latency" },
-  { value: "RSRP", label: "RSRP" },
-  { value: "RSRQ", label: "RSRQ" },
-  { value: "SINR", label: "SINR" },
-  { value: "COUNT(*)", label: "COUNT(*)" },
-  { value: "AVG(DL_Throughput)", label: "AVG(DL_Throughput)" },
-  { value: "AVG(UL_Throughput)", label: "AVG(UL_Throughput)" },
-  { value: "AVG(Latency)", label: "AVG(Latency)" },
-  { value: "MAX(DL_Throughput)", label: "MAX(DL_Throughput)" },
-  { value: "MIN(Latency)", label: "MIN(Latency)" },
-];
+// ──────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────
+const uid = () => Math.random().toString(36).slice(2, 8);
 
-const AVAILABLE_TABLES = [
-  { value: "CallTable", label: "CallTable" },
-  { value: "EventTable", label: "EventTable" },
-  { value: "MeasurementTable", label: "MeasurementTable" },
-  { value: "CellInfo", label: "CellInfo" },
-  { value: "SignalSamples", label: "SignalSamples" },
-];
-
-const defaultBuilder: BuilderQuery = {
-  selectFields: ["Operator", "AVG(DL_Throughput)"],
-  fromTable: "CallTable",
-  whereClause: "",
-  groupByClause: "Operator",
-};
-
-function buildQueryString(b: BuilderQuery): string {
-  const select = b.selectFields.length > 0 ? b.selectFields.join(", ") : "*";
-  let sql = `SELECT ${select} FROM ${b.fromTable}`;
-  if (b.whereClause.trim()) sql += ` WHERE ${b.whereClause.trim()}`;
-  if (b.groupByClause.trim()) sql += ` GROUP BY ${b.groupByClause.trim()}`;
-  return sql;
+function exportCsv(columns: string[], data: Record<string, unknown>[], filename: string) {
+  const header = columns.join(",");
+  const rows = data.map((row) =>
+    columns
+      .map((col) => {
+        const val = row[col];
+        if (val === null || val === undefined) return "";
+        const str = String(val);
+        return str.includes(",") || str.includes('"') || str.includes("\n")
+          ? `"${str.replace(/"/g, '""')}"`
+          : str;
+      })
+      .join(","),
+  );
+  const blob = new Blob([[header, ...rows].join("\n")], { type: "text/csv;charset=utf-8;" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(url);
 }
 
-function escapeSqlString(value: string): string {
-  return value.replace(/'/g, "''");
+// ──────────────────────────────────────────────
+// Sub-components
+// ──────────────────────────────────────────────
+function ResultGrid({ result }: { result: QueryResult }) {
+  const [page, setPage] = useState(0);
+  const pageSize = 50;
+  const totalPages = Math.ceil(result.data.length / pageSize);
+  const pageData = result.data.slice(page * pageSize, (page + 1) * pageSize);
+
+  if (result.error) {
+    return (
+      <div className="flex items-start gap-2 rounded-md border border-destructive/40 bg-destructive/10 p-3 text-xs text-destructive">
+        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span className="font-mono">{result.error}</span>
+      </div>
+    );
+  }
+
+  if (result.data.length === 0) {
+    return (
+      <p className="py-4 text-center text-xs text-muted-foreground">
+        Query returned 0 rows.
+      </p>
+    );
+  }
+
+  return (
+    <div className="space-y-1.5">
+      {/* table */}
+      <div className="overflow-x-auto rounded-md border border-border">
+        <table className="w-full text-xs">
+          <thead>
+            <tr className="border-b border-border bg-muted/50 text-left text-muted-foreground uppercase tracking-wider">
+              {result.columns.map((col) => (
+                <th key={col} className="px-3 py-1.5 font-semibold whitespace-nowrap">
+                  {col}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {pageData.map((row, i) => (
+              <tr
+                key={i}
+                className="border-b border-border/50 transition-colors hover:bg-muted/20"
+              >
+                {result.columns.map((col) => (
+                  <td key={col} className="px-3 py-1.5 font-mono text-foreground whitespace-nowrap">
+                    {row[col] === null || row[col] === undefined ? (
+                      <span className="text-muted-foreground italic">NULL</span>
+                    ) : (
+                      String(row[col])
+                    )}
+                  </td>
+                ))}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+
+      {/* pagination */}
+      {totalPages > 1 && (
+        <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+          <button
+            disabled={page === 0}
+            onClick={() => setPage((p) => p - 1)}
+            className="px-2 py-0.5 rounded border border-border bg-muted disabled:opacity-40 hover:bg-muted/70"
+          >
+            ‹ Prev
+          </button>
+          <span>
+            Page {page + 1} / {totalPages}
+          </span>
+          <button
+            disabled={page >= totalPages - 1}
+            onClick={() => setPage((p) => p + 1)}
+            className="px-2 py-0.5 rounded border border-border bg-muted disabled:opacity-40 hover:bg-muted/70"
+          >
+            Next ›
+          </button>
+          <span className="ml-auto">{result.data.length} total rows</span>
+        </div>
+      )}
+    </div>
+  );
 }
 
+// ──────────────────────────────────────────────
+// Main component
+// ──────────────────────────────────────────────
 const QueryEditor = ({
   onRunQueries,
   isRunning,
-  collectionNames,
-  collectionsLoading,
+  results = [],
+  totalTime = 0,
 }: QueryEditorProps) => {
-  const [mode, setMode] = useState<QueryMode>("default");
+  const [tabs, setTabs] = useState<QueryTab[]>([
+    { id: uid(), label: "Query 1", sql: TEMPLATES[0].sql },
+  ]);
+  const [activeTabId, setActiveTabId] = useState(tabs[0].id);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const templatesRef = useRef<HTMLDivElement>(null);
 
-  // Default mode state
-  const [queries, setQueries] = useState<string[]>([SAMPLE_QUERIES[0]]);
-  const [selectedCollections, setSelectedCollections] = useState<string[]>([]);
-
+  // Close templates dropdown on outside click
   useEffect(() => {
-    setSelectedCollections((prev) => prev.filter((name) => collectionNames.includes(name)));
-  }, [collectionNames]);
+    const handler = (e: MouseEvent) => {
+      if (templatesRef.current && !templatesRef.current.contains(e.target as Node)) {
+        setShowTemplates(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
 
-  // Builder mode state
-  const [builders, setBuilders] = useState<BuilderQuery[]>([{ ...defaultBuilder }]);
+  const activeTab = tabs.find((t) => t.id === activeTabId) ?? tabs[0];
 
-  const addQuery = () => {
-    if (mode === "default") {
-      const nextSample = SAMPLE_QUERIES[queries.length % SAMPLE_QUERIES.length];
-      setQueries([...queries, nextSample]);
-    } else {
-      setBuilders([...builders, { ...defaultBuilder }]);
+  const addTab = () => {
+    const newTab: QueryTab = {
+      id: uid(),
+      label: `Query ${tabs.length + 1}`,
+      sql: "",
+    };
+    setTabs((prev) => [...prev, newTab]);
+    setActiveTabId(newTab.id);
+  };
+
+  const removeTab = (id: string) => {
+    if (tabs.length === 1) return;
+    const idx = tabs.findIndex((t) => t.id === id);
+    const newTabs = tabs.filter((t) => t.id !== id);
+    setTabs(newTabs);
+    if (activeTabId === id) {
+      setActiveTabId(newTabs[Math.max(0, idx - 1)].id);
     }
   };
 
-  const removeQuery = (index: number) => {
-    if (mode === "default") {
-      if (queries.length > 1) setQueries(queries.filter((_, i) => i !== index));
-    } else {
-      if (builders.length > 1) setBuilders(builders.filter((_, i) => i !== index));
-    }
+  const updateSql = (id: string, sql: string) => {
+    setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, sql } : t)));
   };
 
-  const updateQuery = (index: number, value: string) => {
-    const updated = [...queries];
-    updated[index] = value;
-    setQueries(updated);
+  const applyTemplate = (sql: string) => {
+    updateSql(activeTabId, sql);
+    setShowTemplates(false);
+    textareaRef.current?.focus();
   };
-
-  const updateBuilder = (index: number, partial: Partial<BuilderQuery>) => {
-    const updated = [...builders];
-    updated[index] = { ...updated[index], ...partial };
-    setBuilders(updated);
-  };
-
-  const toggleField = (builderIndex: number, field: string) => {
-    const current = builders[builderIndex].selectFields;
-    const next = current.includes(field)
-      ? current.filter((f) => f !== field)
-      : [...current, field];
-    updateBuilder(builderIndex, { selectFields: next });
-  };
-
-  const toggleCollection = (value: string) => {
-    setSelectedCollections((prev) =>
-      prev.includes(value) ? prev.filter((item) => item !== value) : [...prev, value],
-    );
-  };
-
-  const removeCollection = (value: string) => {
-    setSelectedCollections((prev) => prev.filter((item) => item !== value));
-  };
-
-  const collectionQueries = selectedCollections.map(
-    (name) => `SELECT * FROM filelist WHERE collection_name = '${escapeSqlString(name)}'`,
-  );
 
   const handleRun = () => {
-    if (mode === "default") {
-      const sqlQueries = queries.filter((q) => q.trim());
-      onRunQueries([...collectionQueries, ...sqlQueries]);
-    } else {
-      onRunQueries(builders.map(buildQueryString));
-    }
+    const sqls = tabs.map((t) => t.sql.trim()).filter(Boolean);
+    if (sqls.length > 0) onRunQueries(sqls);
   };
 
-  const allValid =
-    mode === "default"
-      ? (queries.some((q) => q.trim()) || collectionQueries.length > 0)
-      : builders.every((b) => b.selectFields.length > 0 && b.fromTable);
+  const handleRunActive = () => {
+    const sql = activeTab.sql.trim();
+    if (sql) onRunQueries([sql]);
+  };
+
+  const canRun = tabs.some((t) => t.sql.trim());
+
+  // Map results by tab order (index)
+  const resultForTab = (tabIdx: number): QueryResult | undefined => results[tabIdx];
 
   return (
     <div className="space-y-3">
+      {/* ── Header ── */}
       <div className="flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Database className="h-4 w-4 text-primary" />
           <h2 className="text-sm font-semibold uppercase tracking-wider text-muted-foreground">
-            Query Editor
+            SQL Query Editor
           </h2>
         </div>
-        <div className="flex gap-2">
-          {/* Mode toggle */}
-          <div className="flex border border-border rounded-md overflow-hidden">
-            <button
-              onClick={() => setMode("default")}
-              className={`px-3 py-1.5 text-xs font-medium flex items-center gap-1 transition-colors ${
-                mode === "default"
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:text-foreground"
-              }`}
+
+        <div className="flex items-center gap-2">
+          {/* Templates picker */}
+          <div className="relative" ref={templatesRef}>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setShowTemplates((v) => !v)}
+              className="text-xs gap-1"
             >
-              <Code className="h-3 w-3" /> SQL
-            </button>
-            <button
-              onClick={() => setMode("builder")}
-              className={`px-3 py-1.5 text-xs font-medium flex items-center gap-1 transition-colors ${
-                mode === "builder"
-                  ? "bg-primary text-primary-foreground"
-                  : "bg-muted text-muted-foreground hover:text-foreground"
-              }`}
-            >
-              <Settings2 className="h-3 w-3" /> Builder
-            </button>
+              Templates <ChevronDown className="h-3 w-3" />
+            </Button>
+            <AnimatePresence>
+              {showTemplates && (
+                <motion.div
+                  initial={{ opacity: 0, y: -4 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: -4 }}
+                  className="absolute right-0 top-full z-50 mt-1 w-64 rounded-md border border-border bg-card shadow-lg overflow-hidden"
+                >
+                  {TEMPLATES.map((tpl) => (
+                    <button
+                      key={tpl.label}
+                      onClick={() => applyTemplate(tpl.sql)}
+                      className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-muted/60 border-b border-border/50 last:border-0 transition-colors"
+                    >
+                      <ChevronRight className="h-3 w-3 text-primary shrink-0" />
+                      {tpl.label}
+                    </button>
+                  ))}
+                </motion.div>
+              )}
+            </AnimatePresence>
           </div>
 
-          <Button variant="outline" size="sm" onClick={addQuery}>
-            <Plus className="h-3.5 w-3.5 mr-1" /> Add Query
+          <Button variant="outline" size="sm" onClick={addTab} className="text-xs gap-1">
+            <Plus className="h-3.5 w-3.5" /> New Tab
           </Button>
+
           <Button
             size="sm"
             onClick={handleRun}
-            disabled={isRunning || !allValid}
-            className="glow-primary"
+            disabled={isRunning || !canRun}
+            className="glow-primary text-xs gap-1"
           >
-            <Play className="h-3.5 w-3.5 mr-1" />
-            {isRunning ? "Running..." : "Run Benchmark"}
+            <Play className="h-3.5 w-3.5" />
+            {isRunning ? "Running…" : tabs.length > 1 ? "Run All" : "Run"}
           </Button>
         </div>
       </div>
 
-      <AnimatePresence mode="wait">
-        {mode === "default" ? (
-          <motion.div
-            key="default"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="space-y-2"
-          >
-            <div className="rounded-md border border-border bg-muted/40 p-3 space-y-2">
-              <div className="flex items-center justify-between">
-                <p className="text-[11px] font-semibold uppercase tracking-wider text-primary">
-                  Collection Queries (from filelist)
-                </p>
-                {collectionsLoading && (
-                  <span className="text-[10px] text-muted-foreground">Loading collections...</span>
-                )}
-              </div>
-
-              <DropdownMenu>
-                <DropdownMenuTrigger asChild>
-                  <Button variant="outline" size="sm" className="w-full justify-between text-xs">
-                    {selectedCollections.length > 0
-                      ? `${selectedCollections.length} collection(s) selected`
-                      : "Select collection_name values"}
-                    <ChevronDown className="h-3.5 w-3.5" />
-                  </Button>
-                </DropdownMenuTrigger>
-                <DropdownMenuContent className="w-[320px] max-h-72 overflow-y-auto" align="start">
-                  <DropdownMenuLabel>collection_name</DropdownMenuLabel>
-                  <DropdownMenuSeparator />
-                  {collectionNames.length === 0 ? (
-                    <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                      {collectionsLoading ? "Loading..." : "No collections found for this database."}
-                    </div>
-                  ) : (
-                    collectionNames.map((name) => (
-                      <DropdownMenuCheckboxItem
-                        key={name}
-                        checked={selectedCollections.includes(name)}
-                        onSelect={(e) => e.preventDefault()}
-                        onCheckedChange={() => toggleCollection(name)}
-                      >
-                        {name}
-                      </DropdownMenuCheckboxItem>
-                    ))
-                  )}
-                </DropdownMenuContent>
-              </DropdownMenu>
-
-              {selectedCollections.length > 0 && (
-                <div className="flex flex-wrap gap-1.5">
-                  {selectedCollections.map((name) => (
-                    <Badge
-                      key={name}
-                      variant="secondary"
-                      className="text-[10px] cursor-pointer hover:bg-destructive/20 hover:text-destructive transition-colors"
-                      onClick={() => removeCollection(name)}
-                    >
-                      {name} <X className="h-2.5 w-2.5 ml-1" />
-                    </Badge>
-                  ))}
-                </div>
+      {/* ── Tab strip ── */}
+      <div className="flex items-center gap-1 border-b border-border overflow-x-auto pb-px">
+        {tabs.map((tab, tabIdx) => {
+          const res = resultForTab(tabIdx);
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTabId(tab.id)}
+              className={`group relative flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-t-md border border-b-0 transition-colors whitespace-nowrap ${
+                tab.id === activeTabId
+                  ? "bg-card border-border text-foreground"
+                  : "bg-muted/40 border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {tab.label}
+              {res && !res.error && (
+                <span className="text-[9px] text-success font-mono">
+                  {res.rowsReturned}r
+                </span>
               )}
+              {res?.error && (
+                <span className="text-[9px] text-destructive font-mono">err</span>
+              )}
+              {tabs.length > 1 && (
+                <span
+                  role="button"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    removeTab(tab.id);
+                  }}
+                  className="ml-0.5 opacity-0 group-hover:opacity-100 hover:text-destructive transition-opacity"
+                >
+                  <X className="h-3 w-3" />
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* ── Editor area ── */}
+      {tabs.map((tab, tabIdx) => {
+        const res = resultForTab(tabIdx);
+        return (
+          <div
+            key={tab.id}
+            className={tab.id === activeTabId ? "space-y-3" : "hidden"}
+          >
+            {/* Textarea */}
+            <div className="relative">
+              <textarea
+                ref={tab.id === activeTabId ? textareaRef : undefined}
+                value={tab.sql}
+                onChange={(e) => updateSql(tab.id, e.target.value)}
+                rows={8}
+                spellCheck={false}
+                placeholder={`-- Write SQL here, e.g.:\nSELECT TOP 100 * FROM CallAnalysis ORDER BY SessionId DESC`}
+                onKeyDown={(e) => {
+                  // Ctrl+Enter → run active
+                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                    e.preventDefault();
+                    handleRunActive();
+                  }
+                  // Tab → insert spaces
+                  if (e.key === "Tab") {
+                    e.preventDefault();
+                    const ta = e.currentTarget;
+                    const start = ta.selectionStart;
+                    const end = ta.selectionEnd;
+                    const newVal = tab.sql.substring(0, start) + "  " + tab.sql.substring(end);
+                    updateSql(tab.id, newVal);
+                    requestAnimationFrame(() => {
+                      ta.selectionStart = ta.selectionEnd = start + 2;
+                    });
+                  }
+                }}
+                className="w-full resize-y bg-[hsl(var(--muted))] border border-border rounded-md px-4 py-3 font-mono text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/60 transition-all placeholder:text-muted-foreground leading-relaxed"
+              />
+              {/* copy button */}
+              <button
+                onClick={() => navigator.clipboard.writeText(tab.sql)}
+                title="Copy SQL"
+                className="absolute top-2 right-2 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </button>
             </div>
 
-            {queries.map((query, index) => (
-              <div key={index} className="relative group flex items-start gap-2">
-                <span className="mt-3 text-xs font-mono text-muted-foreground w-6 text-right shrink-0">
-                  Q{index + 1}
-                </span>
-                <textarea
-                  value={query}
-                  onChange={(e) => updateQuery(index, e.target.value)}
-                  rows={3}
-                  className="flex-1 bg-muted border border-border rounded-md px-3 py-2 font-mono text-xs text-foreground resize-none focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all placeholder:text-muted-foreground"
-                  placeholder="Enter SQL query..."
-                  spellCheck={false}
-                />
-                {queries.length > 1 && (
+            <div className="flex items-center gap-2">
+              <p className="text-[10px] text-muted-foreground">
+                <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono">Ctrl+Enter</kbd>{" "}
+                to run this tab ·{" "}
+                <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono">Tab</kbd>{" "}
+                for indent
+              </p>
+
+              <div className="ml-auto flex items-center gap-2">
+                {tab.sql.trim() && (
                   <button
-                    onClick={() => removeQuery(index)}
-                    className="mt-2 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
+                    onClick={() => updateSql(tab.id, "")}
+                    className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-destructive transition-colors"
                   >
-                    <X className="h-4 w-4" />
+                    <Trash2 className="h-3 w-3" /> Clear
                   </button>
                 )}
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={handleRunActive}
+                  disabled={isRunning || !tab.sql.trim()}
+                  className="h-6 text-[10px] gap-1 px-2"
+                >
+                  <Play className="h-3 w-3" /> Run this tab
+                </Button>
               </div>
-            ))}
-          </motion.div>
-        ) : (
-          <motion.div
-            key="builder"
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            className="space-y-4"
-          >
-            {builders.map((builder, bIdx) => (
-              <div
-                key={bIdx}
-                className="relative group border border-border rounded-lg p-4 bg-muted/30 space-y-3"
-              >
-                {builders.length > 1 && (
-                  <button
-                    onClick={() => removeQuery(bIdx)}
-                    className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity text-muted-foreground hover:text-destructive"
-                  >
-                    <X className="h-4 w-4" />
-                  </button>
-                )}
+            </div>
 
-                <div className="flex items-center gap-2 mb-1">
-                  <span className="text-xs font-mono text-muted-foreground">Q{bIdx + 1}</span>
-                </div>
+            {/* Results */}
+            <AnimatePresence>
+              {res && (
+                <motion.div
+                  initial={{ opacity: 0, y: 6 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0 }}
+                  className="space-y-2"
+                >
+                  {/* meta bar */}
+                  <div className="flex items-center gap-3 text-[10px] text-muted-foreground flex-wrap">
+                    <span className="flex items-center gap-1">
+                      <Clock className="h-3 w-3" />
+                      {res.executionTime} ms
+                    </span>
+                    <span className="flex items-center gap-1">
+                      <Rows className="h-3 w-3" />
+                      {res.rowsReturned} rows
+                    </span>
+                    <Badge variant="secondary" className="text-[9px] px-1.5">
+                      {res.label}
+                    </Badge>
 
-                {/* SELECT - multiple choice */}
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-semibold uppercase tracking-wider text-primary">
-                    SELECT
-                  </label>
-                  <Select
-                    onValueChange={(val) => toggleField(bIdx, val)}
-                  >
-                    <SelectTrigger className="h-9 text-xs bg-muted border-border">
-                      <SelectValue placeholder="Add field..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {AVAILABLE_FIELDS.map((f) => (
-                        <SelectItem key={f.value} value={f.value}>
-                          {builder.selectFields.includes(f.value) ? "✓ " : ""}
-                          {f.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {builder.selectFields.map((field) => (
-                      <Badge
-                        key={field}
-                        variant="secondary"
-                        className="text-[10px] cursor-pointer hover:bg-destructive/20 hover:text-destructive transition-colors"
-                        onClick={() => toggleField(bIdx, field)}
+                    {!res.error && res.data.length > 0 && (
+                      <button
+                        onClick={() =>
+                          exportCsv(res.columns, res.data, `${res.label.replace(/\s+/g, "_")}.csv`)
+                        }
+                        className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded border border-border bg-muted hover:bg-muted/70 transition-colors"
                       >
-                        {field} <X className="h-2.5 w-2.5 ml-1" />
-                      </Badge>
-                    ))}
+                        <Download className="h-3 w-3" /> Export CSV
+                      </button>
+                    )}
                   </div>
-                </div>
 
-                {/* FROM - dropdown */}
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-semibold uppercase tracking-wider text-primary">
-                    FROM
-                  </label>
-                  <Select
-                    value={builder.fromTable}
-                    onValueChange={(val) => updateBuilder(bIdx, { fromTable: val })}
-                  >
-                    <SelectTrigger className="h-9 text-xs bg-muted border-border">
-                      <SelectValue placeholder="Select table..." />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {AVAILABLE_TABLES.map((t) => (
-                        <SelectItem key={t.value} value={t.value}>
-                          {t.label}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
+                  <ResultGrid result={res} />
+                </motion.div>
+              )}
+            </AnimatePresence>
+          </div>
+        );
+      })}
 
-                {/* WHERE - text */}
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-semibold uppercase tracking-wider text-primary">
-                    WHERE
-                  </label>
-                  <input
-                    value={builder.whereClause}
-                    onChange={(e) => updateBuilder(bIdx, { whereClause: e.target.value })}
-                    className="w-full h-9 bg-muted border border-border rounded-md px-3 font-mono text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all placeholder:text-muted-foreground"
-                    placeholder="e.g. latency_ms > 50 AND region = 'Athens'"
-                    spellCheck={false}
-                  />
-                </div>
-
-                {/* GROUP BY - text */}
-                <div className="space-y-1.5">
-                  <label className="text-[11px] font-semibold uppercase tracking-wider text-primary">
-                    GROUP BY
-                  </label>
-                  <input
-                    value={builder.groupByClause}
-                    onChange={(e) => updateBuilder(bIdx, { groupByClause: e.target.value })}
-                    className="w-full h-9 bg-muted border border-border rounded-md px-3 font-mono text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/50 transition-all placeholder:text-muted-foreground"
-                    placeholder="e.g. region, operator"
-                    spellCheck={false}
-                  />
-                </div>
-
-                {/* Preview */}
-                <div className="mt-2 p-2 bg-background/50 border border-border/50 rounded text-[10px] font-mono text-muted-foreground break-all">
-                  {buildQueryString(builder)}
-                </div>
-              </div>
-            ))}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      {/* Total time badge (all tabs ran) */}
+      {results.length > 1 && totalTime > 0 && (
+        <p className="text-[10px] text-muted-foreground text-right">
+          All {results.length} queries completed in{" "}
+          <span className="font-mono text-primary">{totalTime} ms</span>
+        </p>
+      )}
     </div>
   );
 };

@@ -4,11 +4,14 @@ import {
   ArrowLeft, Signal, Activity, Gauge, ArrowDown, ArrowUp,
   Wifi, Timer, Save, Edit2
 } from "lucide-react";
+import L from "leaflet";
+import { MapContainer, TileLayer, CircleMarker, Marker, Polyline, useMap } from "react-leaflet";
+import "leaflet/dist/leaflet.css";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, type CallSideComparisonRow, type TraceLogRow } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, type CallSideComparisonRow, type TraceLogRow, type AntennaRow } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine } from "recharts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 //ReferenceLine για γραμμες στο διαγραμμα, πχ για thresholds. 
@@ -29,6 +32,47 @@ interface CallDetailProps {
  * Δέχεται σαν είσοδο (iso) ένα string και εγγυάται(: string) 
  * ότι το αποτέλεσμά της θα είναι επίσης string.
  */
+function rsrpColor(val: number | null | undefined): string {
+  if (val == null) return "#6b7280";
+  if (val >= -115) return "#22c55e";
+  if (val >= -120) return "#f97316";
+  return "#ef4444";
+}
+
+function rxLevColor(val: number | null | undefined): string {
+  if (val == null) return "#6b7280";
+  if (val >= -88) return "#22c55e";
+  if (val >= -92) return "#f97316";
+  return "#ef4444";
+}
+
+function MapAutoFit({ points }: { points: Array<[number, number]> }) {
+  const map = useMap();
+  useEffect(() => {
+    if (points.length === 0) return;
+    if (points.length === 1) { map.setView(points[0], 14); return; }
+    const lats = points.map(p => p[0]);
+    const lngs = points.map(p => p[1]);
+    map.fitBounds(
+      [[Math.min(...lats), Math.min(...lngs)], [Math.max(...lats), Math.max(...lngs)]],
+      { padding: [10, 10], maxZoom: 16 }
+    );
+  }, [points, map]);
+  return null;
+}
+
+function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371000;
+  const dLat = (lat2 - lat1) * Math.PI / 180;
+  const dLon = (lon2 - lon1) * Math.PI / 180;
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * Math.sin(dLon / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function fmtDist(m: number): string {
+  return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`;
+}
+
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString("el-GR", {
     day: "2-digit",
@@ -51,6 +95,11 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
   const [bSideLteValues, setBSideLteValues] = useState<any[]>([]);
   const [selectedLteSide, setSelectedLteSide] = useState<"A" | "B">("A");
   const [srvccNetwork, setSrvccNetwork] = useState<"LTE" | "GSM">("LTE");
+
+  const [cellInfo, setCellInfo] = useState<{ eNBId: number | null; EARFCN: number | null; PCI: number | null } | null>(null);
+  const [bSideCellInfo, setBSideCellInfo] = useState<{ eNBId: number | null; EARFCN: number | null; PCI: number | null } | null>(null);
+  const [matchedAntenna, setMatchedAntenna] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number } | null>(null);
+  const [matchedAntennaBSide, setMatchedAntennaBSide] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number } | null>(null);
 
   const isGSMMode = call.callMode === "CS" || (call.callMode === "SRVCC" && srvccNetwork === "GSM");
   const [isLoadingRadio, setIsLoadingRadio] = useState(false);
@@ -98,7 +147,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
-        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes] = await Promise.allSettled([
+        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes] = await Promise.allSettled([
           call.callMode !== "CS" ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
           fetchMosValues(database, call.callId),
@@ -106,7 +155,9 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           fetchCallSideComparison(database, call.callId),
           call.callMode === "CS" ? Promise.resolve({ lteValuesBSide: [] }) : fetchLteValuesBSide(database, call.callId),
           fetchTracelogValues(database, call.callId),
-          call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValuesBSide(database, call.callId) : Promise.resolve({ gsmValuesBSide: [] })
+          call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValuesBSide(database, call.callId) : Promise.resolve({ gsmValuesBSide: [] }),
+          call.callMode !== "CS" ? fetchCellInfo(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
+          call.callMode !== "CS" ? fetchCellInfoBSide(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null })
         ]);
 
         if (lteRes.status === "fulfilled") {
@@ -148,6 +199,14 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         } else {
           setTracelogValues([]);
         }
+
+        if (cellInfoRes.status === "fulfilled") {
+          setCellInfo(cellInfoRes.value as any);
+        }
+
+        if (bSideCellInfoRes.status === "fulfilled") {
+          setBSideCellInfo(bSideCellInfoRes.value as any);
+        }
       } catch (err) {
         console.error("Failed to load metrics", err);
       } finally {
@@ -160,6 +219,56 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       loadRadio();
     }
   }, [database, call.callId, call.callMode]);
+
+  useEffect(() => {
+    const isCosmoteFree = call.region?.toLowerCase().includes("cosmote free");
+    if (!isCosmoteFree || !cellInfo || cellInfo.PCI === null) {
+      setMatchedAntenna(null);
+      return;
+    }
+    const gpsPoints = radioValues
+      .filter((v: any) => v.Latitude != null && v.Longitude != null)
+      .map((v: any) => ({ lat: Number(v.Latitude), lon: Number(v.Longitude) }));
+    if (gpsPoints.length === 0) { setMatchedAntenna(null); return; }
+    const avgLat = gpsPoints.reduce((s: number, p: any) => s + p.lat, 0) / gpsPoints.length;
+    const avgLon = gpsPoints.reduce((s: number, p: any) => s + p.lon, 0) / gpsPoints.length;
+    fetchAntennas().then(({ antennas }) => {
+      const matches = antennas.filter((a: AntennaRow) => a.pci === cellInfo.PCI);
+      if (matches.length === 0) { setMatchedAntenna(null); return; }
+      let best = matches[0];
+      let bestDist = haversineM(avgLat, avgLon, best.lat, best.lon);
+      for (const ant of matches.slice(1)) {
+        const d = haversineM(avgLat, avgLon, ant.lat, ant.lon);
+        if (d < bestDist) { bestDist = d; best = ant; }
+      }
+      setMatchedAntenna({ lat: best.lat, lon: best.lon, cellName: best.cellName, distanceM: bestDist });
+    }).catch(() => setMatchedAntenna(null));
+  }, [cellInfo, radioValues, call.region]);
+
+  useEffect(() => {
+    const isCosmoteFree = call.region?.toLowerCase().includes("cosmote free");
+    if (!isCosmoteFree || !bSideCellInfo || bSideCellInfo.PCI === null) {
+      setMatchedAntennaBSide(null);
+      return;
+    }
+    const gpsPoints = bSideLteValues
+      .filter((v: any) => v.Latitude != null && v.Longitude != null)
+      .map((v: any) => ({ lat: Number(v.Latitude), lon: Number(v.Longitude) }));
+    if (gpsPoints.length === 0) { setMatchedAntennaBSide(null); return; }
+    const avgLat = gpsPoints.reduce((s: number, p: any) => s + p.lat, 0) / gpsPoints.length;
+    const avgLon = gpsPoints.reduce((s: number, p: any) => s + p.lon, 0) / gpsPoints.length;
+    fetchAntennas().then(({ antennas }) => {
+      const matches = antennas.filter((a: AntennaRow) => a.pci === bSideCellInfo.PCI);
+      if (matches.length === 0) { setMatchedAntennaBSide(null); return; }
+      let best = matches[0];
+      let bestDist = haversineM(avgLat, avgLon, best.lat, best.lon);
+      for (const ant of matches.slice(1)) {
+        const d = haversineM(avgLat, avgLon, ant.lat, ant.lon);
+        if (d < bestDist) { bestDist = d; best = ant; }
+      }
+      setMatchedAntennaBSide({ lat: best.lat, lon: best.lon, cellName: best.cellName, distanceM: bestDist });
+    }).catch(() => setMatchedAntennaBSide(null));
+  }, [bSideCellInfo, bSideLteValues, call.region]);
 
   const activeRadioValues = useMemo(() => {
     if (call.callMode === "CS") return selectedLteSide === "B" ? bSideGsmValues : gsmValues;
@@ -226,12 +335,36 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     };
   }, [bSideLteValues]);
 
+  const isCosmoteFree = call.region?.toLowerCase().includes("cosmote free");
+
+  const mapActivePts = useMemo(() => {
+    if (!isCosmoteFree) return [];
+    const source = selectedLteSide === "B"
+      ? (isGSMMode ? bSideGsmValues : bSideLteValues)
+      : (isGSMMode ? gsmValues : radioValues);
+    return source
+      .filter((v: any) => v.Latitude != null && v.Longitude != null)
+      .map((v: any) => ({
+        pos: [Number(v.Latitude), Number(v.Longitude)] as [number, number],
+        color: isGSMMode ? rxLevColor(v.RxLevSub) : rsrpColor(v.RSRP),
+      }));
+  }, [isCosmoteFree, selectedLteSide, isGSMMode, bSideGsmValues, bSideLteValues, gsmValues, radioValues]);
+
+  const mapActiveAntenna = selectedLteSide === "B" ? matchedAntennaBSide : matchedAntenna;
+
+  const mapFitPts = useMemo((): [number, number][] => {
+    const pts: [number, number][] = mapActivePts.map(p => p.pos);
+    if (mapActiveAntenna) pts.push([mapActiveAntenna.lat, mapActiveAntenna.lon]);
+    return pts;
+  }, [mapActivePts, mapActiveAntenna]);
+
   return (
     <motion.div
       initial={{ opacity: 0, x: 20 }}
       animate={{ opacity: 1, x: 0 }}
       className="space-y-2"
     >
+
       {/* Top Controls (Back button, Metrics inline & Status) */}
       <div className="flex flex-wrap md:flex-nowrap items-center justify-between gap-2 bg-card border border-border rounded-lg px-2 py-1">
         <button
@@ -337,7 +470,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
 
             <div className="flex items-center gap-3 flex-wrap">
               <h2 className="text-sm font-bold font-mono text-foreground">{call.region} · {call.callId}</h2>
-              {radioValues && radioValues.length > 0 && (
+              {activeRadioValues && activeRadioValues.length > 0 && (
                 <div className="flex items-center gap-3 bg-muted/50 px-2 py-0.5 rounded border border-border/50">
                   <label className="flex items-center gap-1.5 text-xs font-medium text-foreground cursor-pointer select-none">
                     <input
@@ -366,6 +499,35 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               <span>Λήξη: {formatDateTime(call.endTime)}</span>
               <span className="font-mono text-foreground">{Math.floor(call.duration_s / 60)}m {call.duration_s % 60}s</span>
             </div>
+            {cellInfo && cellInfo.eNBId !== null && (
+              <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap mt-0.5 text-[10px] font-mono">
+                <span className="text-muted-foreground">eNB <span className="text-foreground font-bold">{cellInfo.eNBId}</span></span>
+                <span className="text-muted-foreground">EARFCN <span className="text-primary font-bold">{cellInfo.EARFCN}</span></span>
+                <span className="text-muted-foreground">PCI <span className="text-accent font-bold">{cellInfo.PCI}</span></span>
+                {mapActiveAntenna && (
+                  <>
+                    <span className="text-muted-foreground">Dist <span className="text-yellow-400 font-bold">{fmtDist(mapActiveAntenna.distanceM)}</span></span>
+                    {mapActiveAntenna.cellName && (
+                      <span className="text-muted-foreground truncate max-w-[160px]">{mapActiveAntenna.cellName}</span>
+                    )}
+                  </>
+                )}
+                {sideComparison.length > 0 && (
+                  <>
+                    <span className="text-border">│</span>
+                    {sideComparison.map((row, idx) => (
+                      <span key={idx} className="text-muted-foreground whitespace-nowrap">
+                        <span className="text-foreground font-bold">{row.Side}</span>
+                        {" "}{row.callStatus}{" "}
+                        <span className="text-foreground">{row.code}</span>
+                        {row.codeDescription ? ` ${row.codeDescription}` : ""}
+                        {idx < sideComparison.length - 1 && <span className="text-border mx-1">·</span>}
+                      </span>
+                    ))}
+                  </>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Right: Comment */}
@@ -394,6 +556,9 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                   <option value="LC LTE">LC LTE</option>
                   <option value="LQ LTE">LQ LTE</option>
                   <option value="CORE NETWORK (DEACTIVATE BEARER)">CORE NETWORK (DEACTIVATE BEARER)</option>
+                  <option value="FAKE UE STUCK">FAKE UE STUCK</option>
+                  <option value="FAKE NO SYNC">FAKE NO SYNC</option>
+                  <option value="FAKE EOF">FAKE EOF</option>
                   <option value="">— Εκκαθάριση σχολίου</option>
                 </select>
                 <Textarea
@@ -415,33 +580,6 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           </div>
         </div>
 
-        {sideComparison.length > 0 && (
-          <div className="mt-1 overflow-x-auto">
-            <table className="w-full text-[10px]">
-              <thead>
-                <tr className="text-left text-muted-foreground border-b border-border/60">
-                  <th className="py-0.5 pr-2 font-medium">Side</th>
-                  <th className="py-0.5 pr-2 font-medium">Status</th>
-                  <th className="py-0.5 pr-2 font-medium">Code</th>
-                  <th className="py-0.5 pr-2 font-medium">Description</th>
-                  <th className="py-0.5 text-right font-medium">Calls</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sideComparison.map((row, idx) => (
-                  <tr key={`${row.Side || "N"}-${row.code || "NA"}-${idx}`} className="border-b border-border/30">
-                    <td className="py-0.5 pr-2 text-foreground font-mono">{row.Side || "N/A"}</td>
-                    <td className="py-0.5 pr-2 text-muted-foreground">{row.callStatus || "N/A"}</td>
-                    <td className="py-0.5 pr-2 font-mono text-foreground">{row.code || "N/A"}</td>
-                    <td className="py-0.5 pr-2 text-muted-foreground">{row.codeDescription || "N/A"}</td>
-                    <td className="py-0.5 text-right font-mono text-foreground">{row.calls ?? 0}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        )}
-
         {/* Chart inside the top card */}
         {activeRadioValues && activeRadioValues.length > 0 && (
           <div className="mt-1 pt-1 border-t border-border">
@@ -449,7 +587,9 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               <Activity className="h-3 w-3 text-primary" />
               {isGSMMode ? "GSM (RxLev / RxQual)" : "LTE (RSRP / RSRQ)"}
             </h3>
-            <div className="h-[180px] w-full">
+            <div className="flex gap-2 items-end">
+            {/* Chart — flex 3 */}
+            <div style={{ flex: 3, height: 240 }}>
               <ResponsiveContainer width="100%" height="100%">
                 <LineChart data={chartData} margin={{ top: 5, right: 0, left: 0, bottom: 5 }}>
                   <CartesianGrid strokeDasharray="3 3" opacity={0.2} vertical={false} />
@@ -503,6 +643,76 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                 </LineChart>
               </ResponsiveContainer>
             </div>
+            {/* Map — 1/4 */}
+            {/*Εμφανίζεται μόνο αν είναι Cosmote Free και υπάρχουν GPS σημεία */}
+            {isCosmoteFree && (() => {
+              const antennaColor = selectedLteSide === "B" ? "#c48105" : "#b200f8";
+
+              if (mapFitPts.length === 0) return (
+                <div className="rounded border border-border/50 bg-muted/30 flex items-center justify-center" style={{ flex: 1, height: "250px" }}>
+                  <span className="text-[10px] text-muted-foreground">Χωρίς GPS</span>
+                </div>
+              );
+
+              const antennaIcon = mapActiveAntenna ? L.divIcon({
+                className: "",
+                html: `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="${antennaColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M4.9 16.1C1 12.2 1 5.8 4.9 1.9"/>
+                  <path d="M7.8 13.2c-2.3-2.3-2.3-6.1 0-8.5"/>
+                  <path d="M19.1 1.9c3.9 3.9 3.9 10.2 0 14.1"/>
+                  <path d="M16.2 4.8c2.3 2.3 2.3 6.1 0 8.5"/>
+                  <line x1="12" x2="12" y1="12" y2="22"/>
+                  <line x1="8" x2="16" y1="22" y2="22"/>
+                </svg>`,
+                iconSize: [22, 22],
+                iconAnchor: [11, 22],
+              }) : null;
+
+              return (
+                <div className="rounded overflow-hidden border border-border/50" style={{ flex: 1, height: "250px" }}>
+                  <MapContainer
+                    center={mapFitPts[0]}
+                    zoom={13}
+                    style={{ height: "250px", width: "100%" }}
+                    zoomControl={false}
+                    attributionControl={false}
+                  >
+                    <TileLayer url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png" />
+                    <MapAutoFit points={mapFitPts} />
+                    {mapActivePts.map((pt, i) => (
+                      <CircleMarker
+                        key={i}
+                        center={pt.pos}
+                        radius={3}
+                        fillColor={pt.color}
+                        color={pt.color}
+                        fillOpacity={0.85}
+                        weight={0}
+                      />
+                    ))}
+                    {mapActiveAntenna && antennaIcon && (
+                      <>
+                        <Polyline
+                          positions={[
+                            mapActivePts.length > 0 ? mapActivePts[mapActivePts.length - 1].pos : mapFitPts[0],
+                            [mapActiveAntenna.lat, mapActiveAntenna.lon],
+                          ]}
+                          color="#000000"
+                          weight={1.5}
+                          dashArray="6 5"
+                          opacity={0.8}
+                        />
+                        <Marker
+                          position={[mapActiveAntenna.lat, mapActiveAntenna.lon]}
+                          icon={antennaIcon}
+                        />
+                      </>
+                    )}
+                  </MapContainer>
+                </div>
+              );
+            })()}
+          </div>
           </div>
         )}
       </div>
@@ -533,13 +743,25 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                   {tracelogValues.map((val, idx) => {
                     const tStr = toChartTime(val.FullDate ?? null);
                     const isActive = tStr !== null && tStr === hoveredTimeStr;
+                    const isCritical = val.Info != null && [
+                      "No sync signal found",
+                      "Task stopped",
+                      "Close Engine",
+                      "System Release",
+                    ].some(kw => val.Info!.includes(kw));
                     return (
                       <tr
                         key={`${val.FullDate ?? idx}-${idx}`}
-                        style={isActive ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" } : undefined}
-                        className={`transition-all duration-100 cursor-pointer ${isActive
-                          ? "bg-cyan-500/10"
-                          : "hover:bg-muted/40"
+                        style={isCritical
+                          ? { boxShadow: "inset 3px 0 0 hsl(0, 72%, 51%)" }
+                          : isActive
+                            ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" }
+                            : undefined}
+                        className={`transition-all duration-100 cursor-pointer ${isCritical
+                          ? "bg-red-500/15 text-red-400"
+                          : isActive
+                            ? "bg-cyan-500/10"
+                            : "hover:bg-muted/40"
                           }`}
                         onMouseEnter={() => { setHoveredRadioIndex(null); setHoveredTimeStr(tStr); }}
                         onMouseLeave={() => setHoveredTimeStr(null)}
@@ -645,23 +867,42 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                 </div>
               )}
 
-              <div className="inline-flex rounded-md border border-border overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setSelectedLteSide("A")}
-                  className={`px-2 py-1 text-xs ${selectedLteSide === "A" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
-                >
-                  A-side
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSelectedLteSide("B")}
-                  className={`px-2 py-1 text-xs border-l border-border ${selectedLteSide === "B" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
-                >
-                  B-side
-                </button>
-              </div>
+              {/* Show A/B toggle only when B-side data exists for the current mode */}
+              {(() => {
+                const hasBSide = isGSMMode
+                  ? bSideGsmValues.length > 0
+                  : bSideLteValues.length > 0;
+                if (!hasBSide && isLoadingRadio) {
+                  // While loading, show the toggle (placeholder) so layout doesn't jump
+                  return (
+                    <div className="inline-flex rounded-md border border-border overflow-hidden opacity-40 pointer-events-none">
+                      <button type="button" className="px-2 py-1 text-xs bg-primary text-primary-foreground">A-side</button>
+                      <button type="button" className="px-2 py-1 text-xs border-l border-border bg-muted text-foreground">B-side</button>
+                    </div>
+                  );
+                }
+                if (!hasBSide) return null; // No B-side data — hide toggle entirely
+                return (
+                  <div className="inline-flex rounded-md border border-border overflow-hidden">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedLteSide("A")}
+                      className={`px-2 py-1 text-xs ${selectedLteSide === "A" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
+                    >
+                      A-side
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedLteSide("B")}
+                      className={`px-2 py-1 text-xs border-l border-border ${selectedLteSide === "B" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
+                    >
+                      B-side
+                    </button>
+                  </div>
+                );
+              })()}
             </div>
+
           </div>
 
 

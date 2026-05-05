@@ -3,6 +3,73 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from db import get_connection, get_available_databases
 import time
+import os
+import openpyxl
+
+# ---- Antennas cache ----
+_antennas_cache: list[dict] | None = None
+
+ANTENNAS_EXCEL_PATH = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+    "cosmote all antennas",
+    "geo4g.xlsx"
+)
+
+def _load_antennas() -> list[dict]:
+    global _antennas_cache
+    if _antennas_cache is not None:
+        return _antennas_cache
+
+    wb = openpyxl.load_workbook(ANTENNAS_EXCEL_PATH, read_only=True, data_only=True)
+    ws = wb.active
+    rows_iter = ws.iter_rows(min_row=1, values_only=True)
+    header = next(rows_iter)
+    # Column indices (0-based)
+    lat_idx      = header.index("Latitude_Sector")
+    lon_idx      = header.index("Longitude_Sector")
+    site_idx     = header.index("SiteID")
+    cell_idx     = header.index("Cell_ID")
+    name_idx     = header.index("CellName")
+    az_idx       = header.index("Azimuth")
+    freq_idx     = header.index("FREQUENCY")
+    vendor_idx   = header.index("VENDOR")
+    enb_idx      = header.index("ENB_NAME")
+    tech_idx     = header.index("Technology")
+    status_idx   = header.index("TECHSTATUS")
+    pci_idx      = header.index("PCI")
+    tilt_idx     = header.index("Downtilt")
+    ht_idx       = header.index("HT")
+
+    result = []
+    for row in rows_iter:
+        lat = row[lat_idx]
+        lon = row[lon_idx]
+        if lat is None or lon is None:
+            continue
+        try:
+            lat = float(lat)
+            lon = float(lon)
+        except (TypeError, ValueError):
+            continue
+        result.append({
+            "lat": lat,
+            "lon": lon,
+            "siteId":   row[site_idx],
+            "cellId":   row[cell_idx],
+            "cellName": row[name_idx],
+            "azimuth":  row[az_idx],
+            "freq":     row[freq_idx],
+            "vendor":   row[vendor_idx],
+            "enbName":  row[enb_idx],
+            "tech":     row[tech_idx],
+            "status":   row[status_idx],
+            "pci":      row[pci_idx],
+            "downtilt": row[tilt_idx],
+            "height":   row[ht_idx],
+        })
+    wb.close()
+    _antennas_cache = result
+    return result
 
 app = FastAPI()
 
@@ -55,6 +122,12 @@ def update_call_comment(req: CommentRequest):
         else:
             cursor.execute("INSERT INTO AnalysisCommentSessionsBridge (sessionID, commentId) VALUES (?, ?)", (req.session_id, comment_id))
             
+        # If comment starts with 'fake' or 'FAKE', set session as invalid (Valid = 0), otherwise Valid = 1
+        if req.comment and req.comment.lower().startswith("fake"):
+            cursor.execute("UPDATE Sessions SET Valid = 0 WHERE SessionId = ?", (req.session_id,))
+        else:
+            cursor.execute("UPDATE Sessions SET Valid = 1 WHERE SessionId = ?", (req.session_id,))
+
         conn.commit()
         conn.close()
 
@@ -66,6 +139,10 @@ def update_call_comment(req: CommentRequest):
             conn = get_connection(req.database)
             cursor = conn.cursor()
             cursor.execute("UPDATE Sessions SET InvalidReason = ? WHERE SessionId = ?", (req.comment, req.session_id))
+            if req.comment and req.comment.lower().startswith("fake"):
+                cursor.execute("UPDATE Sessions SET Valid = 0 WHERE SessionId = ?", (req.session_id,))
+            else:
+                cursor.execute("UPDATE Sessions SET Valid = 1 WHERE SessionId = ?", (req.session_id,))
             conn.commit()
             conn.close()
             return {"message": "Comment updated successfully in Sessions"}
@@ -261,21 +338,24 @@ def get_lte_values(
         cursor = conn.cursor()
 
         query = """
-            SELECT [MsgId]
-                  ,[SessionId]
-                  ,[MsgTime]
-                  ,[PosId]
-                  ,[NetworkId]
-                  ,[EARFCN]
-                  ,[PhyCellId]
-                  ,round([RSRP], 2) AS [RSRP]
-                  ,round([RSRQ], 2) AS [RSRQ]
-                  ,round([SINR0], 2) AS [SINR0]
-                  ,round([SINR1], 2) AS [SINR1]
-                  ,[LTEServingCellInfoId]
-              FROM [LTEMeasurementReport]
-              WHERE [SessionId] = ?
-              ORDER BY MsgTime
+            SELECT lmr.[MsgId]
+                  ,lmr.[SessionId]
+                  ,lmr.[MsgTime]
+                  ,lmr.[PosId]
+                  ,lmr.[NetworkId]
+                  ,lmr.[EARFCN]
+                  ,lmr.[PhyCellId]
+                  ,round(lmr.[RSRP], 2) AS [RSRP]
+                  ,round(lmr.[RSRQ], 2) AS [RSRQ]
+                  ,round(lmr.[SINR0], 2) AS [SINR0]
+                  ,round(lmr.[SINR1], 2) AS [SINR1]
+                  ,lmr.[LTEServingCellInfoId]
+                  ,p.Latitude
+                  ,p.Longitude
+              FROM [LTEMeasurementReport] lmr
+              LEFT JOIN Position p ON p.PosId = lmr.PosId
+              WHERE lmr.[SessionId] = ?
+              ORDER BY lmr.MsgTime
         """
 
         cursor.execute(query, (session_id,))
@@ -292,6 +372,80 @@ def get_lte_values(
         return {"lteValues": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/cell_info")
+def get_cell_info(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT TOP 1
+                dci.eNBId,
+                fl.EARFCN,
+                fl.PhyCellId
+            FROM FactLTERadio fl
+            LEFT JOIN DmnCellInformation dci ON fl.DmnIdCellInformation = dci.DmnId
+            WHERE fl.SessionId = ?
+              AND dci.eNBId IS NOT NULL
+            ORDER BY fl.FullDate
+        """, (session_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {"eNBId": row[0], "EARFCN": row[1], "PCI": row[2]}
+        return {"eNBId": None, "EARFCN": None, "PCI": None}
+    except Exception as e:
+        return {"eNBId": None, "EARFCN": None, "PCI": None}
+
+
+@app.get("/api/cell_info_b_side")
+def get_cell_info_b_side(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE
+                        WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                        ELSE CA.SessionId
+                    END AS ASessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+            ),
+            b_side AS (
+                SELECT TOP (1)
+                    CA.SessionId AS BSessionId
+                FROM CallAnalysis CA
+                INNER JOIN pair_root PR
+                    ON CA.SessionIdA = PR.ASessionId
+                WHERE CA.Side = 'B'
+            )
+            SELECT TOP 1
+                dci.eNBId,
+                fl.EARFCN,
+                fl.PhyCellId
+            FROM FactLTERadio fl
+            INNER JOIN b_side B ON fl.SessionId = B.BSessionId
+            LEFT JOIN DmnCellInformation dci ON fl.DmnIdCellInformation = dci.DmnId
+            WHERE dci.eNBId IS NOT NULL
+            ORDER BY fl.FullDate
+        """, (session_id, session_id))
+        row = cursor.fetchone()
+        conn.close()
+        if row:
+            return {"eNBId": row[0], "EARFCN": row[1], "PCI": row[2]}
+        return {"eNBId": None, "EARFCN": None, "PCI": None}
+    except Exception as e:
+        return {"eNBId": None, "EARFCN": None, "PCI": None}
 
 
 @app.get("/api/lte_values_b_side")
@@ -402,16 +556,19 @@ def get_gsm_values(
         cursor = conn.cursor()
 
         query = """
-            SELECT [MsgId]
-                  ,[SessionId]
-                  ,[MsgTime]
-                  ,[PosId]
-                  ,[NetworkId]
-                  ,[RxLevSub]
-                  ,[RxQualSub]
-              FROM [GSMMeasReport]
-              WHERE [SessionId] = ?
-              ORDER BY MsgTime
+            SELECT g.[MsgId]
+                  ,g.[SessionId]
+                  ,g.[MsgTime]
+                  ,g.[PosId]
+                  ,g.[NetworkId]
+                  ,g.[RxLevSub]
+                  ,g.[RxQualSub]
+                  ,p.Latitude
+                  ,p.Longitude
+              FROM [GSMMeasReport] g
+              LEFT JOIN Position p ON p.PosId = g.PosId
+              WHERE g.[SessionId] = ?
+              ORDER BY g.MsgTime
         """
 
         cursor.execute(query, (session_id,))
@@ -685,5 +842,37 @@ def get_call_side_comparison(
         conn.close()
 
         return {"comparison": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/antennas")
+def get_antennas(
+    freq: list[int] | None = Query(default=None),
+    vendor: list[str] | None = Query(default=None),
+    status: str | None = Query(default=None),
+):
+    """Return all 4G antenna sectors from geo4g.xlsx.
+    Optional filters: freq (e.g. 1800, 2100), vendor, status (ACTIVATED/DEACTIVATED).
+    First call loads & caches the file (~3-5s); subsequent calls are instant.
+    """
+    try:
+        antennas = _load_antennas()
+        result = antennas
+
+        if freq:
+            freq_set = set(freq)
+            result = [a for a in result if a["freq"] in freq_set]
+
+        if vendor:
+            vendor_set = {v.lower() for v in vendor}
+            result = [a for a in result if (a["vendor"] or "").lower() in vendor_set]
+
+        if status:
+            result = [a for a in result if (a["status"] or "").upper() == status.upper()]
+
+        return {"antennas": result, "total": len(result)}
+    except FileNotFoundError:
+        raise HTTPException(status_code=404, detail="geo4g.xlsx not found")
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
