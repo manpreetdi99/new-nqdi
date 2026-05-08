@@ -11,8 +11,8 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, type CallSideComparisonRow, type TraceLogRow, type AntennaRow } from "@/lib/api";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine } from "recharts";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, type CallSideComparisonRow, type TraceLogRow, type AntennaRow } from "@/lib/api";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 //ReferenceLine για γραμμες στο διαγραμμα, πχ για thresholds. 
 /**
@@ -123,6 +123,9 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
   const [matchedAntenna, setMatchedAntenna] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number; azimuth: number | null; freq: number | null; vendor: string | null; enbName: string | null; tech: string | null; height: number | null; downtilt: number | null; siteId: number | null; cellId: number | null } | null>(null);
   const [matchedAntennaBSide, setMatchedAntennaBSide] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number; azimuth: number | null; freq: number | null; vendor: string | null; enbName: string | null; tech: string | null; height: number | null; downtilt: number | null; siteId: number | null; cellId: number | null } | null>(null);
 
+  const [contextSignal, setContextSignal] = useState<any[]>([]);
+  const [contextTechnology, setContextTechnology] = useState<any[]>([]);
+
   const isGSMMode = call.callMode === "CS" || (call.callMode === "SRVCC" && srvccNetwork === "GSM");
   const [isLoadingRadio, setIsLoadingRadio] = useState(false);
   const [showStrength, setShowStrength] = useState(true);
@@ -169,7 +172,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
-        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes] = await Promise.allSettled([
+        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes] = await Promise.allSettled([
           call.callMode !== "CS" ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
           fetchMosValues(database, call.callId),
@@ -179,7 +182,9 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           fetchTracelogValues(database, call.callId),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValuesBSide(database, call.callId) : Promise.resolve({ gsmValuesBSide: [] }),
           call.callMode !== "CS" ? fetchCellInfo(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
-          call.callMode !== "CS" ? fetchCellInfoBSide(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null })
+          call.callMode !== "CS" ? fetchCellInfoBSide(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
+          fetchCallContextSignal(database, call.callId),
+          fetchCallContextTechnology(database, call.callId),
         ]);
 
         if (lteRes.status === "fulfilled") {
@@ -228,6 +233,18 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
 
         if (bSideCellInfoRes.status === "fulfilled") {
           setBSideCellInfo(bSideCellInfoRes.value as any);
+        }
+
+        if (ctxSignalRes.status === "fulfilled") {
+          setContextSignal((ctxSignalRes.value as any).signal || []);
+        } else {
+          setContextSignal([]);
+        }
+
+        if (ctxTechRes.status === "fulfilled") {
+          setContextTechnology((ctxTechRes.value as any).technology || []);
+        } else {
+          setContextTechnology([]);
         }
       } catch (err) {
         console.error("Failed to load metrics", err);
@@ -385,6 +402,26 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     if (mapActiveAntenna) pts.push([mapActiveAntenna.lat, mapActiveAntenna.lon]);
     return pts;
   }, [mapActivePts, mapActiveAntenna]);
+
+  const contextChartData = useMemo(() =>
+    contextSignal.map((v, idx) => ({
+      idx,
+      time: new Date(v.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      RSRP: v.RSRP != null ? Number(v.RSRP) : undefined,
+      RSRQ: v.RSRQ != null ? Number(v.RSRQ) : undefined,
+      phase: v.phase as "before" | "during" | "after",
+    }))
+  , [contextSignal]);
+
+  const duringZone = useMemo(() => {
+    const firstIdx = contextChartData.findIndex(d => d.phase === "during");
+    const lastIdx  = [...contextChartData].reverse().findIndex(d => d.phase === "during");
+    const last = lastIdx === -1 ? -1 : contextChartData.length - 1 - lastIdx;
+    return {
+      first: firstIdx >= 0 ? firstIdx : null,
+      last:  last     >= 0 ? last     : null,
+    };
+  }, [contextChartData]);
 
   return (
     <motion.div
@@ -1030,6 +1067,106 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           )}
         </div>
       </div>
+
+      {/* ── Συμπεριφορά δικτύου πριν / κατά / μετά κλήση ── */}
+      {(contextChartData.length > 0 || contextTechnology.length > 0) && (
+        <div className="bg-card border border-border rounded-lg p-3 space-y-3">
+          <h3 className="text-sm font-semibold text-foreground">
+            Συμπεριφορά δικτύου ±10 δευτ. πριν / μετά κλήση
+          </h3>
+
+          {/* Signal chart */}
+          {contextChartData.length > 0 && (
+            <div>
+              <div className="flex items-center gap-3 mb-1">
+                <span className="text-xs text-muted-foreground">RSRP / RSRQ</span>
+                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-amber-400/30 border border-amber-400/50" />Πριν</span>
+                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-primary/20 border border-primary/40" />Κατά</span>
+                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-orange-400/30 border border-orange-400/50" />Μετά</span>
+              </div>
+              <ResponsiveContainer width="100%" height={160}>
+                <LineChart data={contextChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
+                  <XAxis
+                    dataKey="idx"
+                    type="number"
+                    domain={[0, contextChartData.length - 1]}
+                    tickFormatter={(v: number) => contextChartData[v]?.time ?? ""}
+                    tick={{ fontSize: 9, fill: "#94a3b8" }}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis yAxisId="rsrp" domain={[-140, -60]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={32} />
+                  <YAxis yAxisId="rsrq" orientation="right" domain={[-25, 0]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={28} />
+                  <RechartsTooltip
+                    contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155", fontSize: 11 }}
+                    labelFormatter={(v: number) => contextChartData[v]?.time ?? ""}
+                    formatter={(val: any, name: string) => [val != null ? Number(val).toFixed(1) : "—", name]}
+                  />
+                  {/* before — κίτρινο */}
+                  {duringZone.first != null && (
+                    <ReferenceArea yAxisId="rsrp" x1={0} x2={duringZone.first} fill="#f59e0b" fillOpacity={0.25} stroke="#f59e0b" strokeOpacity={0.4} strokeWidth={1} />
+                  )}
+                  {/* during — μπλε */}
+                  {duringZone.first != null && duringZone.last != null && (
+                    <ReferenceArea yAxisId="rsrp" x1={duringZone.first} x2={duringZone.last} fill="#3b82f6" fillOpacity={0.22} stroke="#3b82f6" strokeOpacity={0.5} strokeWidth={1} />
+                  )}
+                  {/* after — πορτοκαλί */}
+                  {duringZone.last != null && (
+                    <ReferenceArea yAxisId="rsrp" x1={duringZone.last} x2={contextChartData.length - 1} fill="#f97316" fillOpacity={0.25} stroke="#f97316" strokeOpacity={0.4} strokeWidth={1} />
+                  )}
+                  <Line yAxisId="rsrp" dataKey="RSRP" stroke="#22c55e" dot={false} strokeWidth={2} connectNulls name="RSRP" />
+                  <Line yAxisId="rsrq" dataKey="RSRQ" stroke="#e2e8f0" dot={false} strokeWidth={1} connectNulls name="RSRQ" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Technology changes table */}
+          {contextTechnology.length > 0 && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Αλλαγές τεχνολογίας</p>
+              <div className="overflow-x-auto max-h-[140px] overflow-y-auto rounded border border-border/50">
+                <table className="w-full text-xs text-center">
+                  <thead className="sticky top-0 bg-muted border-b border-border z-10">
+                    <tr>
+                      <th className="px-2 py-1 font-semibold">Ώρα</th>
+                      <th className="px-2 py-1 font-semibold">Από</th>
+                      <th className="px-2 py-1 font-semibold">→ Σε</th>
+                      <th className="px-2 py-1 font-semibold">Band</th>
+                      <th className="px-2 py-1 font-semibold">LTE CA</th>
+                      <th className="px-2 py-1 font-semibold">5G CA</th>
+                      <th className="px-2 py-1 font-semibold">Φάση</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/50">
+                    {contextTechnology.map((row, i) => {
+                      const phaseColor =
+                        row.phase === "before" ? "bg-amber-500/10 text-amber-400" :
+                        row.phase === "after"  ? "bg-orange-500/10 text-orange-400" :
+                        "bg-primary/10 text-primary";
+                      return (
+                        <tr key={i} className="hover:bg-muted/40 transition-colors">
+                          <td className="px-2 py-0.5 font-mono">{new Date(row.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</td>
+                          <td className="px-2 py-0.5 text-muted-foreground">{row.PrevTechnology ?? "—"}</td>
+                          <td className="px-2 py-0.5 font-semibold">{row.CurrTechnology ?? "—"}</td>
+                          <td className="px-2 py-0.5">{row.Band ?? "—"}</td>
+                          <td className="px-2 py-0.5">{row.LTEDLCarriers != null ? `${row.LTEDLCarriers}DL/${row.LTEULCarriers}UL` : "—"}</td>
+                          <td className="px-2 py-0.5">{row.NR5GDLCarriers != null ? `${row.NR5GDLCarriers}DL/${row.NR5GULCarriers}UL` : "—"}</td>
+                          <td className={`px-2 py-0.5 font-semibold rounded ${phaseColor}`}>{row.phase}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {contextChartData.length === 0 && contextTechnology.length === 0 && (
+            <p className="text-xs text-muted-foreground">Δεν βρέθηκαν δεδομένα στο παράθυρο ±10 δευτ.</p>
+          )}
+        </div>
+      )}
     </motion.div>
   );
 };

@@ -276,3 +276,21 @@ export async function fetchTracelogValues(
   if (session_id) params.append("session_id", session_id);
   return requestJson(`/api/tracelog_values?${params.toString()}`);
 }
+
+export async function fetchCallContextSignal(
+  database: string,
+  session_id: string,
+  window_sec = 10
+): Promise<{ signal: any[] }> {
+  const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
+  return requestJson(`/api/call_context_signal?${params.toString()}`);
+}
+
+export async function fetchCallContextTechnology(
+  database: string,
+  session_id: string,
+  window_sec = 10
+): Promise<{ technology: any[] }> {
+  const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
+  return requestJson(`/api/call_context_technology?${params.toString()}`);
+}
