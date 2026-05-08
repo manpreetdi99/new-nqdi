@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, type CallSideComparisonRow, type TraceLogRow, type AntennaRow } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchCallPagingInfo, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallPagingInfoResponse, type PagingTimelineEvent } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 //ReferenceLine για γραμμες στο διαγραμμα, πχ για thresholds. 
@@ -125,6 +125,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
 
   const [contextSignal, setContextSignal] = useState<any[]>([]);
   const [contextTechnology, setContextTechnology] = useState<any[]>([]);
+  const [pagingData, setPagingData] = useState<CallPagingInfoResponse | null>(null);
 
   const isGSMMode = call.callMode === "CS" || (call.callMode === "SRVCC" && srvccNetwork === "GSM");
   const [isLoadingRadio, setIsLoadingRadio] = useState(false);
@@ -172,7 +173,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
-        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes] = await Promise.allSettled([
+        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes] = await Promise.allSettled([
           call.callMode !== "CS" ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
           fetchMosValues(database, call.callId),
@@ -185,6 +186,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           call.callMode !== "CS" ? fetchCellInfoBSide(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
           fetchCallContextSignal(database, call.callId),
           fetchCallContextTechnology(database, call.callId),
+          fetchCallPagingInfo(database, call.callId),
         ]);
 
         if (lteRes.status === "fulfilled") {
@@ -245,6 +247,12 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           setContextTechnology((ctxTechRes.value as any).technology || []);
         } else {
           setContextTechnology([]);
+        }
+
+        if (pagingRes.status === "fulfilled") {
+          setPagingData(pagingRes.value as CallPagingInfoResponse);
+        } else {
+          setPagingData(null);
         }
       } catch (err) {
         console.error("Failed to load metrics", err);
@@ -1164,6 +1172,164 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
 
           {contextChartData.length === 0 && contextTechnology.length === 0 && (
             <p className="text-xs text-muted-foreground">Δεν βρέθηκαν δεδομένα στο παράθυρο ±10 δευτ.</p>
+          )}
+        </div>
+      )}
+
+      {/* ── Paging & Call Setup Signaling ── */}
+      {pagingData && pagingData.callWindow && (
+        <div className="bg-card border border-border rounded-lg p-3 space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+              <Signal className="h-4 w-4 text-primary" />
+              Paging &amp; Call Setup Signaling
+              <span className={`text-xs px-2 py-0.5 rounded font-medium ${pagingData.callWindow.callDir === "MO" ? "bg-primary/10 text-primary" : "bg-accent/10 text-accent"}`}>
+                {pagingData.callWindow.callDir ?? "—"}
+              </span>
+            </h3>
+            {/* Summary badges */}
+            <div className="flex items-center gap-2 text-xs">
+              {(["ltePagingEDRX", "lteRrcPaging", "nrRrcPaging"] as const).map(key => {
+                const count = pagingData.summary[key];
+                const labels: Record<string, string> = { ltePagingEDRX: "LTE eDRX", lteRrcPaging: "LTE RRC", nrRrcPaging: "NR RRC" };
+                return count > 0 ? (
+                  <span key={key} className="px-2 py-0.5 rounded border border-primary/30 bg-primary/5 font-mono">
+                    {labels[key]} <b>{count}</b>
+                  </span>
+                ) : null;
+              })}
+              {pagingData.summary.totalPagingEvents === 0 && (
+                <span className="text-muted-foreground">Δεν βρέθηκαν paging events</span>
+              )}
+            </div>
+          </div>
+
+          {/* Unified Timeline Table */}
+          {pagingData.timeline.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase text-muted-foreground mb-1 tracking-wider">Timeline</p>
+              <div className="overflow-x-auto max-h-[280px] overflow-y-auto rounded border border-border/50">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-muted border-b border-border z-10">
+                    <tr>
+                      <th className="px-2 py-1 font-semibold text-left">Φάση</th>
+                      <th className="px-2 py-1 font-semibold text-left">Ώρα</th>
+                      <th className="px-2 py-1 font-semibold text-left">Δευτ.</th>
+                      <th className="px-2 py-1 font-semibold text-left">Τύπος</th>
+                      <th className="px-2 py-1 font-semibold text-left">Τίτλος</th>
+                      <th className="px-2 py-1 font-semibold text-left">EARFCN / Freq</th>
+                      <th className="px-2 py-1 font-semibold text-left">PCI</th>
+                      <th className="px-2 py-1 font-semibold text-left">Cycle</th>
+                      <th className="px-2 py-1 font-semibold text-left">Nb</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/50">
+                    {pagingData.timeline.map((ev, i) => {
+                      const phaseColor =
+                        ev.phase === "before" ? "text-amber-400" :
+                        ev.phase === "after"  ? "text-orange-400" :
+                        "text-primary";
+                      const typeColor =
+                        ev.type === "lte_paging_edrx" ? "text-cyan-400" :
+                        ev.type === "nr_rrc_paging"   ? "text-purple-400" :
+                        "text-emerald-400";
+                      const d = ev.details;
+                      return (
+                        <tr key={i} className="hover:bg-muted/40 transition-colors">
+                          <td className={`px-2 py-0.5 font-semibold ${phaseColor}`}>{ev.phase}</td>
+                          <td className="px-2 py-0.5 font-mono whitespace-nowrap">
+                            {ev.time ? new Date(ev.time).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}
+                          </td>
+                          <td className="px-2 py-0.5 font-mono text-right">
+                            {ev.secondsFromCallStart != null ? `${ev.secondsFromCallStart > 0 ? "+" : ""}${ev.secondsFromCallStart.toFixed(1)}s` : "—"}
+                          </td>
+                          <td className={`px-2 py-0.5 font-mono text-[10px] ${typeColor}`}>
+                            {ev.type === "lte_paging_edrx" ? "LTE eDRX" : ev.type === "lte_rrc_paging" ? "LTE RRC" : "NR RRC"}
+                          </td>
+                          <td className="px-2 py-0.5 max-w-[180px] truncate" title={ev.title}>{ev.title}</td>
+                          <td className="px-2 py-0.5 font-mono">{d.EARFCN ?? d.Freq ?? "—"}</td>
+                          <td className="px-2 py-0.5 font-mono">{d.PCI ?? d.PhyCellId ?? "—"}</td>
+                          <td className="px-2 py-0.5 font-mono text-[10px]">{d.PagingCycleDecoded != null ? `${d.PagingCycleDecoded} ms` : "—"}</td>
+                          <td className="px-2 py-0.5 font-mono text-[10px]">{d.NbDecoded ?? "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* LTE eDRX detail: eDRX fields when present */}
+          {pagingData.ltePagingEDRX.some(r => r.EDRXCycleLength != null) && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase text-muted-foreground mb-1 tracking-wider">eDRX Parameters</p>
+              <div className="overflow-x-auto rounded border border-border/50">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted border-b border-border">
+                    <tr>
+                      <th className="px-2 py-1 font-semibold">MsgTime</th>
+                      <th className="px-2 py-1 font-semibold">eDRX Cycle (ms)</th>
+                      <th className="px-2 py-1 font-semibold">PTW (ms)</th>
+                      <th className="px-2 py-1 font-semibold">PageStart</th>
+                      <th className="px-2 py-1 font-semibold">PageEnd</th>
+                      <th className="px-2 py-1 font-semibold">HF Offset</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/50">
+                    {pagingData.ltePagingEDRX.filter(r => r.EDRXCycleLength != null).map((r, i) => (
+                      <tr key={i} className="hover:bg-muted/40">
+                        <td className="px-2 py-0.5 font-mono">{r.MsgTime ? new Date(r.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}</td>
+                        <td className="px-2 py-0.5 font-mono text-center">{r.EDRXCycleLength ?? "—"}</td>
+                        <td className="px-2 py-0.5 font-mono text-center">{r.EDRXPTWLength ?? "—"}</td>
+                        <td className="px-2 py-0.5 font-mono text-center">{r.EDRXPageStartOffset ?? "—"}</td>
+                        <td className="px-2 py-0.5 font-mono text-center">{r.EDRXPageEndOffset ?? "—"}</td>
+                        <td className="px-2 py-0.5 font-mono text-center">{r.EDRXHyperFrameOffset ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {/* RRC Paging message content */}
+          {pagingData.lteRrcPaging.length > 0 && (
+            <div>
+              <p className="text-[10px] font-semibold uppercase text-muted-foreground mb-1 tracking-wider">LTE RRC Paging Messages</p>
+              <div className="overflow-x-auto max-h-[200px] overflow-y-auto rounded border border-border/50">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-muted border-b border-border z-10">
+                    <tr>
+                      <th className="px-2 py-1 font-semibold text-left">Ώρα</th>
+                      <th className="px-2 py-1 font-semibold text-left">Φάση</th>
+                      <th className="px-2 py-1 font-semibold text-left">MsgTypeName</th>
+                      <th className="px-2 py-1 font-semibold text-left">Direction</th>
+                      <th className="px-2 py-1 font-semibold text-left">ChnType</th>
+                      <th className="px-2 py-1 font-semibold text-left">PCI</th>
+                      <th className="px-2 py-1 font-semibold text-left">Msg</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/50">
+                    {pagingData.lteRrcPaging.map((r, i) => (
+                      <tr key={i} className="hover:bg-muted/40">
+                        <td className="px-2 py-0.5 font-mono whitespace-nowrap">{r.MsgTime ? new Date(r.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}</td>
+                        <td className={`px-2 py-0.5 font-semibold ${r.Phase === "before" ? "text-amber-400" : r.Phase === "after" ? "text-orange-400" : "text-primary"}`}>{r.Phase}</td>
+                        <td className="px-2 py-0.5">{r.MsgTypeName ?? "—"}</td>
+                        <td className="px-2 py-0.5">{r.Direction ?? "—"}</td>
+                        <td className="px-2 py-0.5">{r.ChnType ?? "—"}</td>
+                        <td className="px-2 py-0.5 font-mono">{r.PhyCellId ?? "—"}</td>
+                        <td className="px-2 py-0.5 font-mono text-[10px] max-w-[320px] truncate" title={r.Msg ?? ""}>{r.Msg ?? "—"}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {pagingData.summary.totalPagingEvents === 0 && (
+            <p className="text-xs text-muted-foreground">Δεν βρέθηκαν paging events στο παράθυρο ±{60}s.</p>
           )}
         </div>
       )}

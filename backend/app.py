@@ -1151,6 +1151,381 @@ def get_lte_neighbors(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/call_paging_info")
+def get_call_paging_info(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1),
+    before_seconds: int = Query(default=60, ge=0, le=600),
+    after_seconds: int = Query(default=60, ge=0, le=600),
+):
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        def fetch_dicts():
+            columns = [col[0] for col in cursor.description] if cursor.description else []
+            return [
+                {columns[i]: row[i] for i in range(len(columns))}
+                for row in cursor.fetchall()
+            ]
+
+        # 1. Call window
+        cursor.execute("""
+            ;WITH target_call AS (
+                SELECT TOP (1)
+                    CA.SessionId AS SelectedSessionId,
+                    CA.SessionIdA,
+                    CA.Side,
+                    COALESCE(S.FileId, SB.FileId) AS FileId,
+                    COALESCE(S.startTime, SB.startTime) AS CallStart,
+                    COALESCE(
+                        DATEADD(ms, S.duration, S.startTime),
+                        DATEADD(ms, SB.duration, SB.startTime),
+                        DATEADD(ms, CA.callDuration, COALESCE(S.startTime, SB.startTime))
+                    ) AS CallEnd,
+                    CA.callStatus,
+                    CA.code,
+                    CA.codeDescription,
+                    CA.technology,
+                    CA.callmode,
+                    CA.callType,
+                    CA.callDir
+                FROM CallAnalysis CA
+                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+                ORDER BY COALESCE(S.startTime, SB.startTime)
+            )
+            SELECT
+                *,
+                DATEADD(second, -?, CallStart) AS PreStart,
+                DATEADD(second,  ?, CallEnd) AS PostEnd
+            FROM target_call
+        """, (session_id, session_id, before_seconds, after_seconds))
+
+        call_rows = fetch_dicts()
+        if not call_rows:
+            conn.close()
+            return {
+                "callWindow": None,
+                "message": "No call found for this session_id"
+            }
+
+        call_window = call_rows[0]
+
+        # 2. LTE Paging / eDRX request table
+        cursor.execute("""
+            ;WITH target_call AS (
+                SELECT TOP (1)
+                    COALESCE(S.FileId, SB.FileId) AS FileId,
+                    COALESCE(S.startTime, SB.startTime) AS CallStart,
+                    COALESCE(
+                        DATEADD(ms, S.duration, S.startTime),
+                        DATEADD(ms, SB.duration, SB.startTime),
+                        DATEADD(ms, CA.callDuration, COALESCE(S.startTime, SB.startTime))
+                    ) AS CallEnd
+                FROM CallAnalysis CA
+                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+            ),
+            bounds AS (
+                SELECT
+                    FileId,
+                    CallStart,
+                    CallEnd,
+                    DATEADD(second, -?, CallStart) AS PreStart,
+                    DATEADD(second,  ?, CallEnd) AS PostEnd
+                FROM target_call
+            ),
+            sessions_in_window AS (
+                SELECT S.SessionId
+                FROM Sessions S
+                CROSS JOIN bounds B
+                WHERE S.FileId = B.FileId
+                  AND S.startTime <= B.PostEnd
+                  AND DATEADD(ms, S.duration, S.startTime) >= B.PreStart
+
+                UNION
+
+                SELECT SB.SessionId
+                FROM SessionsB SB
+                CROSS JOIN bounds B
+                WHERE SB.FileId = B.FileId
+                  AND SB.startTime <= B.PostEnd
+                  AND DATEADD(ms, SB.duration, SB.startTime) >= B.PreStart
+            )
+            SELECT
+                CASE
+                    WHEN P.MsgTime < B.CallStart THEN 'before'
+                    WHEN P.MsgTime <= B.CallEnd THEN 'during'
+                    ELSE 'after'
+                END AS Phase,
+                DATEDIFF(ms, B.CallStart, P.MsgTime) / 1000.0 AS SecondsFromCallStart,
+                P.MsgId,
+                P.SessionId,
+                P.TestId,
+                P.MsgTime,
+                P.PosId,
+                P.NetworkId,
+                P.EARFCN,
+                P.PCI,
+                P.UEId,
+                P.PagingCycle,
+                CASE P.PagingCycle
+                    WHEN 0 THEN 320
+                    WHEN 1 THEN 640
+                    WHEN 2 THEN 1280
+                    WHEN 3 THEN 2560
+                    WHEN 4 THEN 5120
+                END AS PagingCycleDecoded,
+                P.Nb,
+                CASE P.Nb
+                    WHEN 0 THEN 'fourT'
+                    WHEN 1 THEN 'twoT'
+                    WHEN 2 THEN 'oneT'
+                    WHEN 3 THEN 'halfT'
+                    WHEN 4 THEN 'quarterT'
+                    WHEN 5 THEN 'oneEighthT'
+                    WHEN 6 THEN 'oneSixteenthT'
+                    WHEN 7 THEN 'oneThirtySecondT'
+                    WHEN 8 THEN 'oneSixtyFourthT'
+                    WHEN 9 THEN 'oneOneHundredTwentyEighthT'
+                    WHEN 10 THEN 'oneTwoHundredFiftySixthT'
+                    WHEN 11 THEN 'oneFiveHundredTwelfthT'
+                    WHEN 12 THEN 'oneTenTwentyFourthT'
+                END AS NbDecoded,
+                P.PagingSFNOffset,
+                P.PagingSubFNOffset,
+                P.CatM1PagingStartNB,
+                P.EDRXHyperFrameOffset,
+                P.EDRXPageStartOffset,
+                P.EDRXPageEndOffset,
+                P.EDRXCycleLength,
+                P.EDRXPTWLength
+            FROM LTEPagingEDRXRequest P
+            INNER JOIN sessions_in_window SI ON SI.SessionId = P.SessionId
+            CROSS JOIN bounds B
+            WHERE P.MsgTime BETWEEN B.PreStart AND B.PostEnd
+            ORDER BY P.MsgTime
+        """, (session_id, session_id, before_seconds, after_seconds))
+
+        lte_paging_edrx = fetch_dicts()
+
+        # 3. LTE RRC messages that look like Paging
+        cursor.execute("""
+            ;WITH target_call AS (
+                SELECT TOP (1)
+                    COALESCE(S.FileId, SB.FileId) AS FileId,
+                    COALESCE(S.startTime, SB.startTime) AS CallStart,
+                    COALESCE(
+                        DATEADD(ms, S.duration, S.startTime),
+                        DATEADD(ms, SB.duration, SB.startTime),
+                        DATEADD(ms, CA.callDuration, COALESCE(S.startTime, SB.startTime))
+                    ) AS CallEnd
+                FROM CallAnalysis CA
+                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+            ),
+            bounds AS (
+                SELECT
+                    FileId,
+                    CallStart,
+                    CallEnd,
+                    DATEADD(second, -?, CallStart) AS PreStart,
+                    DATEADD(second,  ?, CallEnd) AS PostEnd
+                FROM target_call
+            ),
+            sessions_in_window AS (
+                SELECT S.SessionId
+                FROM Sessions S
+                CROSS JOIN bounds B
+                WHERE S.FileId = B.FileId
+                  AND S.startTime <= B.PostEnd
+                  AND DATEADD(ms, S.duration, S.startTime) >= B.PreStart
+
+                UNION
+
+                SELECT SB.SessionId
+                FROM SessionsB SB
+                CROSS JOIN bounds B
+                WHERE SB.FileId = B.FileId
+                  AND SB.startTime <= B.PostEnd
+                  AND DATEADD(ms, SB.duration, SB.startTime) >= B.PreStart
+            )
+            SELECT
+                CASE
+                    WHEN R.MsgTime < B.CallStart THEN 'before'
+                    WHEN R.MsgTime <= B.CallEnd THEN 'during'
+                    ELSE 'after'
+                END AS Phase,
+                DATEDIFF(ms, B.CallStart, R.MsgTime) / 1000.0 AS SecondsFromCallStart,
+                R.MsgId,
+                R.SessionId,
+                R.TestId,
+                R.MsgTime,
+                R.PosId,
+                R.NetworkId,
+                R.RRCRelease,
+                R.RRCVersion,
+                R.PhyCellId,
+                R.Freq,
+                R.ChnType,
+                R.MsgType,
+                R.MsgTypeName,
+                R.Direction,
+                R.MsgName,
+                R.Msg
+            FROM vLTERRCMessages R
+            INNER JOIN sessions_in_window SI ON SI.SessionId = R.SessionId
+            CROSS JOIN bounds B
+            WHERE R.MsgTime BETWEEN B.PreStart AND B.PostEnd
+              AND (
+                    R.MsgTypeName LIKE '%Paging%'
+                 OR R.MsgName LIKE '%Paging%'
+                 OR R.Msg LIKE '%Paging%'
+              )
+            ORDER BY R.MsgTime
+        """, (session_id, session_id, before_seconds, after_seconds))
+
+        lte_rrc_paging = fetch_dicts()
+
+        # 4. NR RRC paging messages, if available in DB
+        try:
+            cursor.execute("""
+                ;WITH target_call AS (
+                    SELECT TOP (1)
+                        COALESCE(S.FileId, SB.FileId) AS FileId,
+                        COALESCE(S.startTime, SB.startTime) AS CallStart,
+                        COALESCE(
+                            DATEADD(ms, S.duration, S.startTime),
+                            DATEADD(ms, SB.duration, SB.startTime),
+                            DATEADD(ms, CA.callDuration, COALESCE(S.startTime, SB.startTime))
+                        ) AS CallEnd
+                    FROM CallAnalysis CA
+                    LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                    LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+                    WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                       OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+                ),
+                bounds AS (
+                    SELECT
+                        FileId,
+                        CallStart,
+                        CallEnd,
+                        DATEADD(second, -?, CallStart) AS PreStart,
+                        DATEADD(second,  ?, CallEnd) AS PostEnd
+                    FROM target_call
+                ),
+                sessions_in_window AS (
+                    SELECT S.SessionId
+                    FROM Sessions S
+                    CROSS JOIN bounds B
+                    WHERE S.FileId = B.FileId
+                      AND S.startTime <= B.PostEnd
+                      AND DATEADD(ms, S.duration, S.startTime) >= B.PreStart
+
+                    UNION
+
+                    SELECT SB.SessionId
+                    FROM SessionsB SB
+                    CROSS JOIN bounds B
+                    WHERE SB.FileId = B.FileId
+                      AND SB.startTime <= B.PostEnd
+                      AND DATEADD(ms, SB.duration, SB.startTime) >= B.PreStart
+                )
+                SELECT
+                    CASE
+                        WHEN R.MsgTime < B.CallStart THEN 'before'
+                        WHEN R.MsgTime <= B.CallEnd THEN 'during'
+                        ELSE 'after'
+                    END AS Phase,
+                    DATEDIFF(ms, B.CallStart, R.MsgTime) / 1000.0 AS SecondsFromCallStart,
+                    R.MsgId,
+                    R.SessionId,
+                    R.TestId,
+                    R.MsgTime,
+                    R.PosId,
+                    R.NetworkId,
+                    R.RRCRelease,
+                    R.RRCVersion,
+                    R.ChnType,
+                    R.MsgType,
+                    R.MsgTypeName,
+                    R.Msg
+                FROM vNR5GRRCMessages R
+                INNER JOIN sessions_in_window SI ON SI.SessionId = R.SessionId
+                CROSS JOIN bounds B
+                WHERE R.MsgTime BETWEEN B.PreStart AND B.PostEnd
+                  AND (
+                        R.MsgTypeName LIKE '%Paging%'
+                     OR R.Msg LIKE '%Paging%'
+                  )
+                ORDER BY R.MsgTime
+            """, (session_id, session_id, before_seconds, after_seconds))
+
+            nr_rrc_paging = fetch_dicts()
+        except Exception:
+            nr_rrc_paging = []
+
+        conn.close()
+
+        timeline = []
+
+        for row in lte_paging_edrx:
+            timeline.append({
+                "phase": row.get("Phase"),
+                "time": row.get("MsgTime"),
+                "secondsFromCallStart": row.get("SecondsFromCallStart"),
+                "type": "lte_paging_edrx",
+                "title": f"LTE Paging/eDRX EARFCN={row.get('EARFCN')} PCI={row.get('PCI')}",
+                "details": row,
+            })
+
+        for row in lte_rrc_paging:
+            timeline.append({
+                "phase": row.get("Phase"),
+                "time": row.get("MsgTime"),
+                "secondsFromCallStart": row.get("SecondsFromCallStart"),
+                "type": "lte_rrc_paging",
+                "title": row.get("MsgTypeName") or row.get("MsgName") or "LTE RRC Paging",
+                "details": row,
+            })
+
+        for row in nr_rrc_paging:
+            timeline.append({
+                "phase": row.get("Phase"),
+                "time": row.get("MsgTime"),
+                "secondsFromCallStart": row.get("SecondsFromCallStart"),
+                "type": "nr_rrc_paging",
+                "title": row.get("MsgTypeName") or "NR RRC Paging",
+                "details": row,
+            })
+
+        timeline.sort(key=lambda x: x["time"] or "")
+
+        return {
+            "callWindow": call_window,
+            "ltePagingEDRX": lte_paging_edrx,
+            "lteRrcPaging": lte_rrc_paging,
+            "nrRrcPaging": nr_rrc_paging,
+            "timeline": timeline,
+            "summary": {
+                "ltePagingEDRX": len(lte_paging_edrx),
+                "lteRrcPaging": len(lte_rrc_paging),
+                "nrRrcPaging": len(nr_rrc_paging),
+                "totalPagingEvents": len(timeline),
+            }
+        }
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/wcdma_values")
 def get_wcdma_values(
     database: str = Query(..., min_length=1),

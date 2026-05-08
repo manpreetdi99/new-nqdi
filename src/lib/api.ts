@@ -294,3 +294,42 @@ export async function fetchCallContextTechnology(
   const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
   return requestJson(`/api/call_context_technology?${params.toString()}`);
 }
+
+export interface PagingTimelineEvent {
+  phase: "before" | "during" | "after";
+  time: string | null;
+  secondsFromCallStart: number | null;
+  type: "lte_paging_edrx" | "lte_rrc_paging" | "nr_rrc_paging";
+  title: string;
+  details: Record<string, any>;
+}
+
+export interface CallPagingInfoResponse {
+  callWindow: Record<string, any> | null;
+  ltePagingEDRX: Record<string, any>[];
+  lteRrcPaging: Record<string, any>[];
+  nrRrcPaging: Record<string, any>[];
+  timeline: PagingTimelineEvent[];
+  summary: {
+    ltePagingEDRX: number;
+    lteRrcPaging: number;
+    nrRrcPaging: number;
+    totalPagingEvents: number;
+  };
+  message?: string;
+}
+
+export async function fetchCallPagingInfo(
+  database: string,
+  session_id: string,
+  before_seconds = 60,
+  after_seconds = 60
+): Promise<CallPagingInfoResponse> {
+  const params = new URLSearchParams({
+    database,
+    session_id,
+    before_seconds: String(before_seconds),
+    after_seconds: String(after_seconds),
+  });
+  return requestJson(`/api/call_paging_info?${params.toString()}`);
+}
