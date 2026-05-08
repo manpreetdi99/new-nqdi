@@ -5,7 +5,7 @@ import {
   Wifi, Timer, Save, Edit2
 } from "lucide-react";
 import L from "leaflet";
-import { MapContainer, TileLayer, CircleMarker, Marker, Polyline, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, CircleMarker, Marker, Polyline, useMap, Tooltip as LeafletTooltip } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -44,6 +44,28 @@ function rxLevColor(val: number | null | undefined): string {
   if (val >= -88) return "#22c55e";
   if (val >= -92) return "#f97316";
   return "#ef4444";
+}
+
+function SmartTooltip({ lat, lon, children }: { lat: number; lon: number; children: React.ReactNode }) {
+  const map = useMap();
+  const pt = map.latLngToContainerPoint([lat, lon]);
+  const sz = map.getSize();
+  const xR = pt.x / sz.x;
+  const yR = pt.y / sz.y;
+
+  let direction: "top" | "bottom" | "left" | "right" = "top";
+  let offset: [number, number] = [0, -24];
+
+  if (yR < 0.35) { direction = "bottom"; offset = [0, 10]; }
+  else if (yR > 0.65) { direction = "top"; offset = [0, -24]; }
+  else if (xR < 0.35) { direction = "right"; offset = [10, 0]; }
+  else { direction = "left"; offset = [-10, 0]; }
+
+  return (
+    <LeafletTooltip direction={direction} offset={offset} opacity={1}>
+      {children}
+    </LeafletTooltip>
+  );
 }
 
 function MapAutoFit({ points }: { points: Array<[number, number]> }) {
@@ -98,8 +120,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
 
   const [cellInfo, setCellInfo] = useState<{ eNBId: number | null; EARFCN: number | null; PCI: number | null } | null>(null);
   const [bSideCellInfo, setBSideCellInfo] = useState<{ eNBId: number | null; EARFCN: number | null; PCI: number | null } | null>(null);
-  const [matchedAntenna, setMatchedAntenna] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number } | null>(null);
-  const [matchedAntennaBSide, setMatchedAntennaBSide] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number } | null>(null);
+  const [matchedAntenna, setMatchedAntenna] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number; azimuth: number | null; freq: number | null; vendor: string | null; enbName: string | null; tech: string | null; height: number | null; downtilt: number | null; siteId: number | null; cellId: number | null } | null>(null);
+  const [matchedAntennaBSide, setMatchedAntennaBSide] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number; azimuth: number | null; freq: number | null; vendor: string | null; enbName: string | null; tech: string | null; height: number | null; downtilt: number | null; siteId: number | null; cellId: number | null } | null>(null);
 
   const isGSMMode = call.callMode === "CS" || (call.callMode === "SRVCC" && srvccNetwork === "GSM");
   const [isLoadingRadio, setIsLoadingRadio] = useState(false);
@@ -241,7 +263,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         const d = haversineM(avgLat, avgLon, ant.lat, ant.lon);
         if (d < bestDist) { bestDist = d; best = ant; }
       }
-      setMatchedAntenna({ lat: best.lat, lon: best.lon, cellName: best.cellName, distanceM: bestDist });
+      setMatchedAntenna({ lat: best.lat, lon: best.lon, cellName: best.cellName, distanceM: bestDist, azimuth: best.azimuth, freq: best.freq, vendor: best.vendor, enbName: best.enbName, tech: best.tech, height: best.height, downtilt: best.downtilt, siteId: best.siteId, cellId: best.cellId });
     }).catch(() => setMatchedAntenna(null));
   }, [cellInfo, radioValues, call.region]);
 
@@ -266,7 +288,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         const d = haversineM(avgLat, avgLon, ant.lat, ant.lon);
         if (d < bestDist) { bestDist = d; best = ant; }
       }
-      setMatchedAntennaBSide({ lat: best.lat, lon: best.lon, cellName: best.cellName, distanceM: bestDist });
+      setMatchedAntennaBSide({ lat: best.lat, lon: best.lon, cellName: best.cellName, distanceM: bestDist, azimuth: best.azimuth, freq: best.freq, vendor: best.vendor, enbName: best.enbName, tech: best.tech, height: best.height, downtilt: best.downtilt, siteId: best.siteId, cellId: best.cellId });
     }).catch(() => setMatchedAntennaBSide(null));
   }, [bSideCellInfo, bSideLteValues, call.region]);
 
@@ -309,6 +331,12 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     : hoveredTimeStr !== null
       ? (chartData.find(d => d.time === hoveredTimeStr)?.time ?? null)
       : null;
+
+  const chartHighlightIndex = useMemo(() => {
+    if (hoveredRadioIndex !== null) return hoveredRadioIndex;
+    if (hoveredTimeStr !== null) return chartData.findIndex(d => d.time === hoveredTimeStr);
+    return -1;
+  }, [hoveredRadioIndex, hoveredTimeStr, chartData]);
 
   const bSideLteSummary = useMemo(() => {
     if (!bSideLteValues || bSideLteValues.length === 0) {
@@ -605,8 +633,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                       {showQuality && !showStrength && <ReferenceLine y={6} yAxisId="right" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
                       <RechartsTooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }} itemStyle={{ color: 'hsl(var(--foreground))' }} />
                       <Legend wrapperStyle={{ fontSize: '12px' }} />
-                      {showStrength && <Line yAxisId="left" type="monotone" dataKey="RxLevSub" stroke="hsl(200, 80%, 55%)" dot={false} strokeWidth={2} name="RxLevSub" />}
-                      {showQuality && <Line yAxisId="right" type="monotone" dataKey="RxQualSub" stroke="hsl(0, 72%, 55%)" dot={false} strokeWidth={2} name="RxQualSub" />}
+                      {showStrength && <Line yAxisId="left" type="monotone" dataKey="RxLevSub" stroke="hsl(200, 80%, 55%)" dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill="hsl(200, 80%, 55%)" stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RxLevSub" />}
+                      {showQuality && <Line yAxisId="right" type="monotone" dataKey="RxQualSub" stroke="hsl(0, 72%, 55%)" dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill="hsl(0, 72%, 55%)" stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RxQualSub" />}
                       {chartHighlightTime && (
                         <ReferenceLine
                           x={chartHighlightTime}
@@ -627,8 +655,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                       {showQuality && !showStrength && <ReferenceLine y={-18} yAxisId="right" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
                       <RechartsTooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }} itemStyle={{ color: 'hsl(var(--foreground))' }} />
                       <Legend wrapperStyle={{ fontSize: '12px' }} />
-                      {showStrength && <Line yAxisId="left" type="monotone" dataKey="RSRP" stroke="hsl(200, 80%, 55%)" dot={false} strokeWidth={2} name="RSRP" />}
-                      {showQuality && <Line yAxisId="right" type="monotone" dataKey="RSRQ" stroke="hsl(45, 93%, 58%)" dot={false} strokeWidth={2} name="RSRQ" />}
+                      {showStrength && <Line yAxisId="left" type="monotone" dataKey="RSRP" stroke="hsl(200, 80%, 55%)" dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill="hsl(200, 80%, 55%)" stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RSRP" />}
+                      {showQuality && <Line yAxisId="right" type="monotone" dataKey="RSRQ" stroke="hsl(45, 93%, 58%)" dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill="hsl(45, 93%, 58%)" stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RSRQ" />}
                       {chartHighlightTime && (
                         <ReferenceLine
                           x={chartHighlightTime}
@@ -669,7 +697,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               }) : null;
 
               return (
-                <div className="rounded overflow-hidden border border-border/50" style={{ flex: 1, height: "250px" }}>
+                <div className="rounded overflow-hidden border border-border/50 relative" style={{ flex: 1, height: "250px" }}>
                   <MapContainer
                     center={mapFitPts[0]}
                     zoom={13}
@@ -705,7 +733,19 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                         <Marker
                           position={[mapActiveAntenna.lat, mapActiveAntenna.lon]}
                           icon={antennaIcon}
-                        />
+                        >
+                          <SmartTooltip lat={mapActiveAntenna.lat} lon={mapActiveAntenna.lon}>
+                            <div className="text-[8px] font-mono leading-relaxed">
+                              {mapActiveAntenna.enbName && <div><span className="text-gray-500">eNB </span>{mapActiveAntenna.enbName}</div>}
+                              {mapActiveAntenna.azimuth != null && <div><span className="text-gray-500">Azimuth </span><b>{mapActiveAntenna.azimuth}°</b></div>}
+                              {mapActiveAntenna.downtilt != null && <div><span className="text-gray-500">Tilt </span>{mapActiveAntenna.downtilt}°</div>}
+                              {mapActiveAntenna.height != null && <div><span className="text-gray-500">Height </span>{mapActiveAntenna.height} m</div>}
+                              {mapActiveAntenna.freq != null && <div><span className="text-gray-500">Freq </span>{mapActiveAntenna.freq} MHz</div>}
+                              {mapActiveAntenna.tech && <div><span className="text-gray-500">Tech </span>{mapActiveAntenna.tech}</div>}
+                              <div><span className="text-gray-500">Dist </span><b>{fmtDist(mapActiveAntenna.distanceM)}</b></div>
+                            </div>
+                          </SmartTooltip>
+                        </Marker>
                       </>
                     )}
                   </MapContainer>
