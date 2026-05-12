@@ -1204,11 +1204,29 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
             </div>
           </div>
 
-          {/* Unified Timeline Table */}
-          {pagingData.timeline.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase text-muted-foreground mb-1 tracking-wider">Timeline</p>
-              <div className="overflow-x-auto max-h-[280px] overflow-y-auto rounded border border-border/50">
+          {/* Unified Paging Table — all sources merged */}
+          {pagingData.timeline.length > 0 && (() => {
+            const enriched = pagingData.timeline.map(ev => {
+              let extra: Record<string, any> = {};
+              if (ev.type === "lte_paging_edrx") {
+                const m = pagingData.ltePagingEDRX.find(r => r.MsgTime === ev.time);
+                if (m) extra = m;
+              } else if (ev.type === "lte_rrc_paging") {
+                const m = pagingData.lteRrcPaging.find(r => r.MsgTime === ev.time);
+                if (m) extra = m;
+              }
+              return { ...ev, extra };
+            });
+
+            const hasEarfcn   = enriched.some(ev => (ev.details.EARFCN ?? ev.details.Freq) != null);
+            const hasPci      = enriched.some(ev => (ev.details.PCI ?? ev.details.PhyCellId ?? ev.extra?.PhyCellId) != null);
+            const hasCycle    = enriched.some(ev => ev.details.PagingCycleDecoded != null || ev.extra?.EDRXCycleLength != null);
+            const hasNb       = enriched.some(ev => ev.details.NbDecoded != null);
+            const hasEdrx     = enriched.some(ev => ev.extra?.EDRXPTWLength != null);
+            const hasRrc      = enriched.some(ev => ev.extra?.Msg != null);
+
+            return (
+              <div className="overflow-x-auto max-h-[320px] overflow-y-auto rounded border border-border/50">
                 <table className="w-full text-xs">
                   <thead className="sticky top-0 bg-muted border-b border-border z-10">
                     <tr>
@@ -1217,14 +1235,21 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                       <th className="px-2 py-1 font-semibold text-left">Δευτ.</th>
                       <th className="px-2 py-1 font-semibold text-left">Τύπος</th>
                       <th className="px-2 py-1 font-semibold text-left">Τίτλος</th>
-                      <th className="px-2 py-1 font-semibold text-left">EARFCN / Freq</th>
-                      <th className="px-2 py-1 font-semibold text-left">PCI</th>
-                      <th className="px-2 py-1 font-semibold text-left">Cycle</th>
-                      <th className="px-2 py-1 font-semibold text-left">Nb</th>
+                      {hasEarfcn && <th className="px-2 py-1 font-semibold text-left">EARFCN</th>}
+                      {hasPci    && <th className="px-2 py-1 font-semibold text-left">PCI</th>}
+                      {hasCycle  && <th className="px-2 py-1 font-semibold text-left">Cycle</th>}
+                      {hasNb     && <th className="px-2 py-1 font-semibold text-left">Nb</th>}
+                      {hasEdrx   && <th className="px-2 py-1 font-semibold text-left">PTW</th>}
+                      {hasEdrx   && <th className="px-2 py-1 font-semibold text-left">PageStart</th>}
+                      {hasEdrx   && <th className="px-2 py-1 font-semibold text-left">PageEnd</th>}
+                      {hasEdrx   && <th className="px-2 py-1 font-semibold text-left">HF Off</th>}
+                      {hasRrc    && <th className="px-2 py-1 font-semibold text-left">Dir</th>}
+                      {hasRrc    && <th className="px-2 py-1 font-semibold text-left">ChnType</th>}
+                      {hasRrc    && <th className="px-2 py-1 font-semibold text-left">Msg</th>}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/50">
-                    {pagingData.timeline.map((ev, i) => {
+                    {enriched.map((ev, i) => {
                       const phaseColor =
                         ev.phase === "before" ? "text-amber-400" :
                         ev.phase === "after"  ? "text-orange-400" :
@@ -1234,6 +1259,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                         ev.type === "nr_rrc_paging"   ? "text-purple-400" :
                         "text-emerald-400";
                       const d = ev.details;
+                      const x = ev.extra;
                       return (
                         <tr key={i} className="hover:bg-muted/40 transition-colors">
                           <td className={`px-2 py-0.5 font-semibold ${phaseColor}`}>{ev.phase}</td>
@@ -1246,87 +1272,26 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                           <td className={`px-2 py-0.5 font-mono text-[10px] ${typeColor}`}>
                             {ev.type === "lte_paging_edrx" ? "LTE eDRX" : ev.type === "lte_rrc_paging" ? "LTE RRC" : "NR RRC"}
                           </td>
-                          <td className="px-2 py-0.5 max-w-[180px] truncate" title={ev.title}>{ev.title}</td>
-                          <td className="px-2 py-0.5 font-mono">{d.EARFCN ?? d.Freq ?? "—"}</td>
-                          <td className="px-2 py-0.5 font-mono">{d.PCI ?? d.PhyCellId ?? "—"}</td>
-                          <td className="px-2 py-0.5 font-mono text-[10px]">{d.PagingCycleDecoded != null ? `${d.PagingCycleDecoded} ms` : "—"}</td>
-                          <td className="px-2 py-0.5 font-mono text-[10px]">{d.NbDecoded ?? "—"}</td>
+                          <td className="px-2 py-0.5 max-w-[180px] truncate" title={x?.MsgTypeName || ev.title}>{x?.MsgTypeName || ev.title}</td>
+                          {hasEarfcn && <td className="px-2 py-0.5 font-mono">{d.EARFCN ?? d.Freq ?? "—"}</td>}
+                          {hasPci    && <td className="px-2 py-0.5 font-mono">{d.PCI ?? d.PhyCellId ?? x?.PhyCellId ?? "—"}</td>}
+                          {hasCycle  && <td className="px-2 py-0.5 font-mono text-[10px]">{d.PagingCycleDecoded != null ? `${d.PagingCycleDecoded} ms` : x?.EDRXCycleLength != null ? `${x.EDRXCycleLength} ms` : "—"}</td>}
+                          {hasNb     && <td className="px-2 py-0.5 font-mono text-[10px]">{d.NbDecoded ?? "—"}</td>}
+                          {hasEdrx   && <td className="px-2 py-0.5 font-mono text-[10px]">{x?.EDRXPTWLength ?? "—"}</td>}
+                          {hasEdrx   && <td className="px-2 py-0.5 font-mono text-[10px]">{x?.EDRXPageStartOffset ?? "—"}</td>}
+                          {hasEdrx   && <td className="px-2 py-0.5 font-mono text-[10px]">{x?.EDRXPageEndOffset ?? "—"}</td>}
+                          {hasEdrx   && <td className="px-2 py-0.5 font-mono text-[10px]">{x?.EDRXHyperFrameOffset ?? "—"}</td>}
+                          {hasRrc    && <td className="px-2 py-0.5">{x?.Direction ?? "—"}</td>}
+                          {hasRrc    && <td className="px-2 py-0.5">{x?.ChnType ?? "—"}</td>}
+                          {hasRrc    && <td className="px-2 py-0.5 font-mono text-[10px] max-w-[280px] truncate" title={x?.Msg ?? ""}>{x?.Msg ?? "—"}</td>}
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
               </div>
-            </div>
-          )}
-
-          {/* LTE eDRX detail: eDRX fields when present */}
-          {pagingData.ltePagingEDRX.some(r => r.EDRXCycleLength != null) && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase text-muted-foreground mb-1 tracking-wider">eDRX Parameters</p>
-              <div className="overflow-x-auto rounded border border-border/50">
-                <table className="w-full text-xs">
-                  <thead className="bg-muted border-b border-border">
-                    <tr>
-                      <th className="px-2 py-1 font-semibold">MsgTime</th>
-                      <th className="px-2 py-1 font-semibold">eDRX Cycle (ms)</th>
-                      <th className="px-2 py-1 font-semibold">PTW (ms)</th>
-                      <th className="px-2 py-1 font-semibold">PageStart</th>
-                      <th className="px-2 py-1 font-semibold">PageEnd</th>
-                      <th className="px-2 py-1 font-semibold">HF Offset</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/50">
-                    {pagingData.ltePagingEDRX.filter(r => r.EDRXCycleLength != null).map((r, i) => (
-                      <tr key={i} className="hover:bg-muted/40">
-                        <td className="px-2 py-0.5 font-mono">{r.MsgTime ? new Date(r.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}</td>
-                        <td className="px-2 py-0.5 font-mono text-center">{r.EDRXCycleLength ?? "—"}</td>
-                        <td className="px-2 py-0.5 font-mono text-center">{r.EDRXPTWLength ?? "—"}</td>
-                        <td className="px-2 py-0.5 font-mono text-center">{r.EDRXPageStartOffset ?? "—"}</td>
-                        <td className="px-2 py-0.5 font-mono text-center">{r.EDRXPageEndOffset ?? "—"}</td>
-                        <td className="px-2 py-0.5 font-mono text-center">{r.EDRXHyperFrameOffset ?? "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
-
-          {/* RRC Paging message content */}
-          {pagingData.lteRrcPaging.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase text-muted-foreground mb-1 tracking-wider">LTE RRC Paging Messages</p>
-              <div className="overflow-x-auto max-h-[200px] overflow-y-auto rounded border border-border/50">
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-muted border-b border-border z-10">
-                    <tr>
-                      <th className="px-2 py-1 font-semibold text-left">Ώρα</th>
-                      <th className="px-2 py-1 font-semibold text-left">Φάση</th>
-                      <th className="px-2 py-1 font-semibold text-left">MsgTypeName</th>
-                      <th className="px-2 py-1 font-semibold text-left">Direction</th>
-                      <th className="px-2 py-1 font-semibold text-left">ChnType</th>
-                      <th className="px-2 py-1 font-semibold text-left">PCI</th>
-                      <th className="px-2 py-1 font-semibold text-left">Msg</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/50">
-                    {pagingData.lteRrcPaging.map((r, i) => (
-                      <tr key={i} className="hover:bg-muted/40">
-                        <td className="px-2 py-0.5 font-mono whitespace-nowrap">{r.MsgTime ? new Date(r.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}</td>
-                        <td className={`px-2 py-0.5 font-semibold ${r.Phase === "before" ? "text-amber-400" : r.Phase === "after" ? "text-orange-400" : "text-primary"}`}>{r.Phase}</td>
-                        <td className="px-2 py-0.5">{r.MsgTypeName ?? "—"}</td>
-                        <td className="px-2 py-0.5">{r.Direction ?? "—"}</td>
-                        <td className="px-2 py-0.5">{r.ChnType ?? "—"}</td>
-                        <td className="px-2 py-0.5 font-mono">{r.PhyCellId ?? "—"}</td>
-                        <td className="px-2 py-0.5 font-mono text-[10px] max-w-[320px] truncate" title={r.Msg ?? ""}>{r.Msg ?? "—"}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </div>
-          )}
+            );
+          })()}
 
           {pagingData.summary.totalPagingEvents === 0 && (
             <p className="text-xs text-muted-foreground">Δεν βρέθηκαν paging events στο παράθυρο ±{60}s.</p>
