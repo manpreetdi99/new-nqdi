@@ -1526,6 +1526,128 @@ def get_call_paging_info(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/call_device_info")
+def get_call_device_info(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """Device & scanner info for a call: FileList fields + DmnDevice details (A-side & B-side)."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        # File-level device info from FileList
+        cursor.execute("""
+            SELECT TOP 1
+                FL.ASideDevice,
+                FL.BSideDevice,
+                FL.ASideNumber,
+                FL.BSideNumber,
+                FL.IMEI,
+                FL.FirmwareV,
+                FL.IMSI,
+                FL.ProductVersion,
+                FL.MFVersion,
+                FL.SWVersion,
+                FL.ASideFileName,
+                FL.BSideFileName,
+                FL.ASideLocation,
+                FL.BSideLocation
+            FROM CallAnalysis CA
+            LEFT JOIN FileList FL ON FL.FileId = CA.FileId
+            WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+        """, (session_id,))
+
+        row = cursor.fetchone()
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        file_info = {columns[i]: row[i] for i in range(len(columns))} if row else {}
+
+        # DmnDevice info for A-side via FactLTERadio
+        a_device = None
+        try:
+            cursor.execute("""
+                SELECT TOP 1
+                    DD.Model,
+                    DD.IMEI,
+                    DD.IMSI,
+                    DD.Firmware,
+                    DD.Number,
+                    DD.Side,
+                    DD.DeviceType,
+                    DD.RFManufacturer,
+                    DD.RFModel,
+                    DD.SerialNumber,
+                    DD.OS,
+                    DD.BaseBand
+                FROM FactLTERadio FR
+                LEFT JOIN DmnDevice DD ON FR.DmnIdDevice = DD.DmnId
+                WHERE FR.SessionId = TRY_CONVERT(BIGINT, ?)
+                  AND DD.DmnId IS NOT NULL
+                ORDER BY FR.FullDate
+            """, (session_id,))
+            r = cursor.fetchone()
+            if r:
+                cols = [c[0] for c in cursor.description]
+                a_device = {cols[i]: r[i] for i in range(len(cols))}
+        except Exception:
+            pass
+
+        # DmnDevice info for B-side
+        b_device = None
+        try:
+            cursor.execute("""
+                ;WITH pair_root AS (
+                    SELECT TOP (1)
+                        CASE
+                            WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                            ELSE CA.SessionId
+                        END AS ASessionId
+                    FROM CallAnalysis CA
+                    WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                       OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+                ),
+                b_side AS (
+                    SELECT TOP (1) CA.SessionId AS BSessionId
+                    FROM CallAnalysis CA
+                    INNER JOIN pair_root PR ON CA.SessionIdA = PR.ASessionId
+                    WHERE CA.Side = 'B'
+                )
+                SELECT TOP 1
+                    DD.Model,
+                    DD.IMEI,
+                    DD.IMSI,
+                    DD.Firmware,
+                    DD.Number,
+                    DD.Side,
+                    DD.DeviceType,
+                    DD.RFManufacturer,
+                    DD.RFModel,
+                    DD.SerialNumber,
+                    DD.OS,
+                    DD.BaseBand
+                FROM FactLTERadio FR
+                INNER JOIN b_side B ON FR.SessionId = B.BSessionId
+                LEFT JOIN DmnDevice DD ON FR.DmnIdDevice = DD.DmnId
+                WHERE DD.DmnId IS NOT NULL
+                ORDER BY FR.FullDate
+            """, (session_id, session_id))
+            r = cursor.fetchone()
+            if r:
+                cols = [c[0] for c in cursor.description]
+                b_device = {cols[i]: r[i] for i in range(len(cols))}
+        except Exception:
+            pass
+
+        conn.close()
+        return {
+            "fileInfo": file_info,
+            "aSideDevice": a_device,
+            "bSideDevice": b_device,
+        }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/wcdma_values")
 def get_wcdma_values(
     database: str = Query(..., min_length=1),

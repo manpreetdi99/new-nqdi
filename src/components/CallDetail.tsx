@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchCallPagingInfo, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallPagingInfoResponse, type PagingTimelineEvent } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchCallPagingInfo, fetchCallDeviceInfo, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallPagingInfoResponse, type PagingTimelineEvent, type CallDeviceInfo } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 //ReferenceLine για γραμμες στο διαγραμμα, πχ για thresholds. 
@@ -126,6 +126,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
   const [contextSignal, setContextSignal] = useState<any[]>([]);
   const [contextTechnology, setContextTechnology] = useState<any[]>([]);
   const [pagingData, setPagingData] = useState<CallPagingInfoResponse | null>(null);
+  const [deviceInfo, setDeviceInfo] = useState<CallDeviceInfo | null>(null);
 
   const isGSMMode = call.callMode === "CS" || (call.callMode === "SRVCC" && srvccNetwork === "GSM");
   const [isLoadingRadio, setIsLoadingRadio] = useState(false);
@@ -173,7 +174,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
-        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes] = await Promise.allSettled([
+        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, deviceRes] = await Promise.allSettled([
           call.callMode !== "CS" ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
           fetchMosValues(database, call.callId),
@@ -187,6 +188,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           fetchCallContextSignal(database, call.callId),
           fetchCallContextTechnology(database, call.callId),
           fetchCallPagingInfo(database, call.callId),
+          fetchCallDeviceInfo(database, call.callId),
         ]);
 
         if (lteRes.status === "fulfilled") {
@@ -253,6 +255,12 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           setPagingData(pagingRes.value as CallPagingInfoResponse);
         } else {
           setPagingData(null);
+        }
+
+        if (deviceRes.status === "fulfilled") {
+          setDeviceInfo(deviceRes.value as CallDeviceInfo);
+        } else {
+          setDeviceInfo(null);
         }
       } catch (err) {
         console.error("Failed to load metrics", err);
@@ -1296,6 +1304,86 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           {pagingData.summary.totalPagingEvents === 0 && (
             <p className="text-xs text-muted-foreground">Δεν βρέθηκαν paging events στο παράθυρο ±{60}s.</p>
           )}
+        </div>
+      )}
+      {/* ── Scanner / Device Info ── */}
+      {deviceInfo && (
+        <div className="bg-card border border-border rounded-lg p-3 space-y-3">
+          <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+            <Signal className="h-4 w-4 text-primary" />
+            Scanner &amp; Κινητό
+          </h3>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* A-side */}
+            <div className="rounded border border-border/60 bg-muted/20 p-2 space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-primary mb-1.5">A-Side</p>
+              {(() => {
+                const d = deviceInfo.aSideDevice;
+                const f = deviceInfo.fileInfo;
+                const rows: [string, string | null | undefined][] = [
+                  ["Device", d?.Model ?? f.ASideDevice],
+                  ["IMEI", d?.IMEI ?? f.IMEI],
+                  ["IMSI", d?.IMSI ?? f.IMSI],
+                  ["Number", d?.Number ?? f.ASideNumber],
+                  ["OS", d?.OS ?? null],
+                  ["Firmware", d?.Firmware ?? f.FirmwareV],
+                  ["BaseBand", d?.BaseBand ?? null],
+                  ["DeviceType", d?.DeviceType ?? null],
+                  ["RF Manufacturer", d?.RFManufacturer ?? null],
+                  ["RF Model", d?.RFModel ?? null],
+                  ["Serial", d?.SerialNumber ?? null],
+                  ["SW Version", f.SWVersion],
+                  ["MF Version", f.MFVersion],
+                  ["Product Ver.", f.ProductVersion],
+                  ["File", f.ASideFileName],
+                  ["Location", f.ASideLocation],
+                ];
+                return rows
+                  .filter(([, v]) => v != null && v !== "")
+                  .map(([label, value]) => (
+                    <div key={label} className="flex items-start gap-2 text-xs">
+                      <span className="text-muted-foreground w-28 shrink-0">{label}</span>
+                      <span className="font-mono text-foreground break-all">{value}</span>
+                    </div>
+                  ));
+              })()}
+            </div>
+
+            {/* B-side */}
+            <div className="rounded border border-border/60 bg-muted/20 p-2 space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-accent mb-1.5">B-Side</p>
+              {(() => {
+                const d = deviceInfo.bSideDevice;
+                const f = deviceInfo.fileInfo;
+                const rows: [string, string | null | undefined][] = [
+                  ["Device", d?.Model ?? f.BSideDevice],
+                  ["IMEI", d?.IMEI ?? null],
+                  ["IMSI", d?.IMSI ?? null],
+                  ["Number", d?.Number ?? f.BSideNumber],
+                  ["OS", d?.OS ?? null],
+                  ["Firmware", d?.Firmware ?? null],
+                  ["BaseBand", d?.BaseBand ?? null],
+                  ["DeviceType", d?.DeviceType ?? null],
+                  ["RF Manufacturer", d?.RFManufacturer ?? null],
+                  ["RF Model", d?.RFModel ?? null],
+                  ["Serial", d?.SerialNumber ?? null],
+                  ["File", f.BSideFileName],
+                  ["Location", f.BSideLocation],
+                ];
+                const visible = rows.filter(([, v]) => v != null && v !== "");
+                if (visible.length === 0) {
+                  return <p className="text-xs text-muted-foreground">Δεν υπάρχουν δεδομένα B-side.</p>;
+                }
+                return visible.map(([label, value]) => (
+                  <div key={label} className="flex items-start gap-2 text-xs">
+                    <span className="text-muted-foreground w-28 shrink-0">{label}</span>
+                    <span className="font-mono text-foreground break-all">{value}</span>
+                  </div>
+                ));
+              })()}
+            </div>
+          </div>
         </div>
       )}
     </motion.div>

@@ -319,6 +319,61 @@ export interface CallPagingInfoResponse {
   message?: string;
 }
 
+export interface CallDeviceInfo {
+  fileInfo: {
+    ASideDevice: string | null;
+    BSideDevice: string | null;
+    ASideNumber: string | null;
+    BSideNumber: string | null;
+    IMEI: string | null;
+    FirmwareV: string | null;
+    IMSI: string | null;
+    ProductVersion: string | null;
+    MFVersion: string | null;
+    SWVersion: string | null;
+    ASideFileName: string | null;
+    BSideFileName: string | null;
+    ASideLocation: string | null;
+    BSideLocation: string | null;
+  };
+  aSideDevice: {
+    Model: string | null;
+    IMEI: string | null;
+    IMSI: string | null;
+    Firmware: string | null;
+    Number: string | null;
+    Side: string | null;
+    DeviceType: string | null;
+    RFManufacturer: string | null;
+    RFModel: string | null;
+    SerialNumber: string | null;
+    OS: string | null;
+    BaseBand: string | null;
+  } | null;
+  bSideDevice: {
+    Model: string | null;
+    IMEI: string | null;
+    IMSI: string | null;
+    Firmware: string | null;
+    Number: string | null;
+    Side: string | null;
+    DeviceType: string | null;
+    RFManufacturer: string | null;
+    RFModel: string | null;
+    SerialNumber: string | null;
+    OS: string | null;
+    BaseBand: string | null;
+  } | null;
+}
+
+export async function fetchCallDeviceInfo(
+  database: string,
+  session_id: string
+): Promise<CallDeviceInfo> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/call_device_info?${params.toString()}`);
+}
+
 export async function fetchCallPagingInfo(
   database: string,
   session_id: string,
