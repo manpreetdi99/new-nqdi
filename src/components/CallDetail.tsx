@@ -5,14 +5,14 @@ import {
   Wifi, Timer, Save, Edit2
 } from "lucide-react";
 import L from "leaflet";
-import { MapContainer, TileLayer, CircleMarker, Marker, Polyline, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, CircleMarker, Marker, Polyline, useMap, Tooltip as LeafletTooltip } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, type CallSideComparisonRow, type TraceLogRow, type AntennaRow } from "@/lib/api";
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine } from "recharts";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchCallPagingInfo, fetchCallDeviceInfo, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallPagingInfoResponse, type PagingTimelineEvent, type CallDeviceInfo } from "@/lib/api";
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 //ReferenceLine για γραμμες στο διαγραμμα, πχ για thresholds. 
 /**
@@ -44,6 +44,28 @@ function rxLevColor(val: number | null | undefined): string {
   if (val >= -88) return "#22c55e";
   if (val >= -92) return "#f97316";
   return "#ef4444";
+}
+
+function SmartTooltip({ lat, lon, children }: { lat: number; lon: number; children: React.ReactNode }) {
+  const map = useMap();
+  const pt = map.latLngToContainerPoint([lat, lon]);
+  const sz = map.getSize();
+  const xR = pt.x / sz.x;
+  const yR = pt.y / sz.y;
+
+  let direction: "top" | "bottom" | "left" | "right" = "top";
+  let offset: [number, number] = [0, -24];
+
+  if (yR < 0.35) { direction = "bottom"; offset = [0, 10]; }
+  else if (yR > 0.65) { direction = "top"; offset = [0, -24]; }
+  else if (xR < 0.35) { direction = "right"; offset = [10, 0]; }
+  else { direction = "left"; offset = [-10, 0]; }
+
+  return (
+    <LeafletTooltip direction={direction} offset={offset} opacity={1}>
+      {children}
+    </LeafletTooltip>
+  );
 }
 
 function MapAutoFit({ points }: { points: Array<[number, number]> }) {
@@ -98,8 +120,13 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
 
   const [cellInfo, setCellInfo] = useState<{ eNBId: number | null; EARFCN: number | null; PCI: number | null } | null>(null);
   const [bSideCellInfo, setBSideCellInfo] = useState<{ eNBId: number | null; EARFCN: number | null; PCI: number | null } | null>(null);
-  const [matchedAntenna, setMatchedAntenna] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number } | null>(null);
-  const [matchedAntennaBSide, setMatchedAntennaBSide] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number } | null>(null);
+  const [matchedAntenna, setMatchedAntenna] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number; azimuth: number | null; freq: number | null; vendor: string | null; enbName: string | null; tech: string | null; height: number | null; downtilt: number | null; siteId: number | null; cellId: number | null } | null>(null);
+  const [matchedAntennaBSide, setMatchedAntennaBSide] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number; azimuth: number | null; freq: number | null; vendor: string | null; enbName: string | null; tech: string | null; height: number | null; downtilt: number | null; siteId: number | null; cellId: number | null } | null>(null);
+
+  const [contextSignal, setContextSignal] = useState<any[]>([]);
+  const [contextTechnology, setContextTechnology] = useState<any[]>([]);
+  const [pagingData, setPagingData] = useState<CallPagingInfoResponse | null>(null);
+  const [deviceInfo, setDeviceInfo] = useState<CallDeviceInfo | null>(null);
 
   const isGSMMode = call.callMode === "CS" || (call.callMode === "SRVCC" && srvccNetwork === "GSM");
   const [isLoadingRadio, setIsLoadingRadio] = useState(false);
@@ -147,7 +174,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
-        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes] = await Promise.allSettled([
+        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, deviceRes] = await Promise.allSettled([
           call.callMode !== "CS" ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
           fetchMosValues(database, call.callId),
@@ -157,7 +184,11 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           fetchTracelogValues(database, call.callId),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValuesBSide(database, call.callId) : Promise.resolve({ gsmValuesBSide: [] }),
           call.callMode !== "CS" ? fetchCellInfo(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
-          call.callMode !== "CS" ? fetchCellInfoBSide(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null })
+          call.callMode !== "CS" ? fetchCellInfoBSide(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
+          fetchCallContextSignal(database, call.callId),
+          fetchCallContextTechnology(database, call.callId),
+          fetchCallPagingInfo(database, call.callId),
+          fetchCallDeviceInfo(database, call.callId),
         ]);
 
         if (lteRes.status === "fulfilled") {
@@ -207,6 +238,30 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         if (bSideCellInfoRes.status === "fulfilled") {
           setBSideCellInfo(bSideCellInfoRes.value as any);
         }
+
+        if (ctxSignalRes.status === "fulfilled") {
+          setContextSignal((ctxSignalRes.value as any).signal || []);
+        } else {
+          setContextSignal([]);
+        }
+
+        if (ctxTechRes.status === "fulfilled") {
+          setContextTechnology((ctxTechRes.value as any).technology || []);
+        } else {
+          setContextTechnology([]);
+        }
+
+        if (pagingRes.status === "fulfilled") {
+          setPagingData(pagingRes.value as CallPagingInfoResponse);
+        } else {
+          setPagingData(null);
+        }
+
+        if (deviceRes.status === "fulfilled") {
+          setDeviceInfo(deviceRes.value as CallDeviceInfo);
+        } else {
+          setDeviceInfo(null);
+        }
       } catch (err) {
         console.error("Failed to load metrics", err);
       } finally {
@@ -241,7 +296,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         const d = haversineM(avgLat, avgLon, ant.lat, ant.lon);
         if (d < bestDist) { bestDist = d; best = ant; }
       }
-      setMatchedAntenna({ lat: best.lat, lon: best.lon, cellName: best.cellName, distanceM: bestDist });
+      setMatchedAntenna({ lat: best.lat, lon: best.lon, cellName: best.cellName, distanceM: bestDist, azimuth: best.azimuth, freq: best.freq, vendor: best.vendor, enbName: best.enbName, tech: best.tech, height: best.height, downtilt: best.downtilt, siteId: best.siteId, cellId: best.cellId });
     }).catch(() => setMatchedAntenna(null));
   }, [cellInfo, radioValues, call.region]);
 
@@ -266,7 +321,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         const d = haversineM(avgLat, avgLon, ant.lat, ant.lon);
         if (d < bestDist) { bestDist = d; best = ant; }
       }
-      setMatchedAntennaBSide({ lat: best.lat, lon: best.lon, cellName: best.cellName, distanceM: bestDist });
+      setMatchedAntennaBSide({ lat: best.lat, lon: best.lon, cellName: best.cellName, distanceM: bestDist, azimuth: best.azimuth, freq: best.freq, vendor: best.vendor, enbName: best.enbName, tech: best.tech, height: best.height, downtilt: best.downtilt, siteId: best.siteId, cellId: best.cellId });
     }).catch(() => setMatchedAntennaBSide(null));
   }, [bSideCellInfo, bSideLteValues, call.region]);
 
@@ -309,6 +364,12 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     : hoveredTimeStr !== null
       ? (chartData.find(d => d.time === hoveredTimeStr)?.time ?? null)
       : null;
+
+  const chartHighlightIndex = useMemo(() => {
+    if (hoveredRadioIndex !== null) return hoveredRadioIndex;
+    if (hoveredTimeStr !== null) return chartData.findIndex(d => d.time === hoveredTimeStr);
+    return -1;
+  }, [hoveredRadioIndex, hoveredTimeStr, chartData]);
 
   const bSideLteSummary = useMemo(() => {
     if (!bSideLteValues || bSideLteValues.length === 0) {
@@ -357,6 +418,26 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     if (mapActiveAntenna) pts.push([mapActiveAntenna.lat, mapActiveAntenna.lon]);
     return pts;
   }, [mapActivePts, mapActiveAntenna]);
+
+  const contextChartData = useMemo(() =>
+    contextSignal.map((v, idx) => ({
+      idx,
+      time: new Date(v.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      RSRP: v.RSRP != null ? Number(v.RSRP) : undefined,
+      RSRQ: v.RSRQ != null ? Number(v.RSRQ) : undefined,
+      phase: v.phase as "before" | "during" | "after",
+    }))
+  , [contextSignal]);
+
+  const duringZone = useMemo(() => {
+    const firstIdx = contextChartData.findIndex(d => d.phase === "during");
+    const lastIdx  = [...contextChartData].reverse().findIndex(d => d.phase === "during");
+    const last = lastIdx === -1 ? -1 : contextChartData.length - 1 - lastIdx;
+    return {
+      first: firstIdx >= 0 ? firstIdx : null,
+      last:  last     >= 0 ? last     : null,
+    };
+  }, [contextChartData]);
 
   return (
     <motion.div
@@ -605,8 +686,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                       {showQuality && !showStrength && <ReferenceLine y={6} yAxisId="right" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
                       <RechartsTooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }} itemStyle={{ color: 'hsl(var(--foreground))' }} />
                       <Legend wrapperStyle={{ fontSize: '12px' }} />
-                      {showStrength && <Line yAxisId="left" type="monotone" dataKey="RxLevSub" stroke="hsl(200, 80%, 55%)" dot={false} strokeWidth={2} name="RxLevSub" />}
-                      {showQuality && <Line yAxisId="right" type="monotone" dataKey="RxQualSub" stroke="hsl(0, 72%, 55%)" dot={false} strokeWidth={2} name="RxQualSub" />}
+                      {showStrength && <Line yAxisId="left" type="monotone" dataKey="RxLevSub" stroke="hsl(200, 80%, 55%)" dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill="hsl(200, 80%, 55%)" stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RxLevSub" />}
+                      {showQuality && <Line yAxisId="right" type="monotone" dataKey="RxQualSub" stroke="hsl(0, 72%, 55%)" dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill="hsl(0, 72%, 55%)" stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RxQualSub" />}
                       {chartHighlightTime && (
                         <ReferenceLine
                           x={chartHighlightTime}
@@ -627,8 +708,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                       {showQuality && !showStrength && <ReferenceLine y={-18} yAxisId="right" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
                       <RechartsTooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }} itemStyle={{ color: 'hsl(var(--foreground))' }} />
                       <Legend wrapperStyle={{ fontSize: '12px' }} />
-                      {showStrength && <Line yAxisId="left" type="monotone" dataKey="RSRP" stroke="hsl(200, 80%, 55%)" dot={false} strokeWidth={2} name="RSRP" />}
-                      {showQuality && <Line yAxisId="right" type="monotone" dataKey="RSRQ" stroke="hsl(45, 93%, 58%)" dot={false} strokeWidth={2} name="RSRQ" />}
+                      {showStrength && <Line yAxisId="left" type="monotone" dataKey="RSRP" stroke="hsl(200, 80%, 55%)" dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill="hsl(200, 80%, 55%)" stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RSRP" />}
+                      {showQuality && <Line yAxisId="right" type="monotone" dataKey="RSRQ" stroke="hsl(45, 93%, 58%)" dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill="hsl(45, 93%, 58%)" stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RSRQ" />}
                       {chartHighlightTime && (
                         <ReferenceLine
                           x={chartHighlightTime}
@@ -669,7 +750,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               }) : null;
 
               return (
-                <div className="rounded overflow-hidden border border-border/50" style={{ flex: 1, height: "250px" }}>
+                <div className="rounded overflow-hidden border border-border/50 relative" style={{ flex: 1, height: "250px" }}>
                   <MapContainer
                     center={mapFitPts[0]}
                     zoom={13}
@@ -705,7 +786,19 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                         <Marker
                           position={[mapActiveAntenna.lat, mapActiveAntenna.lon]}
                           icon={antennaIcon}
-                        />
+                        >
+                          <SmartTooltip lat={mapActiveAntenna.lat} lon={mapActiveAntenna.lon}>
+                            <div className="text-[8px] font-mono leading-relaxed">
+                              {mapActiveAntenna.enbName && <div><span className="text-gray-500">eNB </span>{mapActiveAntenna.enbName}</div>}
+                              {mapActiveAntenna.azimuth != null && <div><span className="text-gray-500">Azimuth </span><b>{mapActiveAntenna.azimuth}°</b></div>}
+                              {mapActiveAntenna.downtilt != null && <div><span className="text-gray-500">Tilt </span>{mapActiveAntenna.downtilt}°</div>}
+                              {mapActiveAntenna.height != null && <div><span className="text-gray-500">Height </span>{mapActiveAntenna.height} m</div>}
+                              {mapActiveAntenna.freq != null && <div><span className="text-gray-500">Freq </span>{mapActiveAntenna.freq} MHz</div>}
+                              {mapActiveAntenna.tech && <div><span className="text-gray-500">Tech </span>{mapActiveAntenna.tech}</div>}
+                              <div><span className="text-gray-500">Dist </span><b>{fmtDist(mapActiveAntenna.distanceM)}</b></div>
+                            </div>
+                          </SmartTooltip>
+                        </Marker>
                       </>
                     )}
                   </MapContainer>
@@ -990,6 +1083,309 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           )}
         </div>
       </div>
+
+      {/* ── Συμπεριφορά δικτύου πριν / κατά / μετά κλήση ── */}
+      {(contextChartData.length > 0 || contextTechnology.length > 0) && (
+        <div className="bg-card border border-border rounded-lg p-3 space-y-3">
+          <h3 className="text-sm font-semibold text-foreground">
+            Συμπεριφορά δικτύου ±10 δευτ. πριν / μετά κλήση
+          </h3>
+
+          {/* Signal chart */}
+          {contextChartData.length > 0 && (
+            <div>
+              <div className="flex items-center gap-3 mb-1">
+                <span className="text-xs text-muted-foreground">RSRP / RSRQ</span>
+                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-amber-400/30 border border-amber-400/50" />Πριν</span>
+                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-primary/20 border border-primary/40" />Κατά</span>
+                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-orange-400/30 border border-orange-400/50" />Μετά</span>
+              </div>
+              <ResponsiveContainer width="100%" height={160}>
+                <LineChart data={contextChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
+                  <XAxis
+                    dataKey="idx"
+                    type="number"
+                    domain={[0, contextChartData.length - 1]}
+                    tickFormatter={(v: number) => contextChartData[v]?.time ?? ""}
+                    tick={{ fontSize: 9, fill: "#94a3b8" }}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis yAxisId="rsrp" domain={[-140, -60]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={32} />
+                  <YAxis yAxisId="rsrq" orientation="right" domain={[-25, 0]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={28} />
+                  <RechartsTooltip
+                    contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155", fontSize: 11 }}
+                    labelFormatter={(v: number) => contextChartData[v]?.time ?? ""}
+                    formatter={(val: any, name: string) => [val != null ? Number(val).toFixed(1) : "—", name]}
+                  />
+                  {/* before — κίτρινο */}
+                  {duringZone.first != null && (
+                    <ReferenceArea yAxisId="rsrp" x1={0} x2={duringZone.first} fill="#f59e0b" fillOpacity={0.25} stroke="#f59e0b" strokeOpacity={0.4} strokeWidth={1} />
+                  )}
+                  {/* during — μπλε */}
+                  {duringZone.first != null && duringZone.last != null && (
+                    <ReferenceArea yAxisId="rsrp" x1={duringZone.first} x2={duringZone.last} fill="#3b82f6" fillOpacity={0.22} stroke="#3b82f6" strokeOpacity={0.5} strokeWidth={1} />
+                  )}
+                  {/* after — πορτοκαλί */}
+                  {duringZone.last != null && (
+                    <ReferenceArea yAxisId="rsrp" x1={duringZone.last} x2={contextChartData.length - 1} fill="#f97316" fillOpacity={0.25} stroke="#f97316" strokeOpacity={0.4} strokeWidth={1} />
+                  )}
+                  <Line yAxisId="rsrp" dataKey="RSRP" stroke="#22c55e" dot={false} strokeWidth={2} connectNulls name="RSRP" />
+                  <Line yAxisId="rsrq" dataKey="RSRQ" stroke="#e2e8f0" dot={false} strokeWidth={1} connectNulls name="RSRQ" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* Technology changes table */}
+          {contextTechnology.length > 0 && (
+            <div>
+              <p className="text-xs text-muted-foreground mb-1">Αλλαγές τεχνολογίας</p>
+              <div className="overflow-x-auto max-h-[140px] overflow-y-auto rounded border border-border/50">
+                <table className="w-full text-xs text-center">
+                  <thead className="sticky top-0 bg-muted border-b border-border z-10">
+                    <tr>
+                      <th className="px-2 py-1 font-semibold">Ώρα</th>
+                      <th className="px-2 py-1 font-semibold">Από</th>
+                      <th className="px-2 py-1 font-semibold">→ Σε</th>
+                      <th className="px-2 py-1 font-semibold">Band</th>
+                      <th className="px-2 py-1 font-semibold">LTE CA</th>
+                      <th className="px-2 py-1 font-semibold">5G CA</th>
+                      <th className="px-2 py-1 font-semibold">Φάση</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/50">
+                    {contextTechnology.map((row, i) => {
+                      const phaseColor =
+                        row.phase === "before" ? "bg-amber-500/10 text-amber-400" :
+                        row.phase === "after"  ? "bg-orange-500/10 text-orange-400" :
+                        "bg-primary/10 text-primary";
+                      return (
+                        <tr key={i} className="hover:bg-muted/40 transition-colors">
+                          <td className="px-2 py-0.5 font-mono">{new Date(row.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</td>
+                          <td className="px-2 py-0.5 text-muted-foreground">{row.PrevTechnology ?? "—"}</td>
+                          <td className="px-2 py-0.5 font-semibold">{row.CurrTechnology ?? "—"}</td>
+                          <td className="px-2 py-0.5">{row.Band ?? "—"}</td>
+                          <td className="px-2 py-0.5">{row.LTEDLCarriers != null ? `${row.LTEDLCarriers}DL/${row.LTEULCarriers}UL` : "—"}</td>
+                          <td className="px-2 py-0.5">{row.NR5GDLCarriers != null ? `${row.NR5GDLCarriers}DL/${row.NR5GULCarriers}UL` : "—"}</td>
+                          <td className={`px-2 py-0.5 font-semibold rounded ${phaseColor}`}>{row.phase}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
+
+          {contextChartData.length === 0 && contextTechnology.length === 0 && (
+            <p className="text-xs text-muted-foreground">Δεν βρέθηκαν δεδομένα στο παράθυρο ±10 δευτ.</p>
+          )}
+        </div>
+      )}
+
+      {/* ── Paging & Call Setup Signaling ── */}
+      {pagingData && pagingData.callWindow && (
+        <div className="bg-card border border-border rounded-lg p-3 space-y-3">
+          <div className="flex items-center justify-between flex-wrap gap-2">
+            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+              <Signal className="h-4 w-4 text-primary" />
+              Paging &amp; Call Setup Signaling
+              <span className={`text-xs px-2 py-0.5 rounded font-medium ${pagingData.callWindow.callDir === "MO" ? "bg-primary/10 text-primary" : "bg-accent/10 text-accent"}`}>
+                {pagingData.callWindow.callDir ?? "—"}
+              </span>
+            </h3>
+            {/* Summary badges */}
+            <div className="flex items-center gap-2 text-xs">
+              {(["ltePagingEDRX", "lteRrcPaging", "nrRrcPaging"] as const).map(key => {
+                const count = pagingData.summary[key];
+                const labels: Record<string, string> = { ltePagingEDRX: "LTE eDRX", lteRrcPaging: "LTE RRC", nrRrcPaging: "NR RRC" };
+                return count > 0 ? (
+                  <span key={key} className="px-2 py-0.5 rounded border border-primary/30 bg-primary/5 font-mono">
+                    {labels[key]} <b>{count}</b>
+                  </span>
+                ) : null;
+              })}
+              {pagingData.summary.totalPagingEvents === 0 && (
+                <span className="text-muted-foreground">Δεν βρέθηκαν paging events</span>
+              )}
+            </div>
+          </div>
+
+          {/* Unified Paging Table — all sources merged */}
+          {pagingData.timeline.length > 0 && (() => {
+            const enriched = pagingData.timeline.map(ev => {
+              let extra: Record<string, any> = {};
+              if (ev.type === "lte_paging_edrx") {
+                const m = pagingData.ltePagingEDRX.find(r => r.MsgTime === ev.time);
+                if (m) extra = m;
+              } else if (ev.type === "lte_rrc_paging") {
+                const m = pagingData.lteRrcPaging.find(r => r.MsgTime === ev.time);
+                if (m) extra = m;
+              }
+              return { ...ev, extra };
+            });
+
+            const hasEarfcn   = enriched.some(ev => (ev.details.EARFCN ?? ev.details.Freq) != null);
+            const hasPci      = enriched.some(ev => (ev.details.PCI ?? ev.details.PhyCellId ?? ev.extra?.PhyCellId) != null);
+            const hasCycle    = enriched.some(ev => ev.details.PagingCycleDecoded != null || ev.extra?.EDRXCycleLength != null);
+            const hasNb       = enriched.some(ev => ev.details.NbDecoded != null);
+            const hasEdrx     = enriched.some(ev => ev.extra?.EDRXPTWLength != null);
+            const hasRrc      = enriched.some(ev => ev.extra?.Msg != null);
+
+            return (
+              <div className="overflow-x-auto max-h-[320px] overflow-y-auto rounded border border-border/50">
+                <table className="w-full text-xs">
+                  <thead className="sticky top-0 bg-muted border-b border-border z-10">
+                    <tr>
+                      <th className="px-2 py-1 font-semibold text-left">Φάση</th>
+                      <th className="px-2 py-1 font-semibold text-left">Ώρα</th>
+                      <th className="px-2 py-1 font-semibold text-left">Δευτ.</th>
+                      <th className="px-2 py-1 font-semibold text-left">Τύπος</th>
+                      <th className="px-2 py-1 font-semibold text-left">Τίτλος</th>
+                      {hasEarfcn && <th className="px-2 py-1 font-semibold text-left">EARFCN</th>}
+                      {hasPci    && <th className="px-2 py-1 font-semibold text-left">PCI</th>}
+                      {hasCycle  && <th className="px-2 py-1 font-semibold text-left">Cycle</th>}
+                      {hasNb     && <th className="px-2 py-1 font-semibold text-left">Nb</th>}
+                      {hasEdrx   && <th className="px-2 py-1 font-semibold text-left">PTW</th>}
+                      {hasEdrx   && <th className="px-2 py-1 font-semibold text-left">PageStart</th>}
+                      {hasEdrx   && <th className="px-2 py-1 font-semibold text-left">PageEnd</th>}
+                      {hasEdrx   && <th className="px-2 py-1 font-semibold text-left">HF Off</th>}
+                      {hasRrc    && <th className="px-2 py-1 font-semibold text-left">Dir</th>}
+                      {hasRrc    && <th className="px-2 py-1 font-semibold text-left">ChnType</th>}
+                      {hasRrc    && <th className="px-2 py-1 font-semibold text-left">Msg</th>}
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/50">
+                    {enriched.map((ev, i) => {
+                      const phaseColor =
+                        ev.phase === "before" ? "text-amber-400" :
+                        ev.phase === "after"  ? "text-orange-400" :
+                        "text-primary";
+                      const typeColor =
+                        ev.type === "lte_paging_edrx" ? "text-cyan-400" :
+                        ev.type === "nr_rrc_paging"   ? "text-purple-400" :
+                        "text-emerald-400";
+                      const d = ev.details;
+                      const x = ev.extra;
+                      return (
+                        <tr key={i} className="hover:bg-muted/40 transition-colors">
+                          <td className={`px-2 py-0.5 font-semibold ${phaseColor}`}>{ev.phase}</td>
+                          <td className="px-2 py-0.5 font-mono whitespace-nowrap">
+                            {ev.time ? new Date(ev.time).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}
+                          </td>
+                          <td className="px-2 py-0.5 font-mono text-right">
+                            {ev.secondsFromCallStart != null ? `${ev.secondsFromCallStart > 0 ? "+" : ""}${ev.secondsFromCallStart.toFixed(1)}s` : "—"}
+                          </td>
+                          <td className={`px-2 py-0.5 font-mono text-[10px] ${typeColor}`}>
+                            {ev.type === "lte_paging_edrx" ? "LTE eDRX" : ev.type === "lte_rrc_paging" ? "LTE RRC" : "NR RRC"}
+                          </td>
+                          <td className="px-2 py-0.5 max-w-[180px] truncate" title={x?.MsgTypeName || ev.title}>{x?.MsgTypeName || ev.title}</td>
+                          {hasEarfcn && <td className="px-2 py-0.5 font-mono">{d.EARFCN ?? d.Freq ?? "—"}</td>}
+                          {hasPci    && <td className="px-2 py-0.5 font-mono">{d.PCI ?? d.PhyCellId ?? x?.PhyCellId ?? "—"}</td>}
+                          {hasCycle  && <td className="px-2 py-0.5 font-mono text-[10px]">{d.PagingCycleDecoded != null ? `${d.PagingCycleDecoded} ms` : x?.EDRXCycleLength != null ? `${x.EDRXCycleLength} ms` : "—"}</td>}
+                          {hasNb     && <td className="px-2 py-0.5 font-mono text-[10px]">{d.NbDecoded ?? "—"}</td>}
+                          {hasEdrx   && <td className="px-2 py-0.5 font-mono text-[10px]">{x?.EDRXPTWLength ?? "—"}</td>}
+                          {hasEdrx   && <td className="px-2 py-0.5 font-mono text-[10px]">{x?.EDRXPageStartOffset ?? "—"}</td>}
+                          {hasEdrx   && <td className="px-2 py-0.5 font-mono text-[10px]">{x?.EDRXPageEndOffset ?? "—"}</td>}
+                          {hasEdrx   && <td className="px-2 py-0.5 font-mono text-[10px]">{x?.EDRXHyperFrameOffset ?? "—"}</td>}
+                          {hasRrc    && <td className="px-2 py-0.5">{x?.Direction ?? "—"}</td>}
+                          {hasRrc    && <td className="px-2 py-0.5">{x?.ChnType ?? "—"}</td>}
+                          {hasRrc    && <td className="px-2 py-0.5 font-mono text-[10px] max-w-[280px] truncate" title={x?.Msg ?? ""}>{x?.Msg ?? "—"}</td>}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            );
+          })()}
+
+          {pagingData.summary.totalPagingEvents === 0 && (
+            <p className="text-xs text-muted-foreground">Δεν βρέθηκαν paging events στο παράθυρο ±{60}s.</p>
+          )}
+        </div>
+      )}
+      {/* ── Scanner / Device Info ── */}
+      {deviceInfo && (
+        <div className="bg-card border border-border rounded-lg p-3 space-y-3">
+          <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+            <Signal className="h-4 w-4 text-primary" />
+            Scanner &amp; Κινητό
+          </h3>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* A-side */}
+            <div className="rounded border border-border/60 bg-muted/20 p-2 space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-primary mb-1.5">A-Side</p>
+              {(() => {
+                const d = deviceInfo.aSideDevice;
+                const f = deviceInfo.fileInfo;
+                const rows: [string, string | null | undefined][] = [
+                  ["Device", d?.Model ?? f.ASideDevice],
+                  ["IMEI", d?.IMEI ?? f.IMEI],
+                  ["IMSI", d?.IMSI ?? f.IMSI],
+                  ["Number", d?.Number ?? f.ASideNumber],
+                  ["OS", d?.OS ?? null],
+                  ["Firmware", d?.Firmware ?? f.FirmwareV],
+                  ["BaseBand", d?.BaseBand ?? null],
+                  ["DeviceType", d?.DeviceType ?? null],
+                  ["RF Manufacturer", d?.RFManufacturer ?? null],
+                  ["RF Model", d?.RFModel ?? null],
+                  ["Serial", d?.SerialNumber ?? null],
+                  ["SW Version", f.SWVersion],
+                  ["MF Version", f.MFVersion],
+                  ["Product Ver.", f.ProductVersion],
+                  ["File", f.ASideFileName],
+                  ["Location", f.ASideLocation],
+                ];
+                return rows
+                  .filter(([, v]) => v != null && v !== "")
+                  .map(([label, value]) => (
+                    <div key={label} className="flex items-start gap-2 text-xs">
+                      <span className="text-muted-foreground w-28 shrink-0">{label}</span>
+                      <span className="font-mono text-foreground break-all">{value}</span>
+                    </div>
+                  ));
+              })()}
+            </div>
+
+            {/* B-side */}
+            <div className="rounded border border-border/60 bg-muted/20 p-2 space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-accent mb-1.5">B-Side</p>
+              {(() => {
+                const d = deviceInfo.bSideDevice;
+                const f = deviceInfo.fileInfo;
+                const rows: [string, string | null | undefined][] = [
+                  ["Device", d?.Model ?? f.BSideDevice],
+                  ["IMEI", d?.IMEI ?? null],
+                  ["IMSI", d?.IMSI ?? null],
+                  ["Number", d?.Number ?? f.BSideNumber],
+                  ["OS", d?.OS ?? null],
+                  ["Firmware", d?.Firmware ?? null],
+                  ["BaseBand", d?.BaseBand ?? null],
+                  ["DeviceType", d?.DeviceType ?? null],
+                  ["RF Manufacturer", d?.RFManufacturer ?? null],
+                  ["RF Model", d?.RFModel ?? null],
+                  ["Serial", d?.SerialNumber ?? null],
+                  ["File", f.BSideFileName],
+                  ["Location", f.BSideLocation],
+                ];
+                const visible = rows.filter(([, v]) => v != null && v !== "");
+                if (visible.length === 0) {
+                  return <p className="text-xs text-muted-foreground">Δεν υπάρχουν δεδομένα B-side.</p>;
+                }
+                return visible.map(([label, value]) => (
+                  <div key={label} className="flex items-start gap-2 text-xs">
+                    <span className="text-muted-foreground w-28 shrink-0">{label}</span>
+                    <span className="font-mono text-foreground break-all">{value}</span>
+                  </div>
+                ));
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
     </motion.div>
   );
 };

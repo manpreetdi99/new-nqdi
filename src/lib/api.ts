@@ -127,6 +127,47 @@ export async function fetchAllCalls(
   return json.rows;
 }
 
+export interface DataCallRow {
+  Location: string | null;
+  SessionId: string;
+  TestId: number | null;
+  callStartTimeStamp: string | null;
+  testType: string | null;
+  direction: string | null;
+  status: string | null;
+  scoringStatus: string | null;
+  host: string | null;
+  pingRttAvg: number | null;
+  throughputKbps: number | null;
+  capacityThroughputKbps: number | null;
+  youtubeMos: number | null;
+  youtubeInterruptions: number | null;
+  technology: string | null;
+  startTechnology: string | null;
+  CollectionName: string | null;
+  ASideFileName: string | null;
+  isValid: number | null;
+  comment: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+export async function fetchDataCalls(
+  database: string,
+  collections: string[] = [],
+  locations: string[] = [],
+): Promise<DataCallRow[]> {
+  const params = new URLSearchParams({ database });
+  for (const collection of collections) {
+    if (collection) params.append("collection", collection);
+  }
+  for (const location of locations) {
+    params.append("location", location);
+  }
+  const json = await requestJson<{ rows: DataCallRow[] }>(`/api/data_calls?${params.toString()}`);
+  return json.rows;
+}
+
 export async function fetchLteValues(
   database: string,
   session_id: string
@@ -275,4 +316,116 @@ export async function fetchTracelogValues(
   const params = new URLSearchParams({ database });
   if (session_id) params.append("session_id", session_id);
   return requestJson(`/api/tracelog_values?${params.toString()}`);
+}
+
+export async function fetchCallContextSignal(
+  database: string,
+  session_id: string,
+  window_sec = 10
+): Promise<{ signal: any[] }> {
+  const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
+  return requestJson(`/api/call_context_signal?${params.toString()}`);
+}
+
+export async function fetchCallContextTechnology(
+  database: string,
+  session_id: string,
+  window_sec = 10
+): Promise<{ technology: any[] }> {
+  const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
+  return requestJson(`/api/call_context_technology?${params.toString()}`);
+}
+
+export interface PagingTimelineEvent {
+  phase: "before" | "during" | "after";
+  time: string | null;
+  secondsFromCallStart: number | null;
+  type: "lte_paging_edrx" | "lte_rrc_paging" | "nr_rrc_paging";
+  title: string;
+  details: Record<string, any>;
+}
+
+export interface CallPagingInfoResponse {
+  callWindow: Record<string, any> | null;
+  ltePagingEDRX: Record<string, any>[];
+  lteRrcPaging: Record<string, any>[];
+  nrRrcPaging: Record<string, any>[];
+  timeline: PagingTimelineEvent[];
+  summary: {
+    ltePagingEDRX: number;
+    lteRrcPaging: number;
+    nrRrcPaging: number;
+    totalPagingEvents: number;
+  };
+  message?: string;
+}
+
+export interface CallDeviceInfo {
+  fileInfo: {
+    ASideDevice: string | null;
+    BSideDevice: string | null;
+    ASideNumber: string | null;
+    BSideNumber: string | null;
+    IMEI: string | null;
+    FirmwareV: string | null;
+    IMSI: string | null;
+    ProductVersion: string | null;
+    MFVersion: string | null;
+    SWVersion: string | null;
+    ASideFileName: string | null;
+    BSideFileName: string | null;
+    ASideLocation: string | null;
+    BSideLocation: string | null;
+  };
+  aSideDevice: {
+    Model: string | null;
+    IMEI: string | null;
+    IMSI: string | null;
+    Firmware: string | null;
+    Number: string | null;
+    Side: string | null;
+    DeviceType: string | null;
+    RFManufacturer: string | null;
+    RFModel: string | null;
+    SerialNumber: string | null;
+    OS: string | null;
+    BaseBand: string | null;
+  } | null;
+  bSideDevice: {
+    Model: string | null;
+    IMEI: string | null;
+    IMSI: string | null;
+    Firmware: string | null;
+    Number: string | null;
+    Side: string | null;
+    DeviceType: string | null;
+    RFManufacturer: string | null;
+    RFModel: string | null;
+    SerialNumber: string | null;
+    OS: string | null;
+    BaseBand: string | null;
+  } | null;
+}
+
+export async function fetchCallDeviceInfo(
+  database: string,
+  session_id: string
+): Promise<CallDeviceInfo> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/call_device_info?${params.toString()}`);
+}
+
+export async function fetchCallPagingInfo(
+  database: string,
+  session_id: string,
+  before_seconds = 60,
+  after_seconds = 60
+): Promise<CallPagingInfoResponse> {
+  const params = new URLSearchParams({
+    database,
+    session_id,
+    before_seconds: String(before_seconds),
+    after_seconds: String(after_seconds),
+  });
+  return requestJson(`/api/call_paging_info?${params.toString()}`);
 }
