@@ -9,6 +9,7 @@ import BenchmarkCharts from "@/components/BenchmarkCharts";
 import StatsCards from "@/components/StatsCards";
 import CallDetail from "@/components/CallDetail";
 import DataSessionDetail from "@/components/DataSessionDetail";
+import DataSessionsList from "@/components/DataSessionsList";
 import CallsMap from "@/components/CallsMap";
 import AntennasMap from "@/components/AntennasMap";
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
@@ -1093,7 +1094,7 @@ const Index = () => {
                 </div>
               </div>
 
-              {/* ── DATA CALLS TABLE (distinct sessions) ── */}
+              {/* ── DATA CALLS LIST (distinct sessions) ── */}
               <div className="bg-card border border-border rounded-lg overflow-hidden">
                 <div className="px-4 py-3 border-b border-border">
                   <h2 className="text-sm font-semibold text-foreground">Data Calls (Mobile)</h2>
@@ -1101,66 +1102,20 @@ const Index = () => {
                     {dataCallsLoading ? "Loading..." : `${groupedDataSessions.length} sessions`}
                   </p>
                 </div>
-                <div className="overflow-x-auto">
-                  <table className="w-full text-xs">
-                    <thead>
-                      <tr className="border-b border-border bg-muted/30 text-left text-muted-foreground uppercase tracking-wider">
-                        <th className="px-2 py-2 font-semibold">Location</th>
-                        <th className="px-2 py-2 font-semibold">SessionId</th>
-                        <th className="px-2 py-2 font-semibold">Start Time</th>
-                        <th className="px-2 py-2 font-semibold">Technology</th>
-                        <th className="px-2 py-2 font-semibold">Tests</th>
-                        <th className="px-2 py-2 font-semibold">Pass / Fail</th>
-                        <th className="px-2 py-2 font-semibold">Comment</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {!dataCallsLoading && groupedDataSessions.length === 0 && (
-                        <tr>
-                          <td colSpan={7} className="px-2 py-6 text-center text-muted-foreground">
-                            Select a collection to load data calls.
-                          </td>
-                        </tr>
-                      )}
-                      {groupedDataSessions.map(({ sessionId, first, tests, passCount, failCount }) => {
-                        const isSelected = selectedDataSessionId === sessionId;
-                        const rowBg =
-                          first?.isValid === 0
-                            ? "bg-red-500/25 hover:bg-red-500/35 border-red-500/40"
-                            : failCount > 0
-                            ? "bg-orange-500/15 hover:bg-orange-500/25"
-                            : "hover:bg-muted/20";
-                        return (
-                          <tr
-                            key={sessionId}
-                            className={`border-b border-border/60 cursor-pointer transition-colors ${rowBg} ${isSelected ? "ring-1 ring-inset ring-primary" : ""}`}
-                            onClick={() => {
-                              setSelectedDataSessionId(sessionId);
-                              setActiveTab("data-detail");
-                            }}
-                          >
-                            <td className="px-2 py-2 text-foreground">
-                              <div className="flex items-center gap-1">
-                                {isSelected && <ChevronRight className="h-4 w-4 text-primary" />}
-                                {first?.Location ?? "N/A"}
-                              </div>
-                            </td>
-                            <td className="px-2 py-2 font-mono text-foreground">{sessionId}</td>
-                            <td className="px-2 py-2 font-mono text-foreground whitespace-nowrap">{formatCallStartTime(first?.callStartTimeStamp)}</td>
-                            <td className="px-2 py-2 text-foreground">{first?.technology ?? first?.startTechnology ?? "N/A"}</td>
-                            <td className="px-2 py-2 text-foreground">{tests.length}</td>
-                            <td className="px-2 py-2">
-                              <span className="text-green-400">{passCount}</span>
-                              {" / "}
-                              <span className="text-red-400">{failCount}</span>
-                            </td>
-                            <td className="px-2 py-2 text-muted-foreground">{first?.comment ?? ""}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                </div>
+                {!dataCallsLoading && groupedDataSessions.length === 0 ? (
+                  <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+                    Select a collection to load data calls.
+                  </p>
+                ) : (
+                  <DataSessionsList
+                    sessions={groupedDataSessions}
+                    selectedSessionId={selectedDataSessionId}
+                    onSelectSession={(id) => {
+                      setSelectedDataSessionId(id);
+                      setActiveTab("data-detail");
+                    }}
+                  />
+                )}
               </div>
               </div>
             </div>
@@ -1182,6 +1137,7 @@ const Index = () => {
                 sessionId={selectedDataSessionId}
                 tests={selectedDataSessionTests}
                 onBack={() => setActiveTab("calls")}
+                database={selectedDatabase}
               />
             ) : (
               <div className="flex flex-col items-center justify-center py-20 text-center">
