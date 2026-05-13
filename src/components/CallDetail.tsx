@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchCallPagingInfo, fetchCallDeviceInfo, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallPagingInfoResponse, type PagingTimelineEvent, type CallDeviceInfo } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchCallPagingInfo, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchGsmScannerRaw, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallPagingInfoResponse, type PagingTimelineEvent, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 //ReferenceLine για γραμμες στο διαγραμμα, πχ για thresholds. 
@@ -127,6 +127,11 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
   const [contextTechnology, setContextTechnology] = useState<any[]>([]);
   const [pagingData, setPagingData] = useState<CallPagingInfoResponse | null>(null);
   const [deviceInfo, setDeviceInfo] = useState<CallDeviceInfo | null>(null);
+  const [lteMeasComp, setLteMeasComp] = useState<{ aSide: LteMeasurementStat[]; bSide: LteMeasurementStat[] } | null>(null);
+  const [lteScannerComp, setLteScannerComp] = useState<{ aSide: LteScannerStat[]; bSide: LteScannerStat[] } | null>(null);
+  const [scannerRawA, setScannerRawA] = useState<any[]>([]);
+  const [scannerRawB, setScannerRawB] = useState<any[]>([]);
+  const [gsmScannerRaw, setGsmScannerRaw] = useState<any[]>([]);
 
   const isGSMMode = call.callMode === "CS" || (call.callMode === "SRVCC" && srvccNetwork === "GSM");
   const [isLoadingRadio, setIsLoadingRadio] = useState(false);
@@ -174,7 +179,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
-        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, deviceRes] = await Promise.allSettled([
+        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, deviceRes, lteMeasCompRes, lteScannerCompRes, scannerRawRes, gsmScannerRes] = await Promise.allSettled([
           call.callMode !== "CS" ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
           fetchMosValues(database, call.callId),
@@ -189,6 +194,10 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           fetchCallContextTechnology(database, call.callId),
           fetchCallPagingInfo(database, call.callId),
           fetchCallDeviceInfo(database, call.callId),
+          call.callMode !== "CS" ? fetchLteMeasurementComparison(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
+          call.callMode !== "CS" ? fetchLteScannerMeasurement(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
+          call.callMode !== "CS" ? fetchLteScannerRaw(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
+          call.callMode === "CS" ? fetchGsmScannerRaw(database, call.callId) : Promise.resolve([]),
         ]);
 
         if (lteRes.status === "fulfilled") {
@@ -262,6 +271,33 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         } else {
           setDeviceInfo(null);
         }
+
+        if (lteMeasCompRes.status === "fulfilled") {
+          setLteMeasComp(lteMeasCompRes.value as any);
+        } else {
+          setLteMeasComp(null);
+        }
+
+        if (lteScannerCompRes.status === "fulfilled") {
+          setLteScannerComp(lteScannerCompRes.value as any);
+        } else {
+          setLteScannerComp(null);
+        }
+
+        if (scannerRawRes.status === "fulfilled") {
+          const raw = scannerRawRes.value as any;
+          setScannerRawA(raw.aSide ?? []);
+          setScannerRawB(raw.bSide ?? []);
+        } else {
+          setScannerRawA([]);
+          setScannerRawB([]);
+        }
+
+        if (gsmScannerRes.status === "fulfilled") {
+          setGsmScannerRaw((gsmScannerRes.value as any) ?? []);
+        } else {
+          setGsmScannerRaw([]);
+        }
       } catch (err) {
         console.error("Failed to load metrics", err);
       } finally {
@@ -271,6 +307,11 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     if (call.callId && database) {
       setSelectedLteSide("A");
       setSrvccNetwork("LTE");
+      setLteMeasComp(null);
+      setLteScannerComp(null);
+      setScannerRawA([]);
+      setScannerRawB([]);
+      setGsmScannerRaw([]);
       loadRadio();
     }
   }, [database, call.callId, call.callMode]);
@@ -395,6 +436,71 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       maxRsrq: rsrqVals.length ? Math.max(...rsrqVals) : null,
     };
   }, [bSideLteValues]);
+
+  // Pre-index scanner rows by EARFCN for fast nearest-time lookup
+  const activeScannerRaw = selectedLteSide === "B"
+    ? (scannerRawB.length > 0 ? scannerRawB : scannerRawA)
+    : scannerRawA;
+
+  const { scannerByKey, scannerByEarfcnOnly } = useMemo(() => {
+    const byKey = new Map<string, any[]>();
+    const byEarfcn = new Map<number, any[]>();
+    for (const row of activeScannerRaw) {
+      const entry = { ...row, _ts: new Date(row.FullDate).getTime() };
+      const key = `${row.EARFCN}_${row.PCI}`;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key)!.push(entry);
+      const e = row.EARFCN as number;
+      if (!byEarfcn.has(e)) byEarfcn.set(e, []);
+      byEarfcn.get(e)!.push(entry);
+    }
+    byKey.forEach(rows => rows.sort((a, b) => a._ts - b._ts));
+    byEarfcn.forEach(rows => rows.sort((a, b) => a._ts - b._ts));
+    return { scannerByKey: byKey, scannerByEarfcnOnly: byEarfcn };
+  }, [activeScannerRaw]);
+
+  const scannerByEarfcn = scannerByKey;
+
+  const findNextInList = (rows: any[], ts: number): any | null => {
+    let lo = 0, hi = rows.length - 1, result = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (rows[mid]._ts >= ts) { result = mid; hi = mid - 1; }
+      else lo = mid + 1;
+    }
+    return result >= 0 ? rows[result] : null;
+  };
+
+  const findNearestScanner = (earfcn: number | null, pci: number | null, msgTime: string | null): any | null => {
+    if (earfcn == null || msgTime == null) return null;
+    const ts = new Date(msgTime).getTime();
+    const byPci = scannerByKey.get(`${earfcn}_${pci}`);
+    if (byPci && byPci.length > 0) return findNextInList(byPci, ts);
+    const byEarfcn = scannerByEarfcnOnly.get(earfcn);
+    if (byEarfcn && byEarfcn.length > 0) return findNextInList(byEarfcn, ts);
+    return null;
+  };
+
+  // Precompute GSM scanner match per measurement row — O(n log m) once, O(1) in render
+  const gsmScannerMatched = useMemo(() => {
+    if (gsmScannerRaw.length === 0 || !isGSMMode) return [] as (any | null)[];
+    const sorted = gsmScannerRaw
+      .map(r => ({ ...r, _ts: new Date(r.FullDate).getTime() }))
+      .sort((a, b) => a._ts - b._ts);
+    return activeRadioValues.map(val => {
+      if (!val.MsgTime) return null;
+      const ts = new Date(val.MsgTime).getTime();
+      let lo = 0, hi = sorted.length - 1, best = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (sorted[mid]._ts <= ts) { best = mid; lo = mid + 1; }
+        else hi = mid - 1;
+      }
+      const a = sorted[best];
+      const b = sorted[best + 1];
+      return b && Math.abs(b._ts - ts) < Math.abs(a._ts - ts) ? b : a;
+    });
+  }, [gsmScannerRaw, activeRadioValues, isGSMMode]);
 
   const isCosmoteFree = call.region?.toLowerCase().includes("cosmote free");
 
@@ -1008,9 +1114,15 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                 <table className="w-full text-xs text-center">
                   <thead className="sticky top-0 bg-muted border-b border-border z-10">
                     <tr>
-                      <th className="px-1 py-1 font-semibold">SessionId</th>
-                      <th className="px-1 py-1 font-semibold">RxLevSub</th>
-                      <th className="px-1 py-1 font-semibold">RxQualSub</th>
+                      <th className="px-1 py-1 font-semibold text-left">BCCH</th>
+                      <th className="px-1 py-1 font-semibold">
+                        <div className="text-primary">RxLev</div>
+                        {gsmScannerMatched.length > 0 && <div className="text-[9px] text-cyan-400 font-normal leading-none">UE · SCN</div>}
+                      </th>
+                      <th className="px-1 py-1 font-semibold">RxQual</th>
+                      {gsmScannerMatched.length > 0 && (
+                        <th className="px-1 py-1 font-semibold text-muted-foreground/60" title="Χρονική απόσταση UE → scanner sample">Δt(s)</th>
+                      )}
                       <th className="px-1 py-1 font-semibold">MsgTime</th>
                     </tr>
                   </thead>
@@ -1019,21 +1131,40 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                       const rxAbs = Math.abs(Number(val.RxLevSub));
                       const rxColor = rxAbs >= 95 ? "text-destructive" : rxAbs >= 90 ? "text-warning" : "text-primary";
                       const rxqAbs = Math.abs(Number(val.RxQualSub));
-                      const rsrqColor = rxqAbs >= 6 ? "text-destructive" : rxqAbs >= 5 ? "text-warning" : "text-primary";
+                      const rxqColor = rxqAbs >= 6 ? "text-destructive" : rxqAbs >= 5 ? "text-warning" : "text-primary";
                       const isActive = hoveredRadioIndex === idx;
+
+                      const scn = gsmScannerMatched[idx] ?? null;
+                      const dtSec = scn && val.MsgTime ? Math.abs(scn._ts - new Date(val.MsgTime).getTime()) / 1000 : null;
+                      const dtColor = dtSec == null ? "" : dtSec <= 2 ? "text-green-400" : dtSec <= 10 ? "text-yellow-400" : "text-red-400";
+                      const scnRxAbs = scn ? Math.abs(Number(scn.RxLev)) : null;
+                      const scnRxColor = scnRxAbs == null ? "" : scnRxAbs >= 95 ? "text-destructive" : scnRxAbs >= 90 ? "text-warning" : "text-cyan-400";
 
                       return (
                         <tr
                           key={idx}
                           style={isActive ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" } : undefined}
-                          className={`transition-all duration-100 cursor-pointer ${isActive ? "bg-cyan-500/10" : "hover:bg-muted/40"
-                            }`}
+                          className={`transition-all duration-100 cursor-pointer ${isActive ? "bg-cyan-500/10" : "hover:bg-muted/40"}`}
                           onMouseEnter={() => { setHoveredTimeStr(null); setHoveredRadioIndex(idx); }}
                           onMouseLeave={() => setHoveredRadioIndex(null)}
                         >
-                          <td className="px-1 py-0.5 font-mono">{val.SessionId}</td>
-                          <td className={`px-1 py-0.5 font-mono font-bold ${rxColor}`}>{val.RxLevSub}</td>
-                          <td className={`px-1 py-0.5 font-mono font-bold ${rsrqColor}`}>{val.RxQualSub}</td>
+                          <td className="px-1 py-0.5 font-mono text-left font-bold">{scn?.BCCH ?? "—"}</td>
+                          <td className="px-1 py-0.5 font-mono leading-tight">
+                            {val.RxLevSub != null ? (
+                              <>
+                                <div className={`font-bold ${rxColor}`}>{val.RxLevSub}</div>
+                                {scn?.RxLev != null && <div className={`text-[10px] ${scnRxColor}`}>{scn.RxLev}</div>}
+                              </>
+                            ) : (
+                              <div className="text-muted-foreground/40">—</div>
+                            )}
+                          </td>
+                          <td className={`px-1 py-0.5 font-mono font-bold ${rxqColor}`}>{val.RxQualSub}</td>
+                          {gsmScannerMatched.length > 0 && (
+                            <td className={`px-1 py-0.5 font-mono ${dtColor}`} title={scn ? `Scanner: ${scn.FullDate}` : ""}>
+                              {dtSec != null ? dtSec.toFixed(1) : "—"}
+                            </td>
+                          )}
                           <td className="px-1 py-0.5">{formatDateTime(val.MsgTime)}</td>
                         </tr>
                       );
@@ -1044,9 +1175,18 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                 <table className="w-full text-xs text-center">
                   <thead className="sticky top-0 bg-muted border-b border-border z-10">
                     <tr>
-                      <th className="px-1 py-1 font-semibold">EARFCN</th>
-                      <th className="px-1 py-1 font-semibold">RSRP</th>
-                      <th className="px-1 py-1 font-semibold">RSRQ</th>
+                      <th className="px-1 py-1 font-semibold text-left">EARFCN</th>
+                      <th className="px-1 py-1 font-semibold">
+                        <div className="text-primary">RSRP</div>
+                        {scannerByEarfcn.size > 0 && <div className="text-[9px] text-cyan-400 font-normal leading-none">UE · SCN</div>}
+                      </th>
+                      <th className="px-1 py-1 font-semibold">
+                        <div className="text-primary">RSRQ</div>
+                        {scannerByEarfcn.size > 0 && <div className="text-[9px] text-cyan-400 font-normal leading-none">UE · SCN</div>}
+                      </th>
+                      {scannerByEarfcn.size > 0 && <>
+                        <th className="px-1 py-1 font-semibold text-muted-foreground/60" title="Χρονική απόσταση UE → scanner sample">Δt(s)</th>
+                      </>}
                       <th className="px-1 py-1 font-semibold">MsgTime</th>
                     </tr>
                   </thead>
@@ -1058,18 +1198,51 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                       const rsrqColor = rsrqAbs >= 18 ? "text-destructive" : rsrqAbs >= 16 ? "text-warning" : "text-primary";
                       const isActive = hoveredRadioIndex === idx;
 
+                      const scn = scannerByEarfcn.size > 0
+                        ? findNearestScanner(val.EARFCN, val.PhyCellId, val.MsgTime)
+                        : null;
+                      const dtSec = scn && val.MsgTime ? Math.abs(scn._ts - new Date(val.MsgTime).getTime()) / 1000 : null;
+                      const dtColor = dtSec == null ? "" : dtSec <= 2 ? "text-green-400" : dtSec <= 10 ? "text-yellow-400" : "text-red-400";
+                      const scnRsrpAbs = scn ? Math.abs(Number(scn.RSRP)) : null;
+                      const scnRsrpColor = scnRsrpAbs == null ? "" : scnRsrpAbs >= 120 ? "text-destructive" : scnRsrpAbs >= 115 ? "text-warning" : "text-cyan-400";
                       return (
                         <tr
                           key={idx}
                           style={isActive ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" } : undefined}
-                          className={`transition-all duration-100 cursor-pointer ${isActive ? "bg-cyan-500/10" : "hover:bg-muted/40"
-                            }`}
+                          className={`transition-all duration-100 cursor-pointer ${isActive ? "bg-cyan-500/10" : "hover:bg-muted/40"}`}
                           onMouseEnter={() => { setHoveredTimeStr(null); setHoveredRadioIndex(idx); }}
                           onMouseLeave={() => setHoveredRadioIndex(null)}
                         >
-                          <td className="px-1 py-0.5 font-mono">{val.EARFCN}</td>
-                          <td className={`px-1 py-0.5 font-mono font-bold ${rsrpColor}`}>{val.RSRP}</td>
-                          <td className={`px-1 py-0.5 font-mono font-bold ${rsrqColor}`}>{val.RSRQ}</td>
+                          <td className="px-1 py-0.5 font-mono text-left">{val.EARFCN}</td>
+                          <td className="px-1 py-0.5 font-mono leading-tight">
+                            {val.RSRP != null ? (
+                              <>
+                                <div className={`font-bold ${rsrpColor}`}>{val.RSRP}</div>
+                                {scn?.RSRP != null && <div className={`text-[10px] ${scnRsrpColor}`}>{Number(scn.RSRP).toFixed(1)}</div>}
+                              </>
+                            ) : scn?.RSRP != null ? (
+                              <div className={`font-bold ${scnRsrpColor}`}>{Number(scn.RSRP).toFixed(1)}</div>
+                            ) : (
+                              <div className="text-muted-foreground/40">—</div>
+                            )}
+                          </td>
+                          <td className="px-1 py-0.5 font-mono leading-tight">
+                            {val.RSRQ != null ? (
+                              <>
+                                <div className={`font-bold ${rsrqColor}`}>{val.RSRQ}</div>
+                                {scn?.RSRQ != null && <div className="text-[10px] text-cyan-400/80">{Number(scn.RSRQ).toFixed(1)}</div>}
+                              </>
+                            ) : scn?.RSRQ != null ? (
+                              <div className="font-bold text-cyan-400/80">{Number(scn.RSRQ).toFixed(1)}</div>
+                            ) : (
+                              <div className="text-muted-foreground/40">—</div>
+                            )}
+                          </td>
+                          {scannerByEarfcn.size > 0 && <>
+                            <td className={`px-1 py-0.5 font-mono ${dtColor}`} title={scn ? `Scanner: ${scn.FullDate}` : ""}>
+                              {dtSec != null ? dtSec.toFixed(1) : "—"}
+                            </td>
+                          </>}
                           <td className="px-1 py-0.5">{formatDateTime(val.MsgTime)}</td>
                         </tr>
                       );
@@ -1082,6 +1255,52 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
             <p className="text-xs text-muted-foreground">Δεν βρέθηκαν δεδομένα για αυτήν την κλήση.</p>
           )}
         </div>
+
+        {/* GSM Scanner panel — μόνο για CS κλήσεις */}
+        {call.callMode === "CS" && (
+          <div className="bg-card border border-border rounded-lg p-2">
+            <h3 className="text-xs font-semibold text-foreground mb-1 flex items-center gap-1.5">
+              <Signal className="h-3 w-3 text-primary" />
+              GSM Scanner
+            </h3>
+            {isLoadingRadio ? (
+              <p className="text-xs text-muted-foreground">Φόρτωση δεδομένων...</p>
+            ) : gsmScannerRaw.length > 0 ? (
+              <div className="overflow-x-auto max-h-[260px] overflow-y-auto">
+                <table className="w-full text-xs text-center">
+                  <thead className="sticky top-0 bg-muted border-b border-border z-10">
+                    <tr>
+                      <th className="px-1 py-1 font-semibold text-left">BCCH</th>
+                      <th className="px-1 py-1 font-semibold">RFBand</th>
+                      <th className="px-1 py-1 font-semibold">BSIC</th>
+                      <th className="px-1 py-1 font-semibold">RxLev</th>
+                      <th className="px-1 py-1 font-semibold">CGI</th>
+                      <th className="px-1 py-1 font-semibold">FullDate</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/50">
+                    {gsmScannerRaw.map((row, idx) => {
+                      const rxAbs = Math.abs(Number(row.RxLev));
+                      const rxColor = rxAbs >= 95 ? "text-destructive" : rxAbs >= 90 ? "text-warning" : "text-primary";
+                      return (
+                        <tr key={idx} className="hover:bg-muted/40 cursor-default">
+                          <td className="px-1 py-0.5 font-mono text-left font-bold">{row.BCCH}</td>
+                          <td className="px-1 py-0.5 font-mono">{row.RFBand}</td>
+                          <td className="px-1 py-0.5 font-mono">{row.BSIC ?? "—"}</td>
+                          <td className={`px-1 py-0.5 font-mono font-bold ${rxColor}`}>{row.RxLev}</td>
+                          <td className="px-1 py-0.5 font-mono text-muted-foreground text-[10px]">{row.CGI ?? "—"}</td>
+                          <td className="px-1 py-0.5">{row.FullDate ? formatDateTime(row.FullDate) : "—"}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">Δεν υπάρχουν scanner δεδομένα.</p>
+            )}
+          </div>
+        )}
       </div>
 
       {/* ── Συμπεριφορά δικτύου πριν / κατά / μετά κλήση ── */}
