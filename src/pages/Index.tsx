@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, Fragment } from "react";
 import { motion } from "framer-motion";
-import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, SlidersHorizontal, X } from "lucide-react";
+import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, SlidersHorizontal, X, Wifi } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import QueryEditor from "@/components/QueryEditor";
 import ResultsTable from "@/components/ResultsTable";
@@ -8,6 +8,7 @@ import type { BenchmarkResult } from "@/types/benchmark";
 import BenchmarkCharts from "@/components/BenchmarkCharts";
 import StatsCards from "@/components/StatsCards";
 import CallDetail from "@/components/CallDetail";
+import DataSessionDetail from "@/components/DataSessionDetail";
 import CallsMap from "@/components/CallsMap";
 import AntennasMap from "@/components/AntennasMap";
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
@@ -17,11 +18,13 @@ import { Badge } from "@/components/ui/badge";
 import {
   ApiClientError,
   fetchAllCalls,
+  fetchDataCalls,
   fetchCollectionNames,
   fetchDatabases,
   fetchLocations,
   runBenchmarkApi,
   type AllCallsRow,
+  type DataCallRow,
 } from "@/lib/api";
 
 const formatApiError = (error: unknown, fallbackTitle: string) => {
@@ -170,6 +173,9 @@ const Index = () => {
   const [selectedLocations, setSelectedLocations] = useLocalStorage<string[]>("perf-insights-locations", []);
   const [callsLoading, setCallsLoading] = useState(false);
   const [allCallsRows, setAllCallsRows] = useState<AllCallsRow[]>([]);
+  const [dataCallsRows, setDataCallsRows] = useState<DataCallRow[]>([]);
+  const [dataCallsLoading, setDataCallsLoading] = useState(false);
+  const [selectedDataSessionId, setSelectedDataSessionId] = useState<string | null>(null);
   const [callRecords, setCallRecords] = useState<CallRecord[]>([]);
 
   const [results, setResults] = useState<BenchmarkResult[]>([]);
@@ -335,43 +341,53 @@ const Index = () => {
   }, [selectedDatabase, selectedCallsCollections]);
 
   useEffect(() => {
-    const loadAllCalls = async () => {
+    const loadAll = async () => {
       if (!selectedDatabase || selectedCallsCollections.length === 0) {
         setAllCallsRows([]);
         setCallRecords([]);
         setSelectedCall(null);
+        setDataCallsRows([]);
         return;
       }
 
-      setCallsLoading(true);
+      const effectiveLocations =
+        selectedLocations.length === 0 || selectedLocations.length === locations.length
+          ? []
+          : selectedLocations;
 
-      try {
-        const effectiveLocations =
-          selectedLocations.length === 0 || selectedLocations.length === locations.length
-            ? []
-            : selectedLocations;
-        const rows = await fetchAllCalls(selectedDatabase, selectedCallsCollections, effectiveLocations);
-        setAllCallsRows(rows);
-        const mapped = mapAllCallsRows(rows);
-        setCallRecords(mapped);
+      setCallsLoading(true);
+      setDataCallsLoading(true);
+
+      const [voiceResult, dataResult] = await Promise.allSettled([
+        fetchAllCalls(selectedDatabase, selectedCallsCollections, effectiveLocations),
+        fetchDataCalls(selectedDatabase, selectedCallsCollections, effectiveLocations),
+      ]);
+
+      if (voiceResult.status === "fulfilled") {
+        setAllCallsRows(voiceResult.value);
+        setCallRecords(mapAllCallsRows(voiceResult.value));
         setSelectedCall(null);
-      } catch (err: any) {
-        console.error("Failed to fetch calls:", err);
+      } else {
+        console.error("Failed to fetch voice calls:", voiceResult.reason);
         setAllCallsRows([]);
         setCallRecords([]);
         setSelectedCall(null);
-        const toastError = formatApiError(err, "All Calls Fetch Failed");
-        toast({
-          title: toastError.title,
-          description: toastError.description,
-          variant: "destructive",
-        });
-      } finally {
-        setCallsLoading(false);
+        const toastError = formatApiError(voiceResult.reason, "All Calls Fetch Failed");
+        toast({ title: toastError.title, description: toastError.description, variant: "destructive" });
       }
+
+      if (dataResult.status === "fulfilled") {
+        setDataCallsRows(dataResult.value);
+      } else {
+        console.error("Failed to fetch data calls:", dataResult.reason);
+        setDataCallsRows([]);
+      }
+
+      setCallsLoading(false);
+      setDataCallsLoading(false);
     };
 
-    loadAllCalls();
+    loadAll();
   }, [selectedDatabase, selectedCallsCollections, selectedLocations, locations]);
 
   const handleRunQueries = async (queries: string[]) => {
@@ -420,6 +436,33 @@ const Index = () => {
     const validIds = new Set(filteredAllCallsRows.map((r) => r.SessionId));
     return callRecords.filter((c) => validIds.has(c.callId));
   }, [callRecords, filteredAllCallsRows, sessionValidFilter, statusFilters]);
+
+  const groupedDataSessions = useMemo(() => {
+    const map = new Map<string, DataCallRow[]>();
+    for (const row of dataCallsRows) {
+      const key = String(row.SessionId);
+      if (!map.has(key)) map.set(key, []);
+      map.get(key)!.push(row);
+    }
+    return Array.from(map.entries()).map(([sessionId, tests]) => ({
+      sessionId,
+      tests,
+      first: tests[0],
+      passCount: tests.filter(r => {
+        const s = (r.scoringStatus ?? r.status ?? "").toLowerCase();
+        return s === "a" || s.includes("success") || s.includes("complet");
+      }).length,
+      failCount: tests.filter(r => {
+        const s = (r.scoringStatus ?? r.status ?? "").toLowerCase();
+        return s.includes("fail") || s === "f";
+      }).length,
+    }));
+  }, [dataCallsRows]);
+
+  const selectedDataSessionTests = useMemo(() => {
+    if (!selectedDataSessionId) return [];
+    return dataCallsRows.filter(r => String(r.SessionId) === selectedDataSessionId);
+  }, [dataCallsRows, selectedDataSessionId]);
 
   return (
     <div className="min-h-screen bg-background">
@@ -646,6 +689,10 @@ const Index = () => {
               </TabsTrigger>
               <TabsTrigger value="map" className="gap-1.5 text-xs">
                 <MapPin className="h-3.5 w-3.5" /> Map
+              </TabsTrigger>
+              <TabsTrigger value="data-detail" className="gap-1.5 text-xs" disabled={!selectedDataSessionId}>
+                <Wifi className="h-3.5 w-3.5" />
+                Data Detail
               </TabsTrigger>
               <TabsTrigger value="detail" className="gap-1.5 text-xs" disabled={!selectedCall}>
                 <BarChart3 className="h-3.5 w-3.5" /> Call Detail
@@ -933,6 +980,7 @@ const Index = () => {
                 </div>
               </aside>
 
+              <div className="space-y-4">
               <div className="bg-card border border-border rounded-lg overflow-hidden">
                 <div className="px-4 py-3 border-b border-border flex items-center justify-between">
                   <div>
@@ -1044,6 +1092,77 @@ const Index = () => {
                   </table>
                 </div>
               </div>
+
+              {/* ── DATA CALLS TABLE (distinct sessions) ── */}
+              <div className="bg-card border border-border rounded-lg overflow-hidden">
+                <div className="px-4 py-3 border-b border-border">
+                  <h2 className="text-sm font-semibold text-foreground">Data Calls (Mobile)</h2>
+                  <p className="text-xs text-muted-foreground">
+                    {dataCallsLoading ? "Loading..." : `${groupedDataSessions.length} sessions`}
+                  </p>
+                </div>
+                <div className="overflow-x-auto">
+                  <table className="w-full text-xs">
+                    <thead>
+                      <tr className="border-b border-border bg-muted/30 text-left text-muted-foreground uppercase tracking-wider">
+                        <th className="px-2 py-2 font-semibold">Location</th>
+                        <th className="px-2 py-2 font-semibold">SessionId</th>
+                        <th className="px-2 py-2 font-semibold">Start Time</th>
+                        <th className="px-2 py-2 font-semibold">Technology</th>
+                        <th className="px-2 py-2 font-semibold">Tests</th>
+                        <th className="px-2 py-2 font-semibold">Pass / Fail</th>
+                        <th className="px-2 py-2 font-semibold">Comment</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {!dataCallsLoading && groupedDataSessions.length === 0 && (
+                        <tr>
+                          <td colSpan={7} className="px-2 py-6 text-center text-muted-foreground">
+                            Select a collection to load data calls.
+                          </td>
+                        </tr>
+                      )}
+                      {groupedDataSessions.map(({ sessionId, first, tests, passCount, failCount }) => {
+                        const isSelected = selectedDataSessionId === sessionId;
+                        const rowBg =
+                          first?.isValid === 0
+                            ? "bg-red-500/25 hover:bg-red-500/35 border-red-500/40"
+                            : failCount > 0
+                            ? "bg-orange-500/15 hover:bg-orange-500/25"
+                            : "hover:bg-muted/20";
+                        return (
+                          <tr
+                            key={sessionId}
+                            className={`border-b border-border/60 cursor-pointer transition-colors ${rowBg} ${isSelected ? "ring-1 ring-inset ring-primary" : ""}`}
+                            onClick={() => {
+                              setSelectedDataSessionId(sessionId);
+                              setActiveTab("data-detail");
+                            }}
+                          >
+                            <td className="px-2 py-2 text-foreground">
+                              <div className="flex items-center gap-1">
+                                {isSelected && <ChevronRight className="h-4 w-4 text-primary" />}
+                                {first?.Location ?? "N/A"}
+                              </div>
+                            </td>
+                            <td className="px-2 py-2 font-mono text-foreground">{sessionId}</td>
+                            <td className="px-2 py-2 font-mono text-foreground whitespace-nowrap">{formatCallStartTime(first?.callStartTimeStamp)}</td>
+                            <td className="px-2 py-2 text-foreground">{first?.technology ?? first?.startTechnology ?? "N/A"}</td>
+                            <td className="px-2 py-2 text-foreground">{tests.length}</td>
+                            <td className="px-2 py-2">
+                              <span className="text-green-400">{passCount}</span>
+                              {" / "}
+                              <span className="text-red-400">{failCount}</span>
+                            </td>
+                            <td className="px-2 py-2 text-muted-foreground">{first?.comment ?? ""}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              </div>
             </div>
           </TabsContent>
 
@@ -1055,6 +1174,23 @@ const Index = () => {
                 setActiveTab("detail");
               }}
             />
+          </TabsContent>
+
+          <TabsContent value="data-detail">
+            {selectedDataSessionId ? (
+              <DataSessionDetail
+                sessionId={selectedDataSessionId}
+                tests={selectedDataSessionTests}
+                onBack={() => setActiveTab("calls")}
+              />
+            ) : (
+              <div className="flex flex-col items-center justify-center py-20 text-center">
+                <Wifi className="h-10 w-10 text-muted-foreground mb-3" />
+                <p className="text-sm text-muted-foreground">
+                  Επιλέξτε μια data session από το tab "All Calls" για να δείτε λεπτομέρειες.
+                </p>
+              </div>
+            )}
           </TabsContent>
 
           <TabsContent value="detail">

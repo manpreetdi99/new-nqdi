@@ -127,6 +127,47 @@ export async function fetchAllCalls(
   return json.rows;
 }
 
+export interface DataCallRow {
+  Location: string | null;
+  SessionId: string;
+  TestId: number | null;
+  callStartTimeStamp: string | null;
+  testType: string | null;
+  direction: string | null;
+  status: string | null;
+  scoringStatus: string | null;
+  host: string | null;
+  pingRttAvg: number | null;
+  throughputKbps: number | null;
+  capacityThroughputKbps: number | null;
+  youtubeMos: number | null;
+  youtubeInterruptions: number | null;
+  technology: string | null;
+  startTechnology: string | null;
+  CollectionName: string | null;
+  ASideFileName: string | null;
+  isValid: number | null;
+  comment: string | null;
+  latitude: number | null;
+  longitude: number | null;
+}
+
+export async function fetchDataCalls(
+  database: string,
+  collections: string[] = [],
+  locations: string[] = [],
+): Promise<DataCallRow[]> {
+  const params = new URLSearchParams({ database });
+  for (const collection of collections) {
+    if (collection) params.append("collection", collection);
+  }
+  for (const location of locations) {
+    params.append("location", location);
+  }
+  const json = await requestJson<{ rows: DataCallRow[] }>(`/api/data_calls?${params.toString()}`);
+  return json.rows;
+}
+
 export async function fetchLteValues(
   database: string,
   session_id: string
