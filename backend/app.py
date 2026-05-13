@@ -1727,6 +1727,282 @@ def get_call_device_info(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/lte_measurement_comparison")
+def get_lte_measurement_comparison(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """LTEMeasurementReport A-side vs B-side grouped by EARFCN+PCI."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        # A-side: aggregate per EARFCN+PCI
+        cursor.execute("""
+            SELECT
+                lmr.EARFCN,
+                lmr.PhyCellId AS PCI,
+                COUNT(*)                        AS samples,
+                ROUND(AVG(lmr.RSRP),  2)        AS avgRSRP,
+                ROUND(MIN(lmr.RSRP),  2)        AS minRSRP,
+                ROUND(MAX(lmr.RSRP),  2)        AS maxRSRP,
+                ROUND(AVG(lmr.RSRQ),  2)        AS avgRSRQ,
+                ROUND(MIN(lmr.RSRQ),  2)        AS minRSRQ,
+                ROUND(MAX(lmr.RSRQ),  2)        AS maxRSRQ,
+                ROUND(AVG(lmr.SINR0), 2)        AS avgSINR0,
+                ROUND(AVG(lmr.SINR1), 2)        AS avgSINR1
+            FROM LTEMeasurementReport lmr
+            WHERE lmr.SessionId = TRY_CONVERT(BIGINT, ?)
+              AND lmr.EARFCN IS NOT NULL
+            GROUP BY lmr.EARFCN, lmr.PhyCellId
+            ORDER BY samples DESC
+        """, (session_id,))
+        cols_a = [c[0] for c in cursor.description] if cursor.description else []
+        a_side = [{cols_a[i]: row[i] for i in range(len(cols_a))} for row in cursor.fetchall()]
+
+        # B-side: resolve B-session then aggregate
+        cursor.execute("""
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE
+                        WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                        ELSE CA.SessionId
+                    END AS ASessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+            ),
+            b_side AS (
+                SELECT TOP (1) CA.SessionId AS BSessionId
+                FROM CallAnalysis CA
+                INNER JOIN pair_root PR ON CA.SessionIdA = PR.ASessionId
+                WHERE CA.Side = 'B'
+            )
+            SELECT
+                lmr.EARFCN,
+                lmr.PhyCellId AS PCI,
+                COUNT(*)                        AS samples,
+                ROUND(AVG(lmr.RSRP),  2)        AS avgRSRP,
+                ROUND(MIN(lmr.RSRP),  2)        AS minRSRP,
+                ROUND(MAX(lmr.RSRP),  2)        AS maxRSRP,
+                ROUND(AVG(lmr.RSRQ),  2)        AS avgRSRQ,
+                ROUND(MIN(lmr.RSRQ),  2)        AS minRSRQ,
+                ROUND(MAX(lmr.RSRQ),  2)        AS maxRSRQ,
+                ROUND(AVG(lmr.SINR0), 2)        AS avgSINR0,
+                ROUND(AVG(lmr.SINR1), 2)        AS avgSINR1
+            FROM LTEMeasurementReport lmr
+            INNER JOIN b_side B ON lmr.SessionId = B.BSessionId
+            WHERE lmr.EARFCN IS NOT NULL
+            GROUP BY lmr.EARFCN, lmr.PhyCellId
+            ORDER BY samples DESC
+        """, (session_id, session_id))
+        cols_b = [c[0] for c in cursor.description] if cursor.description else []
+        b_side = [{cols_b[i]: row[i] for i in range(len(cols_b))} for row in cursor.fetchall()]
+
+        conn.close()
+        return {"aSide": a_side, "bSide": b_side}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/lte_scanner_raw")
+def get_lte_scanner_raw(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """Raw FactLTEScanner rows matched by call datetime window, not by SessionId."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        # A-side: match scanner rows by A-side call time window
+        cursor.execute("""
+            ;WITH call_time AS (
+                SELECT TOP 1
+                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                    ) AS end_time
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+            )
+            SELECT
+                fs.FullDate,
+                fs.EARFCN,
+                fs.PCI,
+                fs.RFBand,
+                ROUND(fs.RSRP, 2)  AS RSRP,
+                ROUND(fs.RSRQ, 2)  AS RSRQ,
+                ROUND(fs.SINR, 2)  AS SINR,
+                ROUND(fs.RSSI, 2)  AS RSSI
+            FROM FactLTEScanner fs
+            CROSS JOIN call_time ct
+            WHERE fs.EARFCN IS NOT NULL
+              AND fs.FullDate >= ct.start_time
+              AND fs.FullDate <= ct.end_time
+            ORDER BY fs.FullDate
+        """, (session_id,))
+        cols_a = [c[0] for c in cursor.description] if cursor.description else []
+        a_side = [{cols_a[i]: row[i] for i in range(len(cols_a))} for row in cursor.fetchall()]
+
+        # B-side: resolve B session then match scanner rows by B-side call time window
+        cursor.execute("""
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE
+                        WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                        ELSE CA.SessionId
+                    END AS ASessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+            ),
+            b_session AS (
+                SELECT TOP (1) CA.SessionId AS BSessionId
+                FROM CallAnalysis CA
+                INNER JOIN pair_root PR ON CA.SessionIdA = PR.ASessionId
+                WHERE CA.Side = 'B'
+            ),
+            b_time AS (
+                SELECT TOP 1
+                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                    ) AS end_time
+                FROM CallAnalysis CA
+                INNER JOIN b_session B ON CA.SessionId = B.BSessionId
+            )
+            SELECT
+                fs.FullDate,
+                fs.EARFCN,
+                fs.PCI,
+                fs.RFBand,
+                ROUND(fs.RSRP, 2)  AS RSRP,
+                ROUND(fs.RSRQ, 2)  AS RSRQ,
+                ROUND(fs.SINR, 2)  AS SINR,
+                ROUND(fs.RSSI, 2)  AS RSSI
+            FROM FactLTEScanner fs
+            CROSS JOIN b_time bt
+            WHERE fs.EARFCN IS NOT NULL
+              AND fs.FullDate >= bt.start_time
+              AND fs.FullDate <= bt.end_time
+            ORDER BY fs.FullDate
+        """, (session_id, session_id))
+        cols_b = [c[0] for c in cursor.description] if cursor.description else []
+        b_side = [{cols_b[i]: row[i] for i in range(len(cols_b))} for row in cursor.fetchall()]
+
+        conn.close()
+        return {"aSide": a_side, "bSide": b_side}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/lte_scanner_measurement")
+def get_lte_scanner_measurement(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """FactLTEScanner A-side vs B-side grouped by EARFCN+PCI."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        # A-side scanner: match by call time window
+        cursor.execute("""
+            ;WITH call_time AS (
+                SELECT TOP 1
+                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                    ) AS end_time
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+            )
+            SELECT
+                fs.EARFCN,
+                fs.PCI,
+                fs.RFBand,
+                COUNT(*)                    AS samples,
+                ROUND(AVG(fs.RSRP), 2)      AS avgRSRP,
+                ROUND(MIN(fs.RSRP), 2)      AS minRSRP,
+                ROUND(MAX(fs.RSRP), 2)      AS maxRSRP,
+                ROUND(AVG(fs.RSRQ), 2)      AS avgRSRQ,
+                ROUND(MIN(fs.RSRQ), 2)      AS minRSRQ,
+                ROUND(MAX(fs.RSRQ), 2)      AS maxRSRQ,
+                ROUND(AVG(fs.SINR), 2)      AS avgSINR,
+                ROUND(AVG(fs.RSSI), 2)      AS avgRSSI
+            FROM FactLTEScanner fs
+            CROSS JOIN call_time ct
+            WHERE fs.EARFCN IS NOT NULL
+              AND fs.FullDate >= ct.start_time
+              AND fs.FullDate <= ct.end_time
+            GROUP BY fs.EARFCN, fs.PCI, fs.RFBand
+            ORDER BY samples DESC
+        """, (session_id,))
+        cols_a = [c[0] for c in cursor.description] if cursor.description else []
+        a_side = [{cols_a[i]: row[i] for i in range(len(cols_a))} for row in cursor.fetchall()]
+
+        # B-side scanner: resolve B session then match by B-side call time window
+        cursor.execute("""
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE
+                        WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                        ELSE CA.SessionId
+                    END AS ASessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+            ),
+            b_session AS (
+                SELECT TOP (1) CA.SessionId AS BSessionId
+                FROM CallAnalysis CA
+                INNER JOIN pair_root PR ON CA.SessionIdA = PR.ASessionId
+                WHERE CA.Side = 'B'
+            ),
+            b_time AS (
+                SELECT TOP 1
+                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                    ) AS end_time
+                FROM CallAnalysis CA
+                INNER JOIN b_session B ON CA.SessionId = B.BSessionId
+            )
+            SELECT
+                fs.EARFCN,
+                fs.PCI,
+                fs.RFBand,
+                COUNT(*)                    AS samples,
+                ROUND(AVG(fs.RSRP), 2)      AS avgRSRP,
+                ROUND(MIN(fs.RSRP), 2)      AS minRSRP,
+                ROUND(MAX(fs.RSRP), 2)      AS maxRSRP,
+                ROUND(AVG(fs.RSRQ), 2)      AS avgRSRQ,
+                ROUND(MIN(fs.RSRQ), 2)      AS minRSRQ,
+                ROUND(MAX(fs.RSRQ), 2)      AS maxRSRQ,
+                ROUND(AVG(fs.SINR), 2)      AS avgSINR,
+                ROUND(AVG(fs.RSSI), 2)      AS avgRSSI
+            FROM FactLTEScanner fs
+            CROSS JOIN b_time bt
+            WHERE fs.EARFCN IS NOT NULL
+              AND fs.FullDate >= bt.start_time
+              AND fs.FullDate <= bt.end_time
+            GROUP BY fs.EARFCN, fs.PCI, fs.RFBand
+            ORDER BY samples DESC
+        """, (session_id, session_id))
+        cols_b = [c[0] for c in cursor.description] if cursor.description else []
+        b_side = [{cols_b[i]: row[i] for i in range(len(cols_b))} for row in cursor.fetchall()]
+
+        conn.close()
+        return {"aSide": a_side, "bSide": b_side}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/wcdma_values")
 def get_wcdma_values(
     database: str = Query(..., min_length=1),

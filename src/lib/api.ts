@@ -415,6 +415,59 @@ export async function fetchCallDeviceInfo(
   return requestJson(`/api/call_device_info?${params.toString()}`);
 }
 
+export interface LteMeasurementStat {
+  EARFCN: number | null;
+  PCI: number | null;
+  samples: number;
+  avgRSRP: number | null;
+  minRSRP: number | null;
+  maxRSRP: number | null;
+  avgRSRQ: number | null;
+  minRSRQ: number | null;
+  maxRSRQ: number | null;
+  avgSINR0: number | null;
+  avgSINR1: number | null;
+}
+
+export interface LteScannerStat {
+  EARFCN: number | null;
+  PCI: number | null;
+  RFBand: number | null;
+  samples: number;
+  avgRSRP: number | null;
+  minRSRP: number | null;
+  maxRSRP: number | null;
+  avgRSRQ: number | null;
+  minRSRQ: number | null;
+  maxRSRQ: number | null;
+  avgSINR: number | null;
+  avgRSSI: number | null;
+}
+
+export async function fetchLteScannerRaw(
+  database: string,
+  session_id: string
+): Promise<{ aSide: any[]; bSide: any[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/lte_scanner_raw?${params.toString()}`);
+}
+
+export async function fetchLteMeasurementComparison(
+  database: string,
+  session_id: string
+): Promise<{ aSide: LteMeasurementStat[]; bSide: LteMeasurementStat[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/lte_measurement_comparison?${params.toString()}`);
+}
+
+export async function fetchLteScannerMeasurement(
+  database: string,
+  session_id: string
+): Promise<{ aSide: LteScannerStat[]; bSide: LteScannerStat[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/lte_scanner_measurement?${params.toString()}`);
+}
+
 export async function fetchCallPagingInfo(
   database: string,
   session_id: string,
