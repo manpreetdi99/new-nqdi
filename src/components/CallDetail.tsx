@@ -1160,12 +1160,28 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                         >
                           <td className="px-1 py-0.5 font-mono text-left">{val.EARFCN}</td>
                           <td className="px-1 py-0.5 font-mono leading-tight">
-                            <div className={`font-bold ${rsrpColor}`}>{val.RSRP ?? "—"}</div>
-                            {scn && <div className={`text-[10px] ${scnRsrpColor}`}>{scn.RSRP != null ? Number(scn.RSRP).toFixed(1) : "—"}</div>}
+                            {val.RSRP != null ? (
+                              <>
+                                <div className={`font-bold ${rsrpColor}`}>{val.RSRP}</div>
+                                {scn?.RSRP != null && <div className={`text-[10px] ${scnRsrpColor}`}>{Number(scn.RSRP).toFixed(1)}</div>}
+                              </>
+                            ) : scn?.RSRP != null ? (
+                              <div className={`font-bold ${scnRsrpColor}`}>{Number(scn.RSRP).toFixed(1)}</div>
+                            ) : (
+                              <div className="text-muted-foreground/40">—</div>
+                            )}
                           </td>
                           <td className="px-1 py-0.5 font-mono leading-tight">
-                            <div className={`font-bold ${rsrqColor}`}>{val.RSRQ ?? "—"}</div>
-                            {scn && <div className="text-[10px] text-cyan-400/80">{scn.RSRQ != null ? Number(scn.RSRQ).toFixed(1) : "—"}</div>}
+                            {val.RSRQ != null ? (
+                              <>
+                                <div className={`font-bold ${rsrqColor}`}>{val.RSRQ}</div>
+                                {scn?.RSRQ != null && <div className="text-[10px] text-cyan-400/80">{Number(scn.RSRQ).toFixed(1)}</div>}
+                              </>
+                            ) : scn?.RSRQ != null ? (
+                              <div className="font-bold text-cyan-400/80">{Number(scn.RSRQ).toFixed(1)}</div>
+                            ) : (
+                              <div className="text-muted-foreground/40">—</div>
+                            )}
                           </td>
                           {scannerByEarfcn.size > 0 && <>
                             <td className={`px-1 py-0.5 font-mono ${dtColor}`} title={scn ? `Scanner: ${scn.FullDate}` : ""}>
