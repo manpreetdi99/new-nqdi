@@ -452,6 +452,14 @@ export async function fetchLteScannerRaw(
   return requestJson(`/api/lte_scanner_raw?${params.toString()}`);
 }
 
+export async function fetchGsmScannerRaw(
+  database: string,
+  session_id: string
+): Promise<any[]> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/gsm_scanner_raw?${params.toString()}`);
+}
+
 export async function fetchLteMeasurementComparison(
   database: string,
   session_id: string

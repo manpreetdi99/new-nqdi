@@ -1899,6 +1899,63 @@ def get_lte_scanner_raw(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/gsm_scanner_raw")
+def get_gsm_scanner_raw(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """FactGSMScanner rows matched by call datetime window.
+    For each unique BCCH+RFBand keeps the single reading closest to call start."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            ;WITH call_time AS (
+                SELECT TOP 1
+                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                    ) AS end_time
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+            ),
+            scanner_ranked AS (
+                SELECT
+                    fs.FullDate,
+                    fs.BCCH,
+                    fs.RFBand,
+                    fs.BSIC,
+                    fs.RxLev,
+                    fs.CoverI,
+                    fs.CGI,
+                    fs.CId,
+                    fs.LAC,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY fs.BCCH, fs.RFBand
+                        ORDER BY ABS(DATEDIFF(MILLISECOND, ct.start_time, fs.FullDate))
+                    ) AS rn
+                FROM FactGSMScanner fs
+                CROSS JOIN call_time ct
+                WHERE fs.BCCH IS NOT NULL
+                  AND fs.FullDate >= ct.start_time
+                  AND fs.FullDate <= ct.end_time
+            )
+            SELECT FullDate, BCCH, RFBand, BSIC, RxLev, CoverI, CGI, CId, LAC
+            FROM scanner_ranked
+            WHERE rn = 1
+            ORDER BY BCCH, RFBand
+        """, (session_id,))
+        cols = [c[0] for c in cursor.description] if cursor.description else []
+        rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
+
+        conn.close()
+        return rows
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/lte_scanner_measurement")
 def get_lte_scanner_measurement(
     database: str = Query(..., min_length=1),
