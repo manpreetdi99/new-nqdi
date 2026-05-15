@@ -12,10 +12,16 @@ import {
   AlertCircle,
   ChevronRight,
   Trash2,
+  BarChart2,
+  Table2,
+  SlidersHorizontal,
+  Code2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { motion, AnimatePresence } from "framer-motion";
+import QueryBuilder from "@/components/QueryBuilder";
+import ResultCharts from "@/components/ResultCharts";
 
 // ──────────────────────────────────────────────
 // Types
@@ -169,6 +175,7 @@ function exportCsv(columns: string[], data: Record<string, unknown>[], filename:
 // ──────────────────────────────────────────────
 function ResultGrid({ result }: { result: QueryResult }) {
   const [page, setPage] = useState(0);
+  const [showChart, setShowChart] = useState(false);
   const pageSize = 50;
   const totalPages = Math.ceil(result.data.length / pageSize);
   const pageData = result.data.slice(page * pageSize, (page + 1) * pageSize);
@@ -191,61 +198,94 @@ function ResultGrid({ result }: { result: QueryResult }) {
   }
 
   return (
-    <div className="space-y-1.5">
-      {/* table */}
-      <div className="overflow-x-auto rounded-md border border-border">
-        <table className="w-full text-xs">
-          <thead>
-            <tr className="border-b border-border bg-muted/50 text-left text-muted-foreground uppercase tracking-wider">
-              {result.columns.map((col) => (
-                <th key={col} className="px-3 py-1.5 font-semibold whitespace-nowrap">
-                  {col}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {pageData.map((row, i) => (
-              <tr
-                key={i}
-                className="border-b border-border/50 transition-colors hover:bg-muted/20"
-              >
-                {result.columns.map((col) => (
-                  <td key={col} className="px-3 py-1.5 font-mono text-foreground whitespace-nowrap">
-                    {row[col] === null || row[col] === undefined ? (
-                      <span className="text-muted-foreground italic">NULL</span>
-                    ) : (
-                      String(row[col])
-                    )}
-                  </td>
-                ))}
-              </tr>
-            ))}
-          </tbody>
-        </table>
+    <div className="space-y-2">
+      {/* View toggle */}
+      <div className="flex items-center gap-1">
+        <button
+          onClick={() => setShowChart(false)}
+          className={`flex items-center gap-1 px-2 py-1 rounded border text-[10px] transition-colors ${
+            !showChart
+              ? "bg-primary/20 border-primary/50 text-primary font-semibold"
+              : "bg-muted/40 border-border text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Table2 className="h-3 w-3" /> Table
+        </button>
+        <button
+          onClick={() => setShowChart(true)}
+          className={`flex items-center gap-1 px-2 py-1 rounded border text-[10px] transition-colors ${
+            showChart
+              ? "bg-primary/20 border-primary/50 text-primary font-semibold"
+              : "bg-muted/40 border-border text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <BarChart2 className="h-3 w-3" /> Chart
+        </button>
       </div>
 
-      {/* pagination */}
-      {totalPages > 1 && (
-        <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-          <button
-            disabled={page === 0}
-            onClick={() => setPage((p) => p - 1)}
-            className="px-2 py-0.5 rounded border border-border bg-muted disabled:opacity-40 hover:bg-muted/70"
-          >
-            ‹ Prev
-          </button>
-          <span>
-            Page {page + 1} / {totalPages}
-          </span>
-          <button
-            disabled={page >= totalPages - 1}
-            onClick={() => setPage((p) => p + 1)}
-            className="px-2 py-0.5 rounded border border-border bg-muted disabled:opacity-40 hover:bg-muted/70"
-          >
-            Next ›
-          </button>
-          <span className="ml-auto">{result.data.length} total rows</span>
+      {/* Chart view */}
+      {showChart && (
+        <ResultCharts columns={result.columns} data={result.data} />
+      )}
+
+      {/* Table view */}
+      {!showChart && (
+        <div className="space-y-1.5">
+          <div className="overflow-x-auto rounded-md border border-border">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b border-border bg-muted/50 text-left text-muted-foreground uppercase tracking-wider">
+                  {result.columns.map((col) => (
+                    <th key={col} className="px-3 py-1.5 font-semibold whitespace-nowrap">
+                      {col}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {pageData.map((row, i) => (
+                  <tr
+                    key={i}
+                    className="border-b border-border/50 transition-colors hover:bg-muted/20"
+                  >
+                    {result.columns.map((col) => (
+                      <td key={col} className="px-3 py-1.5 font-mono text-foreground whitespace-nowrap">
+                        {row[col] === null || row[col] === undefined ? (
+                          <span className="text-muted-foreground italic">NULL</span>
+                        ) : (
+                          String(row[col])
+                        )}
+                      </td>
+                    ))}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* pagination */}
+          {totalPages > 1 && (
+            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+              <button
+                disabled={page === 0}
+                onClick={() => setPage((p) => p - 1)}
+                className="px-2 py-0.5 rounded border border-border bg-muted disabled:opacity-40 hover:bg-muted/70"
+              >
+                ‹ Prev
+              </button>
+              <span>
+                Page {page + 1} / {totalPages}
+              </span>
+              <button
+                disabled={page >= totalPages - 1}
+                onClick={() => setPage((p) => p + 1)}
+                className="px-2 py-0.5 rounded border border-border bg-muted disabled:opacity-40 hover:bg-muted/70"
+              >
+                Next ›
+              </button>
+              <span className="ml-auto">{result.data.length} total rows</span>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -266,6 +306,8 @@ const QueryEditor = ({
   ]);
   const [activeTabId, setActiveTabId] = useState(tabs[0].id);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [showBuilder, setShowBuilder] = useState(false);
+  const [showSql,     setShowSql]     = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const templatesRef = useRef<HTMLDivElement>(null);
 
@@ -339,6 +381,17 @@ const QueryEditor = ({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Query Builder toggle */}
+          <Button
+            variant={showBuilder ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => setShowBuilder((v) => !v)}
+            className="text-xs gap-1"
+          >
+            <SlidersHorizontal className="h-3.5 w-3.5" />
+            Builder
+          </Button>
+
           {/* Templates picker */}
           <div className="relative" ref={templatesRef}>
             <Button
@@ -376,17 +429,59 @@ const QueryEditor = ({
             <Plus className="h-3.5 w-3.5" /> New Tab
           </Button>
 
+          {/* Clear active tab */}
+          {activeTab.sql.trim() && (
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => updateSql(activeTabId, "")}
+              className="text-xs gap-1 text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 className="h-3.5 w-3.5" /> Clear
+            </Button>
+          )}
+
+          {/* Run this tab */}
           <Button
             size="sm"
-            onClick={handleRun}
-            disabled={isRunning || !canRun}
-            className="glow-primary text-xs gap-1"
+            variant="outline"
+            onClick={handleRunActive}
+            disabled={isRunning || !activeTab.sql.trim()}
+            className="text-xs gap-1"
           >
             <Play className="h-3.5 w-3.5" />
-            {isRunning ? "Running…" : tabs.length > 1 ? "Run All" : "Run"}
+            Run
           </Button>
+
+          {/* Run all (only when multiple tabs) */}
+          {tabs.length > 1 && (
+            <Button
+              size="sm"
+              onClick={handleRun}
+              disabled={isRunning || !canRun}
+              className="glow-primary text-xs gap-1"
+            >
+              <Play className="h-3.5 w-3.5" />
+              {isRunning ? "Running…" : "Run All"}
+            </Button>
+          )}
         </div>
       </div>
+
+      {/* ── Query Builder ── */}
+      <AnimatePresence>
+        {showBuilder && (
+          <motion.div
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: "auto" }}
+            exit={{ opacity: 0, height: 0 }}
+            transition={{ duration: 0.2 }}
+            className="overflow-hidden"
+          >
+            <QueryBuilder onApply={(sql) => { updateSql(activeTabId, sql); setShowBuilder(false); }} />
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* ── Tab strip ── */}
       <div className="flex items-center gap-1 border-b border-border overflow-x-auto pb-px">
@@ -426,6 +521,19 @@ const QueryEditor = ({
             </button>
           );
         })}
+
+        {/* Show/hide SQL editor toggle */}
+        <button
+          onClick={() => setShowSql((v) => !v)}
+          className={`ml-auto flex items-center gap-1 px-2.5 py-1 rounded-t-md border border-b-0 text-[11px] transition-colors whitespace-nowrap ${
+            showSql
+              ? "bg-card border-border text-foreground"
+              : "bg-muted/40 border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Code2 className="h-3 w-3" />
+          {showSql ? "Hide Query" : "Show Query"}
+        </button>
       </div>
 
       {/* ── Editor area ── */}
@@ -436,74 +544,62 @@ const QueryEditor = ({
             key={tab.id}
             className={tab.id === activeTabId ? "space-y-3" : "hidden"}
           >
-            {/* Textarea */}
-            <div className="relative">
-              <textarea
-                ref={tab.id === activeTabId ? textareaRef : undefined}
-                value={tab.sql}
-                onChange={(e) => updateSql(tab.id, e.target.value)}
-                rows={8}
-                spellCheck={false}
-                placeholder={`-- Write SQL here, e.g.:\nSELECT TOP 100 * FROM CallAnalysis ORDER BY SessionId DESC`}
-                onKeyDown={(e) => {
-                  // Ctrl+Enter → run active
-                  if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
-                    e.preventDefault();
-                    handleRunActive();
-                  }
-                  // Tab → insert spaces
-                  if (e.key === "Tab") {
-                    e.preventDefault();
-                    const ta = e.currentTarget;
-                    const start = ta.selectionStart;
-                    const end = ta.selectionEnd;
-                    const newVal = tab.sql.substring(0, start) + "  " + tab.sql.substring(end);
-                    updateSql(tab.id, newVal);
-                    requestAnimationFrame(() => {
-                      ta.selectionStart = ta.selectionEnd = start + 2;
-                    });
-                  }
-                }}
-                className="w-full resize-y bg-[hsl(var(--muted))] border border-border rounded-md px-4 py-3 font-mono text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/60 transition-all placeholder:text-muted-foreground leading-relaxed"
-              />
-              {/* copy button */}
-              <button
-                onClick={() => navigator.clipboard.writeText(tab.sql)}
-                title="Copy SQL"
-                className="absolute top-2 right-2 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
-              >
-                <Copy className="h-3.5 w-3.5" />
-              </button>
-            </div>
-
-            <div className="flex items-center gap-2">
-              <p className="text-[10px] text-muted-foreground">
-                <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono">Ctrl+Enter</kbd>{" "}
-                to run this tab ·{" "}
-                <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono">Tab</kbd>{" "}
-                for indent
-              </p>
-
-              <div className="ml-auto flex items-center gap-2">
-                {tab.sql.trim() && (
-                  <button
-                    onClick={() => updateSql(tab.id, "")}
-                    className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-destructive transition-colors"
-                  >
-                    <Trash2 className="h-3 w-3" /> Clear
-                  </button>
-                )}
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={handleRunActive}
-                  disabled={isRunning || !tab.sql.trim()}
-                  className="h-6 text-[10px] gap-1 px-2"
+            {/* Collapsible SQL textarea */}
+            <AnimatePresence initial={false}>
+              {showSql && (
+                <motion.div
+                  key="sql-editor"
+                  initial={{ opacity: 0, height: 0 }}
+                  animate={{ opacity: 1, height: "auto" }}
+                  exit={{ opacity: 0, height: 0 }}
+                  transition={{ duration: 0.2 }}
+                  className="overflow-hidden space-y-2"
                 >
-                  <Play className="h-3 w-3" /> Run this tab
-                </Button>
-              </div>
-            </div>
+                  <div className="relative">
+                    <textarea
+                      ref={tab.id === activeTabId ? textareaRef : undefined}
+                      value={tab.sql}
+                      onChange={(e) => updateSql(tab.id, e.target.value)}
+                      rows={8}
+                      spellCheck={false}
+                      placeholder={`-- Write SQL here, e.g.:\nSELECT TOP 100 * FROM CallAnalysis ORDER BY SessionId DESC`}
+                      onKeyDown={(e) => {
+                        if ((e.ctrlKey || e.metaKey) && e.key === "Enter") {
+                          e.preventDefault();
+                          handleRunActive();
+                        }
+                        if (e.key === "Tab") {
+                          e.preventDefault();
+                          const ta = e.currentTarget;
+                          const start = ta.selectionStart;
+                          const end = ta.selectionEnd;
+                          const newVal = tab.sql.substring(0, start) + "  " + tab.sql.substring(end);
+                          updateSql(tab.id, newVal);
+                          requestAnimationFrame(() => {
+                            ta.selectionStart = ta.selectionEnd = start + 2;
+                          });
+                        }
+                      }}
+                      className="w-full resize-y bg-[hsl(var(--muted))] border border-border rounded-md px-4 py-3 font-mono text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary/60 transition-all placeholder:text-muted-foreground leading-relaxed"
+                    />
+                    <button
+                      onClick={() => navigator.clipboard.writeText(tab.sql)}
+                      title="Copy SQL"
+                      className="absolute top-2 right-2 p-1 rounded text-muted-foreground hover:text-foreground hover:bg-muted/60 transition-colors"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  <p className="text-[10px] text-muted-foreground">
+                    <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono">Ctrl+Enter</kbd>{" "}
+                    to run ·{" "}
+                    <kbd className="px-1 py-0.5 rounded border border-border bg-muted font-mono">Tab</kbd>{" "}
+                    to indent
+                  </p>
+                </motion.div>
+              )}
+            </AnimatePresence>
 
             {/* Results */}
             <AnimatePresence>
