@@ -490,3 +490,12 @@ export async function fetchCallPagingInfo(
   });
   return requestJson(`/api/call_paging_info?${params.toString()}`);
 }
+
+export async function fetchGsmContextSignal(
+  database: string,
+  session_id: string,
+  window_sec = 10
+): Promise<{ signal: any[] }> {
+  const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
+  return requestJson(`/api/gsm_context_signal?${params.toString()}`);
+}

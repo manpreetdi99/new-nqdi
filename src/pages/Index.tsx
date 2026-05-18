@@ -446,6 +446,37 @@ const Index = () => {
     return callRecords.filter((c) => validIds.has(c.callId));
   }, [callRecords, filteredAllCallsRows, sessionValidFilter, statusFilters]);
 
+  const locationSummary = useMemo(() => {
+    const map = new Map<string, { complete: number; drop: number; fail: number; sysRelease: number; total: number }>();
+    for (const row of filteredAllCallsRows) {
+      const loc = row.Location ?? "Unknown";
+      if (!map.has(loc)) map.set(loc, { complete: 0, drop: 0, fail: 0, sysRelease: 0, total: 0 });
+      const entry = map.get(loc)!;
+      entry.total++;
+      const s = (row.status ?? "").toLowerCase();
+      if (s.includes("system release") || s.includes("system realase")) entry.sysRelease++;
+      else if (s.includes("drop")) entry.drop++;
+      else if (s.includes("fail")) entry.fail++;
+      else entry.complete++;
+    }
+    return Array.from(map.entries())
+      .map(([location, counts]) => ({ location, ...counts }))
+      .sort((a, b) => a.location.localeCompare(b.location));
+  }, [filteredAllCallsRows]);
+
+  const locationSummaryTotals = useMemo(() => {
+    return locationSummary.reduce(
+      (acc, r) => ({
+        sysRelease: acc.sysRelease + r.sysRelease,
+        complete: acc.complete + r.complete,
+        drop: acc.drop + r.drop,
+        fail: acc.fail + r.fail,
+        total: acc.total + r.total,
+      }),
+      { sysRelease: 0, complete: 0, drop: 0, fail: 0, total: 0 }
+    );
+  }, [locationSummary]);
+
   const groupedDataSessions = useMemo(() => {
     const map = new Map<string, DataCallRow[]>();
     for (const row of dataCallsRows) {
@@ -1006,16 +1037,71 @@ const Index = () => {
               </aside>
 
               <div className="space-y-4">
+
               <div className="bg-card border border-border rounded-lg overflow-hidden">
-                <div className="px-4 py-3 border-b border-border flex items-center justify-between">
-                  <div>
+                <div className="px-4 py-2 border-b border-border flex items-center gap-6 flex-wrap">
+                  <div className="shrink-0">
                     <h2 className="text-sm font-semibold text-foreground">All Calls</h2>
                     <p className="text-xs text-muted-foreground">
-                      {callsLoading
-                        ? "Loading..."
-                        : `${filteredAllCallsRows.length} rows`}
+                      {callsLoading ? "Loading..." : `${filteredAllCallsRows.length} rows`}
                     </p>
                   </div>
+
+                  {/* ── Location Summary inline ── */}
+                  {locationSummary.length > 0 && (
+                    <div className="overflow-x-auto">
+                      <table className="text-[9px] border-collapse leading-none">
+                        <thead>
+                          <tr className="text-muted-foreground uppercase tracking-wider">
+                            <th className="pr-4 py-px font-semibold text-left"></th>
+                            {locationSummary.map((loc) => (
+                              <th key={loc.location} className="px-4 py-px font-semibold text-center text-foreground/70 border-l border-border/40">{loc.location}</th>
+                            ))}
+                            {locationSummary.length > 1 && (
+                              <th className="px-4 py-px font-semibold text-center text-foreground/40 border-l border-border/60">Total</th>
+                            )}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          <tr>
+                            <td className="pr-4 py-px font-semibold text-green-400 uppercase tracking-wider">Complete</td>
+                            {locationSummary.map((loc) => (
+                              <td key={loc.location} className="px-4 py-px font-mono text-center text-green-400 border-l border-border/40">{loc.complete > 0 ? loc.complete : <span className="text-muted-foreground/30">—</span>}</td>
+                            ))}
+                            {locationSummary.length > 1 && <td className="px-4 py-px font-mono text-center font-semibold text-green-400 border-l border-border/60">{locationSummaryTotals.complete > 0 ? locationSummaryTotals.complete : <span className="text-muted-foreground/30">—</span>}</td>}
+                          </tr>
+                          <tr>
+                            <td className="pr-4 py-px font-semibold text-violet-400 uppercase tracking-wider whitespace-nowrap">Sys Rel</td>
+                            {locationSummary.map((loc) => (
+                              <td key={loc.location} className="px-4 py-px font-mono text-center text-violet-400 border-l border-border/40">{loc.sysRelease > 0 ? loc.sysRelease : <span className="text-muted-foreground/30">—</span>}</td>
+                            ))}
+                            {locationSummary.length > 1 && <td className="px-4 py-px font-mono text-center font-semibold text-violet-400 border-l border-border/60">{locationSummaryTotals.sysRelease > 0 ? locationSummaryTotals.sysRelease : <span className="text-muted-foreground/30">—</span>}</td>}
+                          </tr>
+                          <tr>
+                            <td className="pr-4 py-px font-semibold text-orange-400 uppercase tracking-wider">Drop</td>
+                            {locationSummary.map((loc) => (
+                              <td key={loc.location} className="px-4 py-px font-mono text-center text-orange-400 border-l border-border/40">{loc.drop > 0 ? loc.drop : <span className="text-muted-foreground/30">—</span>}</td>
+                            ))}
+                            {locationSummary.length > 1 && <td className="px-4 py-px font-mono text-center font-semibold text-orange-400 border-l border-border/60">{locationSummaryTotals.drop > 0 ? locationSummaryTotals.drop : <span className="text-muted-foreground/30">—</span>}</td>}
+                          </tr>
+                          <tr>
+                            <td className="pr-4 py-px font-semibold text-red-400 uppercase tracking-wider">Fail</td>
+                            {locationSummary.map((loc) => (
+                              <td key={loc.location} className="px-4 py-px font-mono text-center text-red-400 border-l border-border/40">{loc.fail > 0 ? loc.fail : <span className="text-muted-foreground/30">—</span>}</td>
+                            ))}
+                            {locationSummary.length > 1 && <td className="px-4 py-px font-mono text-center font-semibold text-red-400 border-l border-border/60">{locationSummaryTotals.fail > 0 ? locationSummaryTotals.fail : <span className="text-muted-foreground/30">—</span>}</td>}
+                          </tr>
+                          <tr className="border-t border-border/60">
+                            <td className="pr-4 py-px font-semibold text-foreground uppercase tracking-wider">Total</td>
+                            {locationSummary.map((loc) => (
+                              <td key={loc.location} className="px-4 py-px font-mono text-center font-semibold text-foreground border-l border-border/40">{loc.total}</td>
+                            ))}
+                            {locationSummary.length > 1 && <td className="px-4 py-px font-mono text-center font-semibold text-foreground border-l border-border/60">{locationSummaryTotals.total}</td>}
+                          </tr>
+                        </tbody>
+                      </table>
+                    </div>
+                  )}
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-xs">
