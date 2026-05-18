@@ -640,8 +640,8 @@ def get_gsm_values(
                   ,g.[MsgTime]
                   ,g.[PosId]
                   ,g.[NetworkId]
-                  ,g.[RxLevSub]
-                  ,g.[RxQualSub]
+                  ,COALESCE(g.[RxLevSub],  g.[RxLevFull])  AS RxLevSub
+                  ,COALESCE(g.[RxQualSub], g.[RxQualFull]) AS RxQualSub
                   ,p.Latitude
                   ,p.Longitude
               FROM [GSMMeasReport] g
@@ -699,8 +699,8 @@ def get_gsm_values_b_side(
                 G.[MsgTime],
                 G.[PosId],
                 G.[NetworkId],
-                G.[RxLevSub],
-                G.[RxQualSub]
+                COALESCE(G.[RxLevSub],  G.[RxLevFull])  AS RxLevSub,
+                COALESCE(G.[RxQualSub], G.[RxQualFull]) AS RxQualSub
             FROM [GSMMeasReport] G
             INNER JOIN b_side B
                 ON G.SessionId = B.BSessionId
