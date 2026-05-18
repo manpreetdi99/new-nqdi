@@ -994,42 +994,40 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               <table className="w-full text-xs text-center">
                 <thead className="sticky top-0 bg-muted border-b border-border z-10">
                   <tr>
+                    <th className="px-2 py-1 font-semibold">MsgTime</th>
                     <th className="px-2 py-1 font-semibold">KPIId</th>
                     <th className="px-2 py-1 font-semibold">ErrorCode</th>
-                    {/* <th className="px-2 py-1 font-semibold">Value1</th>
-                    <th className="px-2 py-1 font-semibold">Value2</th> */}
                     <th className="px-2 py-1 font-semibold">Value3</th>
                     <th className="px-2 py-1 font-semibold">Value4</th>
                     <th className="px-2 py-1 font-semibold">Value5</th>
-                    <th className="px-2 py-1 font-semibold">MsgTime</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50">
-                  {kpiValues.map((val, idx) => {
-                    const tStr = toChartTime(val.StartTime ?? null);
-                    const isActive = tStr !== null && tStr === hoveredTimeStr;
-                    return (
-                      <tr
-                        key={idx}
-                        style={isActive ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" } : undefined}
-                        className={`transition-all duration-100 cursor-pointer ${isActive
-                          ? "bg-cyan-500/10"
-                          : "hover:bg-muted/40"
-                          }`}
-                        onMouseEnter={() => { setHoveredRadioIndex(null); setHoveredTimeStr(tStr); }}
-                        onMouseLeave={() => setHoveredTimeStr(null)}
-                      >
-                        <td className="px-1 py-0.5 font-mono">{val.KPIId}</td>
-                        <td className="px-1 py-0.5 font-mono">{val.ErrorCode}</td>
-                        {/* <td className="px-1 py-0.5 font-mono">{val.Value1}</td>
-                        <td className="px-1 py-0.5 font-mono">{val.Value2}</td> */}
-                        <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value3}</td>
-                        <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value4}</td>
-                        <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value5}</td>
-                        <td className="px-1 py-0.5">{formatDateTime(val.StartTime)}</td>
-                      </tr>
-                    );
-                  })}
+                  {[...kpiValues]
+                    .sort((a, b) => new Date(a.StartTime).getTime() - new Date(b.StartTime).getTime())
+                    .map((val, idx) => {
+                      const tStr = toChartTime(val.StartTime ?? null);
+                      const isActive = tStr !== null && tStr === hoveredTimeStr;
+                      return (
+                        <tr
+                          key={idx}
+                          style={isActive ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" } : undefined}
+                          className={`transition-all duration-100 cursor-pointer ${isActive
+                            ? "bg-cyan-500/10"
+                            : "hover:bg-muted/40"
+                            }`}
+                          onMouseEnter={() => { setHoveredRadioIndex(null); setHoveredTimeStr(tStr); }}
+                          onMouseLeave={() => setHoveredTimeStr(null)}
+                        >
+                          <td className="px-1 py-0.5 whitespace-nowrap">{formatDateTime(val.StartTime)}</td>
+                          <td className="px-1 py-0.5 font-mono">{val.KPIId}</td>
+                          <td className="px-1 py-0.5 font-mono">{val.ErrorCode}</td>
+                          <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value3}</td>
+                          <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value4}</td>
+                          <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value5}</td>
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             </div>
