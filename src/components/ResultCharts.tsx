@@ -32,31 +32,13 @@ import {
 } from "lucide-react";
 
 // ─── Module-level constants ───────────────────────────────────────────────────
-
-const PALETTE = [
-  "hsl(162, 72%, 46%)",
-  "hsl(200, 80%, 55%)",
-  "hsl(45,  93%, 58%)",
-  "hsl(280, 65%, 60%)",
-  "hsl(0,   72%, 55%)",
-  "hsl(30,  90%, 55%)",
-  "hsl(340, 75%, 58%)",
-  "hsl(120, 55%, 48%)",
-];
+import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, LEGEND_WRAPPER_STYLE, DEFAULTS } from "@/lib/chartStyles";
 
 const MAX_POINTS = 600;
 const GROUPING_THRESHOLD = 200; // auto-bin when slice has more rows than this
 const DEFAULT_BINS = 80;
 
-const AXIS_STYLE = {
-  tick: { fontSize: 10, fill: "hsl(var(--muted-foreground))" },
-} as const;
-
-const GRID_STYLE = {
-  strokeDasharray: "3 3",
-  stroke: "hsl(var(--border))",
-  opacity: 0.4,
-} as const;
+// AXIS_STYLE and GRID_STYLE are imported from src/lib/chartStyles
 
 const fmtXTick   = (v: unknown) => String(v ?? "").slice(0, 14);
 const fmtLegend  = (v: string) => <span className="text-xs text-foreground">{v}</span>;
@@ -329,7 +311,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
     numericCols.slice(0, 2).map((col, i) => ({
       col,
       side: "left" as YSide,
-      color: PALETTE[i % PALETTE.length],
+      color: CHART_PALETTE[i % CHART_PALETTE.length],
     })),
   );
 
@@ -342,7 +324,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
     if (!addYCol) return;
     setYSeries((prev) => {
       if (prev.some((s) => s.col === addYCol)) return prev;
-      return [...prev, { col: addYCol, side: "left", color: PALETTE[prev.length % PALETTE.length] }];
+      return [...prev, { col: addYCol, side: "left", color: CHART_PALETTE[prev.length % CHART_PALETTE.length] }];
     });
     setAddYCol("");
   }, [addYCol]);
@@ -508,7 +490,6 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
   const renderSeries = useCallback(
     (s: YSeries) => {
       const shared = {
-        key:     s.col,
         dataKey: s.col,
         yAxisId: s.side,
         stroke:  s.color,
@@ -516,10 +497,48 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
         name:    `${s.col} (${s.side === "left" ? "L" : "R"})`,
       };
       if (chartType === "bar")
-        return <Bar  {...shared} radius={[3, 3, 0, 0]} maxBarSize={36} fillOpacity={0.82} />;
+        return (
+          <Bar
+            key={s.col}
+            dataKey={s.col}
+            yAxisId={s.side}
+            stroke={s.color}
+            fill={s.color}
+            name={`${s.col} (${s.side === "left" ? "L" : "R"})`}
+            radius={[3, 3, 0, 0]}
+            maxBarSize={36}
+            fillOpacity={DEFAULTS.barFillOpacity}
+          />
+        );
       if (chartType === "area")
-        return <Area {...shared} type="monotone" dot={false} strokeWidth={1.8} fillOpacity={0.1} />;
-      return      <Line {...shared} type="monotone" dot={false} strokeWidth={2} activeDot={{ r: 4 }} />;
+        return (
+          <Area
+            key={s.col}
+            dataKey={s.col}
+            yAxisId={s.side}
+            stroke={s.color}
+            fill={s.color}
+            name={`${s.col} (${s.side === "left" ? "L" : "R"})`}
+            type="monotone"
+            dot={false}
+            strokeWidth={1.8}
+            fillOpacity={DEFAULTS.areaFillOpacity}
+          />
+        );
+      return (
+        <Line
+          key={s.col}
+          dataKey={s.col}
+          yAxisId={s.side}
+          stroke={s.color}
+          fill={s.color}
+          name={`${s.col} (${s.side === "left" ? "L" : "R"})`}
+          type="monotone"
+          dot={false}
+          strokeWidth={2}
+          activeDot={{ r: 4 }}
+        />
+      );
     },
     [chartType],
   );
@@ -538,7 +557,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
             <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="48%"
               outerRadius={110} label={fmtPieLabel} labelLine>
               {pieData.map((_, i) => (
-                <Cell key={i} fill={PALETTE[i % PALETTE.length]} />
+                <Cell key={i} fill={CHART_PALETTE[i % CHART_PALETTE.length]} />
               ))}
             </Pie>
             <Tooltip content={<PieTooltip />} />
@@ -590,8 +609,8 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
             <Legend formatter={fmtLegend} wrapperStyle={{ paddingTop: 8 }} />
             {pivotSeries.map((val, i) => (
               <Bar key={val} dataKey={val} yAxisId="left"
-                fill={PALETTE[i % PALETTE.length]} stackId="stack"
-                name={val} maxBarSize={60} fillOpacity={0.85}
+                fill={CHART_PALETTE[i % CHART_PALETTE.length]} stackId="stack"
+                name={val} maxBarSize={60} fillOpacity={DEFAULTS.barFillOpacity}
               />
             ))}
           </ComposedChart>

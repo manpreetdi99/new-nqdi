@@ -1,0 +1,490 @@
+Data VisualizationR&S SwissQual AG®
+123Manual 3646.3013.02 ─ 23.0
+Figure 11-7: Bar chart with local filters
+11.3  Statistics Table
+The statistics table breaks down statistical data by one or multiple categorical dimen-
+sions and is easily comprehensible and easy to read. The purpose of this table is to
+provide a view on a significant number of results at once. When breaking down the sta-
+tistics for a measurement value per operator, technology band and region at the same
+time, this can yield hundreds of rows of results.
+On the downside, this type of visualization only supports measures from the same stat-
+istical cube. If you need to mix values like RSRP from LTE with throughput values from
+LTE PDSCH or test results, please refer to Chapter 11.5, "Statistics Value List",
+on page 125.
+To configure a statistics table, simply assign values from the value tree to the highligh-
+ted fields in the configuration area as shown.
+Statistics Table
+
+Data VisualizationR&S SwissQual AG®
+124Manual 3646.3013.02 ─ 23.0
+Figure 11-8: A simple statistics table showing the correlation between throughputs and block errors
+There are currently no further customization options.
+11.4  Cell-based Table
+The cell-based table is just another flavor of a statistics table. It still breaks down statis-
+tical data by one or multiple categorical dimensions, but it comes with several default
+columns. Those columns identify cells and synchronize with selected BTS on the map
+(and vice versa).
+To configure a cell-based table, simply assign values from the value tree to the high-
+lighted fields in the configuration area as shown.
+Cell-based Table
+
+Data VisualizationR&S SwissQual AG®
+125Manual 3646.3013.02 ─ 23.0
+Figure 11-9: A simple cell-based table
+There are currently no further customization options.
+11.5  Statistics Value List
+The statistics value list creates another tabular view of the data. Unlike the statistics
+table, you can use it to mix data from different statistical cubes, e.g. a count of capacity
+tests with LTE radio metrics. The value list serves the purpose of displaying some few
+key values of great interest on a compact space.
+Statistics Value List
+
+Data VisualizationR&S SwissQual AG®
+126Manual 3646.3013.02 ─ 23.0
+Figure 11-10: A simple statistics value list
+To configure a statistics value list, simply assign values from the value tree to the high-
+lighted fields in the configuration area as shown.
+Figure 11-11: Select and assign values to the statistics value list
+Statistics Value List
+
+Data VisualizationR&S SwissQual AG®
+127Manual 3646.3013.02 ─ 23.0
+Figure 11-12: Another example of how the value list can be used
+More customization options can be found on the "OPTIONS" tab. All available options:
+● Vertical layout
+● Group split-by items
+● Scope:
+– "All"
+– "Current UE"
+– "Current session". The "S" sign is displayed in the left corner of the panel
+header, if the "Show title bar" is disabled in the panel settings).
+Figure 11-13: S sign in the panel header for s
+– "Current test". The "T" sign is displayed if the panel header is hidden.
+Statistics Value List
+
+Data VisualizationR&S SwissQual AG®
+128Manual 3646.3013.02 ─ 23.0
+For the "Current UE" scope, you can filter which devices to show in the panel:
+● "S or A & B side"
+● "S or A side"
+● "B side"
+11.6  Pie Chart
+The pie chart breaks down statistical data by one categorical dimension. It is simpler
+than the bar chart and comes with only few configuration options.
+Figure 11-14: A pie chart
+You can find the customization options on the "OPTIONS" tab.
+All available options:
+● Color by
+Pie Chart
+
+Data VisualizationR&S SwissQual AG®
+129Manual 3646.3013.02 ─ 23.0
+● Min/max ranges
+● Bar ordering
+11.7  Maps
+The map widget in SmartAnalytics Scene supports three different types of map layers
+such as point layers for displaying time domain data and bin and region layers for dis-
+playing statistical results. Thus, the map is the only widget that can be used to visual-
+ize time domain data and aggregated statistical data within the same panel.
+To add a new layer:
+1. Click the "+" icon, next to "Configuration" in the map preview area.
+2. Select a value from the value tree and assign it to the layer. Depending on the
+value type ("Time" or statistical like "Average"), you can choose a different visuali-
+zation type.
+Note: You cannot change the type of a layer after creation, so you should be clear
+about whether a bin, region or point layer is required.
+Regarding general settings, the map supports changing the panel title and overriding
+the default background map tiles with a different style.
+Figure 11-15: Adding a new layer to a map
+Maps
+
+Data VisualizationR&S SwissQual AG®
+130Manual 3646.3013.02 ─ 23.0
+11.8  Map Regions
+The first layer type to address in detail is the region layer. It displays a statistical value
+for a whole area like a country, province or city. By clicking a highlighted area of the
+region layer, you can drill into the next lower level of region shapes, e.g., from country
+to region. At the same time, a global filter is added to limit the data to the chosen
+parent region, therefore aligning the visible child regions with other views like bar
+charts.
+Figure 11-16: Adding a new region layer to a map
+Map Regions
+
+Data VisualizationR&S SwissQual AG®
+131Manual 3646.3013.02 ─ 23.0
+Figure 11-17: Configuring a shading value for regions
+The customization options for region layers are limited to choosing a dimension value
+like "Home Operator" to color the regions. Also, under "OPTIONS" you can specify
+whether to use the best or worst value for the shading of the area, e.g., the color of the
+operator with the highest or the lowest throughput in a region.
+11.9  Map Bins
+The bin layer type displays statistical value similar to the region layer. However, in
+addition to selecting a highlighted raster bin area for filtering and drilling into the next
+lower level, the bin layer also supports switching to a smaller bin size automatically by
+zooming into the panel using the mouse wheel or the "+" and "-" button in the map
+area. Furthermore, the bin layer comes with some additional customization options,
+like the "DELTA MODE".
+Map Bins
+
+Data VisualizationR&S SwissQual AG®
+132Manual 3646.3013.02 ─ 23.0
+Figure 11-18: Adding a new bin layer to a map
+The customization option for bin layers allows you to:
+● Choose a dimension value like "Home Operator" to color the regions - "VALUES" /
+"Shading".
+● Choose whether to display the color of the best or the worst group in the shading
+category on a bin - "OPTIONS" / "Sort by best".
+● Lock the bin size to a maximum or minimum size of bin to display - "OPTIONS" /
+"Bin size".
+Map Bins
+
+Data VisualizationR&S SwissQual AG®
+133Manual 3646.3013.02 ─ 23.0
+Figure 11-19: Configuring a bin layer
+The last and most complex customization option for bin layers is the delta mode. It
+allows you to plot the delta of two values on the map, e.g. the difference between the
+average throughput of Operator A and Operator B. Activate this mode by first selecting
+the tab "DELTA MODE". Then, choose from further options:
+● Use the absolute delta or the delta in percent.
+● The theme profile to use for coloring the delta values (note that zero means that
+both values are equal).
+Map Bins
+
+Data VisualizationR&S SwissQual AG®
+134Manual 3646.3013.02 ─ 23.0
+Figure 11-20: Configuring a bin layer with delta mode
+To plot a delta, you also need to define what two values you would like to compare.
+This happens on the "VALUES" tab:
+1. First, select the "Delta value" to split by the grid value.
+2. Select Value A and Value B from the delta value for comparison.
+When this is done, the map shows you for each bin the difference between Value A
+and Value B for each bin.
+Map Bins
+
+Data VisualizationR&S SwissQual AG®
+135Manual 3646.3013.02 ─ 23.0
+Figure 11-21: Configuring a delta plot for SS-RSRP by PCI
+If Value A or Value B is missing in a bin entirely, the bin is colored in light grey. You
+can also see it from the bin tooltips.
+Figure 11-22: A delta plot with absent values for the second selected PCI
+Map Bins
+
+Data VisualizationR&S SwissQual AG®
+136Manual 3646.3013.02 ─ 23.0
+11.10  Indoor Map
+All map views in SmartAnalytics Scene will automatically display floorplans on the map
+for indoor measurement data, collected with ROMES4, SmartBenchmarker and Quali-
+Poc.
+● It is possible to keep drive test and indoor data in the same database.
+● It is highly recommended to use a georeferenced floorplan in the measurement.
+Please consult the corresponding data collection tool’s manual on how to create a
+georeferenced indoor measurement.
+Figure 11-23: An indoor 5G NR scanner measurement
+While zoomed out on the map you will see a building indicator that allows you to select
+a specific site, for which you would like the corresponding floor plan and indoor data.
+Once you zoomed in on a specific building, a floor level indicator allows you to switch
+between different floors or levels of the selected building or site.
+Indoor Map
+
+Data VisualizationR&S SwissQual AG®
+137Manual 3646.3013.02 ─ 23.0
+Figure 11-24: Indoor layer control for selecting a specific floor
+The indoor feature is compatible with any type of layer and works with UE and scanner
+measurements alike. Furthermore, the indoor measurement data is automatically
+aggregated by building and floor, which allows for a statistical comparison between
+separate floors or buildings.
+Figure 11-25: Example of a point layer with UE SINR shown on top of an indoor floor plan
+Indoor Map
+
+Data VisualizationR&S SwissQual AG®
+138Manual 3646.3013.02 ─ 23.0
+11.11  Drilldown Views
+In this section, you can familiarize with all the views in SmartAnalytics Scene that dis-
+play time-based values for session analysis.
+11.12  Map Points and Cells
+Map point layer enables you to display time-based data as dots on the map. You can
+even see points from multiple point layers on the same map. In that case, it makes
+sense to configure different styles for the points and to arrange the layers in useful
+order on top of each other.
+Figure 11-26: Adding a point layer to a map
+You find the customization options for point layers on the " OPTIONS" tab. The options
+allow you to:
+● Choose which value to display among "Best", "Worst", "Avarage", if there are multi-
+ple values available at the same point - "OPTIONS" / "Value priority".
+● Choose a different shape for the points - "OPTIONS" / "Icon".
+● Choose whether to display the actual value as a label right next to each point -
+"OPTIONS" / "Show lables".
+● Choose the size of the point icon - "OPTIONS" / "Size".
+● Enable plotting more point layers on the same map with a predefined offset -
+"OPTIONS" / "Render layer with predefined offset". In addition, you can customize
+the scaling factor of the offset by changing the "Point layer offset factor" in the
+"SETTINGS".
+Map Points and Cells
+
+Data VisualizationR&S SwissQual AG®
+139Manual 3646.3013.02 ─ 23.0
+● Choose whether to display points in a fixed color instead of the normally assigned
+color - "OPTIONS" / "Default color".
+Figure 11-27: Configuring advanced options of a map point layer
+When you add the first point layer to a map, two additional layers appear automatically.
+● The first of those layers is the "Base Stations " layer. It works in the same way as
+the base station layer on the BTS Manager map, but with some extra options. By
+default, it only displays cells that are linked to the active measurement data on the
+point layer. However, you can choose to display all imported BTS.
+● The other layer, "Line to Cell", draws lines between cells and the related measured
+points on the point layer. You can configure when to display these lines (showing
+all possible lines can be overwhelming) and by which criteria (e.g. the carrier index
+or EARFCN of the BTS) to color the lines. Otherwise, lines appear by default in the
+color of the point they connect to.
+For more information on BTS manager, please refer to
+Manual - SmartBenchmarker.pdf .
+Google Earth export
+You can export map points into the KMZ Google Earth file format:
+● For 2D export, select "Generate 2D KMZ file" from the map panel context menu.
+Map Points and Cells
+
+Data VisualizationR&S SwissQual AG®
+140Manual 3646.3013.02 ─ 23.0
+● For 3D export, select "Generate 3D KMZ file".
+– Specify whether to apply export restrictions or not:
+● Each exported point contains information such as measurement value, device,
+operator, time, location, shading and altitude.
+● The point options such as "value priority", "icon" and "size" are kept in the exported
+file.
+Map Points and Cells
+
+Data VisualizationR&S SwissQual AG®
+141Manual 3646.3013.02 ─ 23.0
+Figure 11-28: Exported 3D KMZ file
+You can export the map points only. The export of map bins is not supported.
+You can export multiple point layers.
+11.13  Time-based Table
+With the time-based table, you can display a list of records along the time axis either
+for all devices contributing values for the current point in time or only for the currently
+selected device in the session overview.
+Time-based Table
+
+Data VisualizationR&S SwissQual AG®
+142Manual 3646.3013.02 ─ 23.0
+Figure 11-29: Configuring a simple time-based table
+If you click a line in the table, all the other time-based views synchronize to the nearest
+possible point in time to the time stamp selected with the record. If that particular row
+also belonged to a different UE, also the selected device in the session overview and
+any other device-specific views like the Layer 3 view switches to show data from the
+newly selected device.
+If you want to show the data from a single device only, you need to configure the chart
+with "Depend on device selection" enabled on the "OPTIONS" tab. This makes particu-
+larly sense for data like IP Trace or other trace information.
+Figure 11-30: Show only data from the currently selected device on a time-based table
+Time-based Table
+
+Data VisualizationR&S SwissQual AG®
+143Manual 3646.3013.02 ─ 23.0
+11.14  Time-based Value List
+The time-based value list serves the purpose of displaying some few key values of
+great interest on a compact space and creates a tabular view of the data similar to the
+statistics value list. You can use it to display data from different underlying source
+tables e.g. capacity test throughput results with LTE radio and PDSCH metrics and to
+see the last reported value for each measure for to the current point in time.
+It is important to distinguish between three different types of time-based values on the
+value list:
+● File scope values – like "Home Operator", "File Name", "Campaign" :
+– Show the last value reported value for the current file.
+● Test scope values – like "Test Id", "LQ MOS " and test summary results in general:
+– Show the one value reported for the current test.
+● Time scope values – like "LTE Net PDSCH Throughput", "SS-RSRP", "Carrier
+Index"
+– Show the last value reported value before the current point in time, but no older
+than three seconds.
+– The value starts to fade out after one second and is removed from the list if not
+reported at all in the last three seconds.
+Figure 11-31: A value for PDSCH throughput last reported 0.167s before the current time refer-
+ence
+Time-based Value List
+
+Data VisualizationR&S SwissQual AG®
+144Manual 3646.3013.02 ─ 23.0
+Figure 11-32: Fade-out behavior for time scoped values as the 3rd carrier vanishes
+To configure a value list, simply assign values from the value tree to the highlighted
+fields in the configuration area as shown.
+Time-based Value List
+
+Data VisualizationR&S SwissQual AG®
+145Manual 3646.3013.02 ─ 23.0
+Figure 11-33: Select and assign values to the value list monitor
+More customization options can be found on the "OPTIONS" tab. All available options:
+● Vertical layout
+● Group split-by items
+11.15  Line Chart
+You can display a line chart as:
+● A standard line chart, based on time based values.
+● Cumulative and Probability Density Function (CDF-PDF) line chart.
+Line Chart
+
+Data VisualizationR&S SwissQual AG®
+146Manual 3646.3013.02 ─ 23.0
+Figure 11-34: Line charts options
+The line chart operates with time based for session analysis only.
+● If you add more than a single value to the chart, time series are shown only for the
+currently selected UE.
+● If you choose only a single value, the chart shows data from multiple UEs.
+Line Chart
+
+Data VisualizationR&S SwissQual AG®
+147Manual 3646.3013.02 ─ 23.0
+Figure 11-35: A simple line chart
+For values that need to be split by carrier index, like LTE RSRP, a corresponding split
+by criteria is automatically added and used.
+Figure 11-36: A line chart automatically splitting a value by the required criteria
+To configure a line chart, simply assign values from the value tree to the highlighted
+fields in the configuration area as shown.
+Line Chart
+
+Data VisualizationR&S SwissQual AG®
+148Manual 3646.3013.02 ─ 23.0
+The customization options can be found on the "OPTIONS" tab:
+● "Scope"
+To show the data of one test only, select "Current test".
+● "Select markers to show"
+● "Select phases to show"
+Set the color for a specific test phase to better indicate it on a line chart.
+● "Style"
+● "Shade"
+Line Chart
+
+Data VisualizationR&S SwissQual AG®
+149Manual 3646.3013.02 ─ 23.0
+● "Size"
+● "Opacity"
+● "Span gaps"
+● "Stepped line"
+Figure 11-37: Line chart options
+Additionally, you can customize the line chart display by:
+● Setting the minimum and the maximum value of the vertical axis. Click the arrow
+icon 
+  and drag it to the desired value.
+Click the "X" icon to restore the original value.
+● Clicking the eye icon 
+  to hide the value on the chart. This setting is not persistent
+on a tab change.
+● Linking the mouse wheel zooming with the line chart.
+Click the link icon 
+ . This setting is persistent.
+Line Chart
+
+Data VisualizationR&S SwissQual AG®
+150Manual 3646.3013.02 ─ 23.0
+Figure 11-38: Line chart
+11.16  UE Views
+"UE Views" is composed of four panel options:
+● "LTE Neighbors"
+● "5G NR Neighbors"
+● "RLC/MAC"
+● "PDCP"
+● "5GNR RLC"
+● "5GNR PDCP"
+UE Views
+
+Data VisualizationR&S SwissQual AG®
+151Manual 3646.3013.02 ─ 23.0
+Figure 11-39: UE Views
+11.16.1  LTE Neighbors
+The panel gives you the information about LTE neighbors for a specific timestamp.
+UE Views
+
+Data VisualizationR&S SwissQual AG®
+152Manual 3646.3013.02 ─ 23.0
+The panel is already formatted with predefined default information about "Carrier
+Index", "DL EARFCN", "PCI LTE", "RSRP", "RSRQ" and "RSSI".
+You can add additional information to the "Optional items" from the value tree items.
+"SETTINGS" allows you to customize the panel title.
+11.16.2  5G NR Neighbors
+The panel gives you the information about 5G NR neighbors for a specific timestamp.
+The panel contains default predefined items with information about "DL NR-ARFCN",
+"PCI 5G NR", "Cell Type", "SSB Index", "SS-RSRP", "SS-RSRQ".
+You can add additional information to the "Optional items" from the value tree items.
+"SETTINGS" tab allows you to customize the panel title.
+UE Views
+
+Data VisualizationR&S SwissQual AG®
+153Manual 3646.3013.02 ─ 23.0
+11.16.3  RLC/MAC
+RLC/MAC (5GNR RLC) panel shows you LTE RLC/MAC (5GNR RLC) data that is
+available for the time based analysis.
+You can also create a value list or line chart with RLC and MAC data from the value
+tree items.
+Panels are already configured to report the values in time and the "Current UE" scope.
+You can customize "Mode" and "Direction" settings:
+● "Mode"
+– "RLC Configurations"
+– "RLC Statistics"
+– "MAC Statistics"
+● "Direction"
+– "Uplink"
+– "Downlink"
+– "Uplink & Downlink"
+11.16.4  PDCP
+PDCP (5GNR PDCP) panel shows you LTE PDCP (5GNR PDCP) data that is available
+for the time-based analysis.
+Panels are already configured to report values in time and for the "Current UE" scope.
+UE Views
+
+Data VisualizationR&S SwissQual AG®
+154Manual 3646.3013.02 ─ 23.0
+You can customize "Mode" and "Direction" settings:
+● "Mode"
+– "PDCP Configurations"
+– "PDCP Statistics"
+● "Direction"
+– "Uplink"
+– "Downlink"
+– "Uplink & Downlink"
+11.17  Scanner TopN Views
+You can choose between adding TopN 2G, TopN 3G, TopN 4G or TopN 5G scanner
+view.
+Scanner TopN Views
+
+Data VisualizationR&S SwissQual AG®
+155Manual 3646.3013.02 ─ 23.0
+Figure 11-40: Add TopN scanner view
+Figure 11-41: TopN 5G scanner view
+To expand the decoded Layer 3 information, click the left-most icon 
+ .
+Regarding customization, you have the possibility to add a few additional columns to
+the table:
+● WB RSRQ and RSSI, for TopN 4G view.
+● SS-RSRQ, RSSI and general information about MCC, MNC and Operator, for TopN
+5G view.
+Scanner TopN Views
+
+Data VisualizationR&S SwissQual AG®
+156Manual 3646.3013.02 ─ 23.0
+Figure 11-42: Configuring additional columns for the scanner TopN 5G view
+11.18  Detail Views
+Details views help you to analyze measured data in more detail, by, for example, ana-
+lyzing Layer 3 information, device capabilities, etc.
+Detail Views
+
+Data VisualizationR&S SwissQual AG®
+157Manual 3646.3013.02 ─ 23.0
+Figure 11-43: Add detail views
+You can add three different types of detail views to your workspace:
+● Protocol view with UE layer 3 information.
+● Anomaly Detail view for machine learning algorithms results.
+● UE Capabilities view with supported UE capabilities.
+11.18.1  Protocol View
+Protocol view allows you to see the layer 3 message flow of the currently selected
+device and decode the selected message. Both areas of the panel can be searched
+separately.
+Detail Views
+
+Data VisualizationR&S SwissQual AG®
+158Manual 3646.3013.02 ─ 23.0
+Figure 11-44: Protocol view
+Protocol view panel is already formatted and it contains information about the time,
+layer and the message info.
+● You can add other columns from the value tree items.
+● You can customize, under "OPTIONS", settings such as device side to show, the
+aspect ratio and the information levels to expand.
+● You can customize the panel title under "SETTINGS".
+Detail Views
