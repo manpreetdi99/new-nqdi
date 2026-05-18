@@ -5,18 +5,13 @@ import {
   Legend, AreaChart, Area,
 } from "recharts";
 import type { BenchmarkResult } from "@/types/benchmark";
+import { CHART_PALETTE, LEGEND_WRAPPER_STYLE, DEFAULTS, AXIS_STYLE, GRID_STYLE } from "@/lib/chartStyles";
 
 interface BenchmarkChartsProps {
   results: BenchmarkResult[];
 }
 
-const CHART_COLORS = [
-  "hsl(162, 72%, 46%)",
-  "hsl(200, 80%, 55%)",
-  "hsl(45, 93%, 58%)",
-  "hsl(280, 65%, 60%)",
-  "hsl(0, 72%, 55%)",
-];
+// Palette and common defaults are imported from src/lib/chartStyles
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload) return null;
@@ -75,17 +70,17 @@ const BenchmarkCharts = ({ results }: BenchmarkChartsProps) => {
               <ResponsiveContainer width="100%" height="100%">
                 {chartType === "radar" ? (
                   <RadarChart data={result.data}>
-                    <PolarGrid stroke="hsl(220, 14%, 18%)" />
-                    <PolarAngleAxis dataKey={catCol} tick={{ fill: "hsl(215, 12%, 50%)", fontSize: 11 }} />
-                    <PolarRadiusAxis tick={{ fill: "hsl(215, 12%, 50%)", fontSize: 10 }} />
+                      <PolarGrid stroke={GRID_STYLE.stroke} strokeDasharray={GRID_STYLE.strokeDasharray} />
+                      <PolarAngleAxis dataKey={catCol} {...AXIS_STYLE} />
+                      <PolarRadiusAxis {...AXIS_STYLE} />
                     {numCols.slice(0, 3).map((col, i) => (
                       <Radar
                         key={col}
                         name={col}
                         dataKey={col}
-                        stroke={CHART_COLORS[i]}
-                        fill={CHART_COLORS[i]}
-                        fillOpacity={0.15}
+                        stroke={CHART_PALETTE[i % CHART_PALETTE.length]}
+                        fill={CHART_PALETTE[i % CHART_PALETTE.length]}
+                        fillOpacity={DEFAULTS.radarFillOpacity}
                       />
                     ))}
                     <Legend wrapperStyle={{ fontSize: 11, color: "hsl(215, 12%, 50%)" }} />
@@ -93,38 +88,38 @@ const BenchmarkCharts = ({ results }: BenchmarkChartsProps) => {
                   </RadarChart>
                 ) : chartType === "area" ? (
                   <AreaChart data={result.data}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 14%, 18%)" />
-                    <XAxis dataKey={catCol} tick={{ fill: "hsl(215, 12%, 50%)", fontSize: 11 }} />
-                    <YAxis tick={{ fill: "hsl(215, 12%, 50%)", fontSize: 11 }} />
+                    <CartesianGrid {...GRID_STYLE} />
+                    <XAxis dataKey={catCol} {...AXIS_STYLE} />
+                    <YAxis {...AXIS_STYLE} />
                     {numCols.map((col, i) => (
                       <Area
                         key={col}
                         type="monotone"
                         dataKey={col}
-                        stroke={CHART_COLORS[i]}
-                        fill={CHART_COLORS[i]}
-                        fillOpacity={0.1}
-                        strokeWidth={2}
+                        stroke={CHART_PALETTE[i % CHART_PALETTE.length]}
+                        fill={CHART_PALETTE[i % CHART_PALETTE.length]}
+                        fillOpacity={DEFAULTS.areaFillOpacity}
+                        strokeWidth={DEFAULTS.strokeWidth}
                       />
                     ))}
-                    <Legend wrapperStyle={{ fontSize: 11, color: "hsl(215, 12%, 50%)" }} />
+                    <Legend wrapperStyle={LEGEND_WRAPPER_STYLE} />
                     <Tooltip content={<CustomTooltip />} />
                   </AreaChart>
                 ) : (
                   <BarChart data={result.data}>
-                    <CartesianGrid strokeDasharray="3 3" stroke="hsl(220, 14%, 18%)" />
-                    <XAxis dataKey={catCol} tick={{ fill: "hsl(215, 12%, 50%)", fontSize: 11 }} />
-                    <YAxis tick={{ fill: "hsl(215, 12%, 50%)", fontSize: 11 }} />
+                    <CartesianGrid {...GRID_STYLE} />
+                    <XAxis dataKey={catCol} {...AXIS_STYLE} />
+                    <YAxis {...AXIS_STYLE} />
                     {numCols.map((col, i) => (
                       <Bar
                         key={col}
                         dataKey={col}
-                        fill={CHART_COLORS[i]}
+                        fill={CHART_PALETTE[i % CHART_PALETTE.length]}
                         radius={[4, 4, 0, 0]}
-                        fillOpacity={0.85}
+                        fillOpacity={DEFAULTS.barFillOpacity}
                       />
                     ))}
-                    <Legend wrapperStyle={{ fontSize: 11, color: "hsl(215, 12%, 50%)" }} />
+                    <Legend wrapperStyle={LEGEND_WRAPPER_STYLE} />
                     <Tooltip content={<CustomTooltip />} cursor={{ fill: "hsl(220, 14%, 14%)" }} />
                   </BarChart>
                 )}

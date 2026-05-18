@@ -288,6 +288,7 @@ export default function QueryBuilder({ onApply }: { onApply: (sql: string) => vo
     new Set(["CA.SessionId", "CA.callStatus", "CA.technology", "CA.callDir", "CA.setupTime", "CA.callDuration"]),
   );
   const [wheres, setWheres]           = useState<WhereRow[]>([]);
+  const [useTopN, setUseTopN]         = useState(false);
   const [topN, setTopN]               = useState("500");
   const [orderCol, setOrderCol]       = useState("");
   const [orderDir, setOrderDir]       = useState<"ASC" | "DESC">("DESC");
@@ -334,7 +335,7 @@ export default function QueryBuilder({ onApply }: { onApply: (sql: string) => vo
     joinDefs.forEach((j) => j.columns.forEach((c) => { if (selCols.has(colKey(j.alias, c.name))) colLines.push(`  ${j.alias}.${c.name}`); }));
 
     const lines: string[] = [
-      `SELECT ${topN ? `TOP ${topN} ` : ""}`,
+      `SELECT ${useTopN && topN ? `TOP ${topN} ` : ""}`,
       colLines.length > 0 ? colLines.join(",\n") : `  ${alias}.*`,
       `FROM ${primaryTable.name} ${alias}`,
       ...joinDefs.flatMap((j) => j.sql.split("\n")),
@@ -550,11 +551,18 @@ export default function QueryBuilder({ onApply }: { onApply: (sql: string) => vo
                 <StepLabel n={5} label="TOP / ORDER BY" />
                 <div className="flex flex-wrap items-center gap-3">
                   <label className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={useTopN}
+                      onChange={(e) => setUseTopN(e.target.checked)}
+                      className="accent-primary"
+                    />
                     TOP
                     <input
                       type="number" value={topN} onChange={(e) => setTopN(e.target.value)}
-                      min={0} max={100000}
-                      className="w-20 bg-muted border border-border rounded px-2 py-1 text-[10px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+                      min={1} max={100000}
+                      disabled={!useTopN}
+                      className="w-20 bg-muted border border-border rounded px-2 py-1 text-[10px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40 disabled:opacity-40 disabled:cursor-not-allowed"
                     />
                     <span>rows</span>
                   </label>
