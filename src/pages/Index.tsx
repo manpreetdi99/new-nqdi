@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, Fragment } from "react";
-import { motion } from "framer-motion";
-import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, SlidersHorizontal, X, Wifi } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
+import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, SlidersHorizontal, X, Wifi, ArrowUp } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import QueryEditor from "@/components/QueryEditor";
 import ResultsTable from "@/components/ResultsTable";
@@ -178,6 +178,14 @@ const Index = () => {
   const [dataCallsLoading, setDataCallsLoading] = useState(false);
   const [selectedDataSessionId, setSelectedDataSessionId] = useState<string | null>(null);
   const [callRecords, setCallRecords] = useState<CallRecord[]>([]);
+
+  const [showScrollTop, setShowScrollTop] = useState(false);
+
+  useEffect(() => {
+    const onScroll = () => setShowScrollTop(window.scrollY > 200);
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   const [results, setResults] = useState<BenchmarkResult[]>([]);
   const [isRunning, setIsRunning] = useState(false);
@@ -667,6 +675,22 @@ const Index = () => {
             >
               Clear filters
             </button>
+            <AnimatePresence>
+              {showScrollTop && (
+                <motion.button
+                  initial={{ opacity: 0, scale: 0.85 }}
+                  animate={{ opacity: 1, scale: 1 }}
+                  exit={{ opacity: 0, scale: 0.85 }}
+                  transition={{ duration: 0.15 }}
+                  type="button"
+                  onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
+                  className="flex items-center gap-1.5 px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70 text-[15px]"
+                >
+                  <ArrowUp className="h-3.5 w-3.5" />
+                  Scroll up
+                </motion.button>
+              )}
+            </AnimatePresence>
             <span>{filteredCallRecords.length} calls recorded</span>
             {results.length > 0 && (
               <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-1.5">

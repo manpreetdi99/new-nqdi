@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchCallPagingInfo, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchGsmScannerRaw, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallPagingInfoResponse, type PagingTimelineEvent, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchCallPagingInfo, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchGsmScannerRaw, fetchGsmContextSignal, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallPagingInfoResponse, type PagingTimelineEvent, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 //ReferenceLine για γραμμες στο διαγραμμα, πχ για thresholds. 
@@ -124,6 +124,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
   const [matchedAntennaBSide, setMatchedAntennaBSide] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number; azimuth: number | null; freq: number | null; vendor: string | null; enbName: string | null; tech: string | null; height: number | null; downtilt: number | null; siteId: number | null; cellId: number | null } | null>(null);
 
   const [contextSignal, setContextSignal] = useState<any[]>([]);
+  const [gsmContextSignal, setGsmContextSignal] = useState<any[]>([]);
   const [contextTechnology, setContextTechnology] = useState<any[]>([]);
   const [pagingData, setPagingData] = useState<CallPagingInfoResponse | null>(null);
   const [deviceInfo, setDeviceInfo] = useState<CallDeviceInfo | null>(null);
@@ -179,7 +180,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
-        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, deviceRes, lteMeasCompRes, lteScannerCompRes, scannerRawRes, gsmScannerRes] = await Promise.allSettled([
+        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, deviceRes, lteMeasCompRes, lteScannerCompRes, scannerRawRes, gsmScannerRes, gsmCtxSignalRes] = await Promise.allSettled([
           call.callMode !== "CS" ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
           fetchMosValues(database, call.callId),
@@ -198,6 +199,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           call.callMode !== "CS" ? fetchLteScannerMeasurement(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
           call.callMode !== "CS" ? fetchLteScannerRaw(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
           call.callMode === "CS" ? fetchGsmScannerRaw(database, call.callId) : Promise.resolve([]),
+          call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignal(database, call.callId) : Promise.resolve({ signal: [] }),
         ]);
 
         if (lteRes.status === "fulfilled") {
@@ -298,6 +300,12 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         } else {
           setGsmScannerRaw([]);
         }
+
+        if (gsmCtxSignalRes.status === "fulfilled") {
+          setGsmContextSignal((gsmCtxSignalRes.value as any).signal || []);
+        } else {
+          setGsmContextSignal([]);
+        }
       } catch (err) {
         console.error("Failed to load metrics", err);
       } finally {
@@ -312,6 +320,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       setScannerRawA([]);
       setScannerRawB([]);
       setGsmScannerRaw([]);
+      setGsmContextSignal([]);
       loadRadio();
     }
   }, [database, call.callId, call.callMode]);
@@ -544,6 +553,38 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       last:  last     >= 0 ? last     : null,
     };
   }, [contextChartData]);
+
+  const gsmChartData = useMemo(() => {
+    if (!isGSMMode) return [];
+    // Use the context signal (has real before/during/after) when available
+    if (gsmContextSignal.length > 0) {
+      return gsmContextSignal.map((v: any, idx: number) => ({
+        idx,
+        time: new Date(v.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+        RxLevSub: v.RxLevSub != null ? Number(v.RxLevSub) : undefined,
+        RxQualSub: v.RxQualSub != null ? Number(v.RxQualSub) : undefined,
+        phase: v.phase as "before" | "during" | "after",
+      }));
+    }
+    // Fallback: use the current call's measurements (all "during") so the chart always renders
+    return activeRadioValues.map((val: any, idx: number) => ({
+      idx,
+      time: new Date(val.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
+      RxLevSub: val.RxLevSub != null ? Number(val.RxLevSub) : undefined,
+      RxQualSub: val.RxQualSub != null ? Number(val.RxQualSub) : undefined,
+      phase: "during" as const,
+    }));
+  }, [isGSMMode, gsmContextSignal, activeRadioValues]);
+
+  const gsmDuringZone = useMemo(() => {
+    const firstIdx = gsmChartData.findIndex(d => d.phase === "during");
+    const lastIdx  = [...gsmChartData].reverse().findIndex(d => d.phase === "during");
+    const last = lastIdx === -1 ? -1 : gsmChartData.length - 1 - lastIdx;
+    return {
+      first: firstIdx >= 0 ? firstIdx : null,
+      last:  last     >= 0 ? last     : null,
+    };
+  }, [gsmChartData]);
 
   return (
     <motion.div
@@ -994,42 +1035,40 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               <table className="w-full text-xs text-center">
                 <thead className="sticky top-0 bg-muted border-b border-border z-10">
                   <tr>
+                    <th className="px-2 py-1 font-semibold">MsgTime</th>
                     <th className="px-2 py-1 font-semibold">KPIId</th>
                     <th className="px-2 py-1 font-semibold">ErrorCode</th>
-                    {/* <th className="px-2 py-1 font-semibold">Value1</th>
-                    <th className="px-2 py-1 font-semibold">Value2</th> */}
                     <th className="px-2 py-1 font-semibold">Value3</th>
                     <th className="px-2 py-1 font-semibold">Value4</th>
                     <th className="px-2 py-1 font-semibold">Value5</th>
-                    <th className="px-2 py-1 font-semibold">MsgTime</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50">
-                  {kpiValues.map((val, idx) => {
-                    const tStr = toChartTime(val.StartTime ?? null);
-                    const isActive = tStr !== null && tStr === hoveredTimeStr;
-                    return (
-                      <tr
-                        key={idx}
-                        style={isActive ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" } : undefined}
-                        className={`transition-all duration-100 cursor-pointer ${isActive
-                          ? "bg-cyan-500/10"
-                          : "hover:bg-muted/40"
-                          }`}
-                        onMouseEnter={() => { setHoveredRadioIndex(null); setHoveredTimeStr(tStr); }}
-                        onMouseLeave={() => setHoveredTimeStr(null)}
-                      >
-                        <td className="px-1 py-0.5 font-mono">{val.KPIId}</td>
-                        <td className="px-1 py-0.5 font-mono">{val.ErrorCode}</td>
-                        {/* <td className="px-1 py-0.5 font-mono">{val.Value1}</td>
-                        <td className="px-1 py-0.5 font-mono">{val.Value2}</td> */}
-                        <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value3}</td>
-                        <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value4}</td>
-                        <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value5}</td>
-                        <td className="px-1 py-0.5">{formatDateTime(val.StartTime)}</td>
-                      </tr>
-                    );
-                  })}
+                  {[...kpiValues]
+                    .sort((a, b) => new Date(a.StartTime).getTime() - new Date(b.StartTime).getTime())
+                    .map((val, idx) => {
+                      const tStr = toChartTime(val.StartTime ?? null);
+                      const isActive = tStr !== null && tStr === hoveredTimeStr;
+                      return (
+                        <tr
+                          key={idx}
+                          style={isActive ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" } : undefined}
+                          className={`transition-all duration-100 cursor-pointer ${isActive
+                            ? "bg-cyan-500/10"
+                            : "hover:bg-muted/40"
+                            }`}
+                          onMouseEnter={() => { setHoveredRadioIndex(null); setHoveredTimeStr(tStr); }}
+                          onMouseLeave={() => setHoveredTimeStr(null)}
+                        >
+                          <td className="px-1 py-0.5 whitespace-nowrap">{formatDateTime(val.StartTime)}</td>
+                          <td className="px-1 py-0.5 font-mono">{val.KPIId}</td>
+                          <td className="px-1 py-0.5 font-mono">{val.ErrorCode}</td>
+                          <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value3}</td>
+                          <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value4}</td>
+                          <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value5}</td>
+                        </tr>
+                      );
+                    })}
                 </tbody>
               </table>
             </div>
@@ -1121,7 +1160,13 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                       </th>
                       <th className="px-1 py-1 font-semibold">RxQual</th>
                       {gsmScannerMatched.length > 0 && (
-                        <th className="px-1 py-1 font-semibold text-muted-foreground/60" title="Χρονική απόσταση UE → scanner sample">Δt(s)</th>
+                        <>
+                          <th className="px-1 py-1 font-semibold text-muted-foreground/60" title="Χρονική απόσταση UE → scanner sample">Δt(s)</th>
+                          <th className="px-1 py-1 font-semibold text-cyan-400/80">RFBand</th>
+                          <th className="px-1 py-1 font-semibold text-cyan-400/80">BSIC</th>
+                          <th className="px-1 py-1 font-semibold text-cyan-400/80">CGI</th>
+                          <th className="px-1 py-1 font-semibold text-cyan-400/80">SCN Date</th>
+                        </>
                       )}
                       <th className="px-1 py-1 font-semibold">MsgTime</th>
                     </tr>
@@ -1161,9 +1206,15 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                           </td>
                           <td className={`px-1 py-0.5 font-mono font-bold ${rxqColor}`}>{val.RxQualSub}</td>
                           {gsmScannerMatched.length > 0 && (
-                            <td className={`px-1 py-0.5 font-mono ${dtColor}`} title={scn ? `Scanner: ${scn.FullDate}` : ""}>
-                              {dtSec != null ? dtSec.toFixed(1) : "—"}
-                            </td>
+                            <>
+                              <td className={`px-1 py-0.5 font-mono ${dtColor}`} title={scn ? `Scanner: ${scn.FullDate}` : ""}>
+                                {dtSec != null ? dtSec.toFixed(1) : "—"}
+                              </td>
+                              <td className="px-1 py-0.5 font-mono text-cyan-400/80">{scn?.RFBand ?? "—"}</td>
+                              <td className="px-1 py-0.5 font-mono text-cyan-400/80">{scn?.BSIC ?? "—"}</td>
+                              <td className="px-1 py-0.5 font-mono text-cyan-400/80 text-[10px]">{scn?.CGI ?? "—"}</td>
+                              <td className="px-1 py-0.5 text-cyan-400/80">{scn?.FullDate ? formatDateTime(scn.FullDate) : "—"}</td>
+                            </>
                           )}
                           <td className="px-1 py-0.5">{formatDateTime(val.MsgTime)}</td>
                         </tr>
@@ -1256,61 +1307,62 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           )}
         </div>
 
-        {/* GSM Scanner panel — μόνο για CS κλήσεις */}
-        {call.callMode === "CS" && (
-          <div className="bg-card border border-border rounded-lg p-2">
-            <h3 className="text-xs font-semibold text-foreground mb-1 flex items-center gap-1.5">
-              <Signal className="h-3 w-3 text-primary" />
-              GSM Scanner
-            </h3>
-            {isLoadingRadio ? (
-              <p className="text-xs text-muted-foreground">Φόρτωση δεδομένων...</p>
-            ) : gsmScannerRaw.length > 0 ? (
-              <div className="overflow-x-auto max-h-[260px] overflow-y-auto">
-                <table className="w-full text-xs text-center">
-                  <thead className="sticky top-0 bg-muted border-b border-border z-10">
-                    <tr>
-                      <th className="px-1 py-1 font-semibold text-left">BCCH</th>
-                      <th className="px-1 py-1 font-semibold">RFBand</th>
-                      <th className="px-1 py-1 font-semibold">BSIC</th>
-                      <th className="px-1 py-1 font-semibold">RxLev</th>
-                      <th className="px-1 py-1 font-semibold">CGI</th>
-                      <th className="px-1 py-1 font-semibold">FullDate</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/50">
-                    {gsmScannerRaw.map((row, idx) => {
-                      const rxAbs = Math.abs(Number(row.RxLev));
-                      const rxColor = rxAbs >= 95 ? "text-destructive" : rxAbs >= 90 ? "text-warning" : "text-primary";
-                      return (
-                        <tr key={idx} className="hover:bg-muted/40 cursor-default">
-                          <td className="px-1 py-0.5 font-mono text-left font-bold">{row.BCCH}</td>
-                          <td className="px-1 py-0.5 font-mono">{row.RFBand}</td>
-                          <td className="px-1 py-0.5 font-mono">{row.BSIC ?? "—"}</td>
-                          <td className={`px-1 py-0.5 font-mono font-bold ${rxColor}`}>{row.RxLev}</td>
-                          <td className="px-1 py-0.5 font-mono text-muted-foreground text-[10px]">{row.CGI ?? "—"}</td>
-                          <td className="px-1 py-0.5">{row.FullDate ? formatDateTime(row.FullDate) : "—"}</td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            ) : (
-              <p className="text-xs text-muted-foreground">Δεν υπάρχουν scanner δεδομένα.</p>
-            )}
-          </div>
-        )}
       </div>
 
       {/* ── Συμπεριφορά δικτύου πριν / κατά / μετά κλήση ── */}
-      {(contextChartData.length > 0 || contextTechnology.length > 0) && (
+      {(contextChartData.length > 0 || contextTechnology.length > 0 || (isGSMMode && gsmChartData.length > 0)) && (
         <div className="bg-card border border-border rounded-lg p-3 space-y-3">
           <h3 className="text-sm font-semibold text-foreground">
             Συμπεριφορά δικτύου ±10 δευτ. πριν / μετά κλήση
           </h3>
 
-          {/* Signal chart */}
+          {/* GSM chart — RxLev / RxQual */}
+          {isGSMMode && gsmChartData.length > 0 && (
+            <div>
+              <div className="flex items-center gap-3 mb-1">
+                <span className="text-xs text-muted-foreground">RxLev / RxQual</span>
+                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-amber-400/30 border border-amber-400/50" />Πριν</span>
+                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-blue-500/30 border border-blue-500/50" />Κατά</span>
+                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-orange-400/30 border border-orange-400/50" />Μετά</span>
+              </div>
+              <ResponsiveContainer width="100%" height={160}>
+                <LineChart data={gsmChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
+                  <XAxis
+                    dataKey="idx"
+                    type="number"
+                    domain={[0, gsmChartData.length - 1]}
+                    tickFormatter={(v: number) => gsmChartData[v]?.time ?? ""}
+                    tick={{ fontSize: 9, fill: "#94a3b8" }}
+                    interval="preserveStartEnd"
+                  />
+                  <YAxis yAxisId="rxlev" domain={[-120, -40]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={32} />
+                  <YAxis yAxisId="rxqual" orientation="right" domain={[7, 0]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={22} />
+                  <RechartsTooltip
+                    contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155", fontSize: 11 }}
+                    labelFormatter={(v: number) => gsmChartData[v]?.time ?? ""}
+                    formatter={(val: any, name: string) => [val != null ? Number(val).toFixed(1) : "—", name]}
+                  />
+                  {/* before — κίτρινο */}
+                  {gsmDuringZone.first != null && (
+                    <ReferenceArea yAxisId="rxlev" x1={0} x2={gsmDuringZone.first} fill="#f59e0b" fillOpacity={0.25} stroke="#f59e0b" strokeOpacity={0.4} strokeWidth={1} />
+                  )}
+                  {/* during — μπλε */}
+                  {gsmDuringZone.first != null && gsmDuringZone.last != null && (
+                    <ReferenceArea yAxisId="rxlev" x1={gsmDuringZone.first} x2={gsmDuringZone.last} fill="#3b82f6" fillOpacity={0.22} stroke="#3b82f6" strokeOpacity={0.5} strokeWidth={1} />
+                  )}
+                  {/* after — πορτοκαλί */}
+                  {gsmDuringZone.last != null && (
+                    <ReferenceArea yAxisId="rxlev" x1={gsmDuringZone.last} x2={gsmChartData.length - 1} fill="#f97316" fillOpacity={0.25} stroke="#f97316" strokeOpacity={0.4} strokeWidth={1} />
+                  )}
+                  <Line yAxisId="rxlev" dataKey="RxLevSub" stroke="#22c55e" dot={false} strokeWidth={2} connectNulls name="RxLev" />
+                  <Line yAxisId="rxqual" dataKey="RxQualSub" stroke="#e2e8f0" dot={false} strokeWidth={1} connectNulls name="RxQual" />
+                </LineChart>
+              </ResponsiveContainer>
+            </div>
+          )}
+
+          {/* LTE Signal chart */}
           {contextChartData.length > 0 && (
             <div>
               <div className="flex items-center gap-3 mb-1">
@@ -1397,7 +1449,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
             </div>
           )}
 
-          {contextChartData.length === 0 && contextTechnology.length === 0 && (
+          {contextChartData.length === 0 && contextTechnology.length === 0 && !(isGSMMode && gsmChartData.length > 0) && (
             <p className="text-xs text-muted-foreground">Δεν βρέθηκαν δεδομένα στο παράθυρο ±10 δευτ.</p>
           )}
         </div>

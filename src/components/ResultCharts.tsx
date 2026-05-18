@@ -91,6 +91,37 @@ function isNumericCol(col: string, sample: Record<string, unknown>[]): boolean {
   return sample.some((r) => toNum(r[col]) !== null);
 }
 
+// Prefer operator/categorical columns as the default X axis.
+// Priority: exact known operator columns first, then any string-valued column.
+const OPERATOR_COL_PRIORITY = [
+  "ASideLocation", "Location", "location",
+  "CollectionName", "collection",
+  "operator", "Operator",
+  "technology", "Technology",
+  "callStatus", "status", "Status",
+  "callType", "callMode",
+];
+
+function pickDefaultXCol(columns: string[], sample: Record<string, unknown>[]): string {
+  for (const preferred of OPERATOR_COL_PRIORITY) {
+    if (columns.includes(preferred)) return preferred;
+  }
+  // Fall back to first non-numeric column
+  const strCol = columns.find((c) => !isNumericCol(c, sample));
+  return strCol ?? columns[0] ?? "";
+}
+
+// For the pie value, avoid count/total columns and prefer avg/mos/rate columns.
+const COUNT_COL_PATTERN = /^(count|total|calls|cnt|num|n_|rows)/i;
+const AVG_COL_PATTERN   = /^(avg|mean|mos|rate|pct|percent|ratio|score|throughput|rsrp|rsrq|sinr|setup|duration)/i;
+
+function pickDefaultPieValue(numericCols: string[]): string {
+  const avgCol = numericCols.find((c) => AVG_COL_PATTERN.test(c));
+  if (avgCol) return avgCol;
+  const nonCount = numericCols.find((c) => !COUNT_COL_PATTERN.test(c));
+  return nonCount ?? numericCols[0] ?? "";
+}
+
 // ─── Tooltips ─────────────────────────────────────────────────────────────────
 
 const CustomTooltip = ({ active, payload, label }: any) => {
@@ -288,11 +319,11 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
 
   // ── State ───────────────────────────────────────────────────────────────
 
-  const [chartType, setChartType] = useState<ChartType>("line");
-  const [xCol,      setXCol]      = useState(columns[0] ?? "");
+  const [chartType, setChartType] = useState<ChartType>("bar");
+  const [xCol,      setXCol]      = useState(() => pickDefaultXCol(columns, sample));
   const [addYCol,   setAddYCol]   = useState("");
   const [pieLabel,  setPieLabel]  = useState(columns[0] ?? "");
-  const [pieValue,  setPieValue]  = useState(numericCols[0] ?? "");
+  const [pieValue,  setPieValue]  = useState(() => pickDefaultPieValue(numericCols));
 
   const [ySeries, setYSeries] = useState<YSeries[]>(() =>
     numericCols.slice(0, 2).map((col, i) => ({

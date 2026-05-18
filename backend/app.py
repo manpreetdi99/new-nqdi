@@ -640,8 +640,8 @@ def get_gsm_values(
                   ,g.[MsgTime]
                   ,g.[PosId]
                   ,g.[NetworkId]
-                  ,g.[RxLevSub]
-                  ,g.[RxQualSub]
+                  ,COALESCE(g.[RxLevSub],  g.[RxLevFull])  AS RxLevSub
+                  ,COALESCE(g.[RxQualSub], g.[RxQualFull]) AS RxQualSub
                   ,p.Latitude
                   ,p.Longitude
               FROM [GSMMeasReport] g
@@ -699,8 +699,8 @@ def get_gsm_values_b_side(
                 G.[MsgTime],
                 G.[PosId],
                 G.[NetworkId],
-                G.[RxLevSub],
-                G.[RxQualSub]
+                COALESCE(G.[RxLevSub],  G.[RxLevFull])  AS RxLevSub,
+                COALESCE(G.[RxQualSub], G.[RxQualFull]) AS RxQualSub
             FROM [GSMMeasReport] G
             INNER JOIN b_side B
                 ON G.SessionId = B.BSessionId
@@ -958,6 +958,64 @@ def get_antennas(
 
 
 # ── Call context: signal & technology window around a call ──────────────────
+
+@app.get("/api/gsm_context_signal")
+def get_gsm_context_signal(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1),
+    window_sec: int = Query(default=10, ge=10, le=300)
+):
+    """GSM RxLev/RxQual in a ±window_sec window around the call, queried by TIME (not FileId).
+    Falls back from RxLevSub→RxLevFull and RxQualSub→RxQualFull when Sub is NULL.
+    Each row carries phase='before'|'during'|'after'."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            ;WITH call_info AS (
+                SELECT TOP 1
+                    CA.callStartTimeStamp AS start_time,
+                    DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp) AS end_time
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+            ),
+            win AS (
+                SELECT
+                    DATEADD(SECOND, -?, ci.start_time) AS window_start,
+                    DATEADD(SECOND,  ?, ci.end_time)   AS window_end,
+                    ci.start_time,
+                    ci.end_time
+                FROM call_info ci
+            )
+            SELECT
+                g.MsgTime,
+                g.SessionId,
+                COALESCE(g.RxLevSub,  g.RxLevFull)  AS RxLevSub,
+                COALESCE(g.RxQualSub, g.RxQualFull) AS RxQualSub,
+                p.Latitude,
+                p.Longitude,
+                CASE
+                    WHEN g.MsgTime < w.start_time THEN 'before'
+                    WHEN g.MsgTime > w.end_time   THEN 'after'
+                    ELSE 'during'
+                END AS phase
+            FROM win w
+            INNER JOIN GSMMeasReport g
+                ON  g.MsgTime BETWEEN w.window_start AND w.window_end
+            LEFT JOIN Position p
+                ON  p.PosId = g.PosId
+            ORDER BY g.MsgTime
+        """, (session_id, window_sec, window_sec))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+        conn.close()
+
+        return {"signal": [{columns[i]: row[i] for i in range(len(columns))} for row in rows]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/call_context_signal")
 def get_call_context_signal(

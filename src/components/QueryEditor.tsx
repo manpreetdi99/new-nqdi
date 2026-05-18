@@ -140,6 +140,77 @@ WHERE CollectionName IS NOT NULL
 GROUP BY CollectionName
 ORDER BY last_file DESC`,
   },
+  {
+    label: "KPIs ανά operator (calls)",
+    sql: `SELECT
+  FL.ASideLocation                            AS Location,
+  COUNT(*)                                    AS total_calls,
+  SUM(CASE WHEN CA.callStatus LIKE '%Drop%' OR CA.callStatus LIKE '%Fail%'
+           THEN 1 ELSE 0 END)                 AS drop_fail,
+  ROUND(
+    100.0 * SUM(CASE WHEN CA.callStatus LIKE '%Drop%' OR CA.callStatus LIKE '%Fail%'
+                     THEN 1 ELSE 0 END)
+    / NULLIF(COUNT(*), 0), 2)                 AS drop_fail_pct,
+  ROUND(AVG(CA.setupTime), 2)                 AS avg_setup_ms,
+  ROUND(AVG(LQ.OptionalWB), 3)               AS avg_mos
+FROM CallAnalysis CA
+LEFT JOIN FileList FL        ON CA.FileId    = FL.FileId
+LEFT JOIN Sessions S         ON S.SessionId  = CA.SessionId
+LEFT JOIN ResultsLQ08Avg LQ  ON LQ.SessionId = CA.SessionId
+WHERE S.Valid IN (0, 1)
+GROUP BY FL.ASideLocation
+ORDER BY total_calls DESC`,
+  },
+  {
+    label: "Drop/Fail rate ανά operator",
+    sql: `SELECT
+  FL.ASideLocation                            AS Location,
+  CA.technology,
+  COUNT(*)                                    AS total,
+  SUM(CASE WHEN CA.callStatus LIKE '%Drop%'  THEN 1 ELSE 0 END) AS dropped,
+  SUM(CASE WHEN CA.callStatus LIKE '%Fail%'  THEN 1 ELSE 0 END) AS failed,
+  ROUND(
+    100.0 * SUM(CASE WHEN CA.callStatus LIKE '%Drop%' OR CA.callStatus LIKE '%Fail%'
+                     THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS drop_fail_pct
+FROM CallAnalysis CA
+LEFT JOIN FileList FL ON CA.FileId   = FL.FileId
+LEFT JOIN Sessions S  ON S.SessionId = CA.SessionId
+WHERE S.Valid IN (0, 1)
+GROUP BY FL.ASideLocation, CA.technology
+ORDER BY FL.ASideLocation, total DESC`,
+  },
+  {
+    label: "Avg RSRP ανά operator",
+    sql: `SELECT
+  FL.ASideLocation  AS Location,
+  COUNT(*)          AS measurements,
+  ROUND(AVG(CAST(LM.RSRP  AS FLOAT)), 2) AS avg_RSRP,
+  ROUND(AVG(CAST(LM.RSRQ  AS FLOAT)), 2) AS avg_RSRQ,
+  ROUND(AVG(CAST(LM.SINR0 AS FLOAT)), 2) AS avg_SINR
+FROM LTEMeasurementReport LM
+LEFT JOIN Sessions S  ON S.SessionId = LM.SessionId
+LEFT JOIN FileList FL ON FL.FileId   = S.FileId
+WHERE S.Valid IN (0, 1)
+  AND LM.RSRP IS NOT NULL
+GROUP BY FL.ASideLocation
+ORDER BY avg_RSRP DESC`,
+  },
+  {
+    label: "MOS ανά operator & collection",
+    sql: `SELECT
+  FL.CollectionName,
+  FL.ASideLocation  AS Location,
+  COUNT(*)          AS calls,
+  ROUND(AVG(LQ.OptionalWB), 3) AS avg_mos,
+  ROUND(MIN(LQ.OptionalWB), 3) AS min_mos,
+  ROUND(MAX(LQ.OptionalWB), 3) AS max_mos
+FROM ResultsLQ08Avg LQ
+LEFT JOIN Sessions S  ON S.SessionId = LQ.SessionId
+LEFT JOIN FileList FL ON FL.FileId   = S.FileId
+WHERE LQ.OptionalWB IS NOT NULL
+GROUP BY FL.CollectionName, FL.ASideLocation
+ORDER BY FL.CollectionName, avg_mos DESC`,
+  },
 ];
 
 // ──────────────────────────────────────────────
