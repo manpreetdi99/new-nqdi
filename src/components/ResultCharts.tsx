@@ -49,6 +49,7 @@ const fmtPieLabel = ({ name, percent }: { name: string; percent: number }) =>
 
 type ChartType = "line" | "bar" | "area" | "scatter" | "pie";
 type YSide = "left" | "right";
+type AggFn = "count" | "sum" | "avg" | "min" | "max";
 
 interface YSeries {
   col: string;
@@ -157,6 +158,35 @@ const CHART_TYPES: { type: ChartType; label: string; icon: React.ReactNode }[] =
 ];
 
 // ─── Sub-components ───────────────────────────────────────────────────────────
+
+const AGG_OPTIONS: { fn: AggFn; label: string }[] = [
+  { fn: "count", label: "COUNT" },
+  { fn: "sum",   label: "SUM"   },
+  { fn: "avg",   label: "AVG"   },
+  { fn: "min",   label: "MIN"   },
+  { fn: "max",   label: "MAX"   },
+];
+
+function AggFnBar({ value, onChange }: { value: AggFn; onChange: (f: AggFn) => void }) {
+  return (
+    <div className="inline-flex items-center gap-0.5 rounded-md bg-muted/60 border border-border p-0.5">
+      {AGG_OPTIONS.map(({ fn, label }) => (
+        <button
+          key={fn}
+          onClick={() => onChange(fn)}
+          className={[
+            "px-2 py-0.5 rounded text-[10px] font-mono font-medium transition-all",
+            value === fn
+              ? "bg-background text-foreground shadow-sm border border-border/60"
+              : "text-muted-foreground hover:text-foreground hover:bg-muted/50",
+          ].join(" ")}
+        >
+          {label}
+        </button>
+      ))}
+    </div>
+  );
+}
 
 /** Segmented chart-type selector */
 function ChartTypeBar({
@@ -317,6 +347,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
 
   const [grouping,  setGrouping]  = useState(true);
   const [numBins,   setNumBins]   = useState(DEFAULT_BINS);
+  const [aggFn,     setAggFn]     = useState<AggFn>("avg");
 
   // ── Y series handlers ───────────────────────────────────────────────────
 
@@ -352,7 +383,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
     [grouping, xIsNumeric, slice.length],
   );
 
-  // Bin slice into numBins buckets along X, aggregate Y as mean
+  // Bin slice into numBins buckets along X, aggregate Y by aggFn
   const binnedData = useMemo((): Record<string, unknown>[] | null => {
     if (!shouldGroup || ySeries.length === 0) return null;
     const xVals = slice.map((r) => toNum(r[xCol])).filter((v): v is number => v !== null);
@@ -362,19 +393,25 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
     if (xMin === xMax) return null;
 
     const binSize = (xMax - xMin) / numBins;
-    const sums:   Record<number, Record<string, number>> = {};
-    const counts: Record<number, Record<string, number>> = {};
+    const sums:     Record<number, Record<string, number>> = {};
+    const yCounts:  Record<number, Record<string, number>> = {};
+    const rowCounts:Record<number, number>                 = {};
+    const mins:     Record<number, Record<string, number>> = {};
+    const maxs:     Record<number, Record<string, number>> = {};
 
     for (const row of slice) {
       const x = toNum(row[xCol]);
       if (x === null) continue;
       const bi = Math.min(Math.floor((x - xMin) / binSize), numBins - 1);
-      if (!sums[bi])   { sums[bi]   = {}; counts[bi] = {}; }
+      if (!sums[bi]) { sums[bi] = {}; yCounts[bi] = {}; mins[bi] = {}; maxs[bi] = {}; rowCounts[bi] = 0; }
+      rowCounts[bi]++;
       for (const s of ySeries) {
         const y = toNum(row[s.col]);
         if (y !== null) {
-          sums[bi][s.col]   = (sums[bi][s.col]   ?? 0) + y;
-          counts[bi][s.col] = (counts[bi][s.col] ?? 0) + 1;
+          sums[bi][s.col]    = (sums[bi][s.col]    ?? 0) + y;
+          yCounts[bi][s.col] = (yCounts[bi][s.col] ?? 0) + 1;
+          if (mins[bi][s.col] === undefined || y < mins[bi][s.col]) mins[bi][s.col] = y;
+          if (maxs[bi][s.col] === undefined || y > maxs[bi][s.col]) maxs[bi][s.col] = y;
         }
       }
     }
@@ -383,13 +420,20 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
       const cx = +(xMin + (i + 0.5) * binSize).toFixed(4);
       const out: Record<string, unknown> = { __x: cx };
       let hasData = false;
+      const rc = rowCounts[i] ?? 0;
       for (const s of ySeries) {
-        const c = counts[i]?.[s.col];
-        if (c) { out[s.col] = +(sums[i][s.col] / c).toFixed(4); hasData = true; }
+        const yc = yCounts[i]?.[s.col] ?? 0;
+        if (rc === 0) continue;
+        hasData = true;
+        if      (aggFn === "count") out[s.col] = rc;
+        else if (aggFn === "sum"  ) out[s.col] = yc > 0 ? sums[i][s.col] : null;
+        else if (aggFn === "avg"  ) out[s.col] = yc > 0 ? +(sums[i][s.col] / yc).toFixed(4) : null;
+        else if (aggFn === "min"  ) out[s.col] = mins[i]?.[s.col] ?? null;
+        else if (aggFn === "max"  ) out[s.col] = maxs[i]?.[s.col] ?? null;
       }
       return hasData ? out : null;
     }).filter((d): d is Record<string, unknown> => d !== null);
-  }, [shouldGroup, slice, xCol, ySeries, numBins]);
+  }, [shouldGroup, slice, xCol, ySeries, numBins, aggFn]);
 
   // ── Categorical / pivot mode ────────────────────────────────────────────
   // When the first Y series is a non-numeric column, we pivot:
@@ -399,6 +443,47 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
     () => ySeries.length > 0 && !numericCols.includes(ySeries[0].col),
     [ySeries, numericCols],
   );
+
+  // Group categorical X rows by X value, aggregate Y by aggFn
+  const categoricalAggData = useMemo((): Record<string, unknown>[] | null => {
+    if (xIsNumeric || yIsCategorical || ySeries.length === 0) return null;
+    const order: string[] = [];
+    const seen = new Set<string>();
+    const rowCounts: Record<string, number>                 = {};
+    const sums:      Record<string, Record<string, number>> = {};
+    const yCounts:   Record<string, Record<string, number>> = {};
+    const mins:      Record<string, Record<string, number>> = {};
+    const maxs:      Record<string, Record<string, number>> = {};
+
+    for (const row of slice) {
+      const x = String(row[xCol] ?? "(blank)");
+      if (!seen.has(x)) { seen.add(x); order.push(x); rowCounts[x] = 0; sums[x] = {}; yCounts[x] = {}; mins[x] = {}; maxs[x] = {}; }
+      rowCounts[x]++;
+      for (const s of ySeries) {
+        const y = toNum(row[s.col]);
+        if (y !== null) {
+          sums[x][s.col]    = (sums[x][s.col]    ?? 0) + y;
+          yCounts[x][s.col] = (yCounts[x][s.col] ?? 0) + 1;
+          if (mins[x][s.col] === undefined || y < mins[x][s.col]) mins[x][s.col] = y;
+          if (maxs[x][s.col] === undefined || y > maxs[x][s.col]) maxs[x][s.col] = y;
+        }
+      }
+    }
+
+    return order.map(x => {
+      const out: Record<string, unknown> = { __x: x };
+      const rc = rowCounts[x] ?? 0;
+      for (const s of ySeries) {
+        const yc = yCounts[x]?.[s.col] ?? 0;
+        if      (aggFn === "count") out[s.col] = rc;
+        else if (aggFn === "sum"  ) out[s.col] = yc > 0 ? sums[x][s.col] : null;
+        else if (aggFn === "avg"  ) out[s.col] = yc > 0 ? +(sums[x][s.col] / yc).toFixed(4) : null;
+        else if (aggFn === "min"  ) out[s.col] = mins[x]?.[s.col] ?? null;
+        else if (aggFn === "max"  ) out[s.col] = maxs[x]?.[s.col] ?? null;
+      }
+      return out;
+    });
+  }, [xIsNumeric, yIsCategorical, ySeries, slice, xCol, aggFn]);
 
   // Top-N unique values of the categorical Y column (by total count)
   const pivotSeries = useMemo((): string[] => {
@@ -460,10 +545,11 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
     [slice, xCol, ySeries],
   );
 
-  const chartData = useMemo(
-    () => (shouldGroup && binnedData ? binnedData : rawChartData),
-    [shouldGroup, binnedData, rawChartData],
-  );
+  const chartData = useMemo(() => {
+    if (shouldGroup && binnedData) return binnedData;
+    if (!xIsNumeric && categoricalAggData) return categoricalAggData;
+    return rawChartData;
+  }, [shouldGroup, binnedData, xIsNumeric, categoricalAggData, rawChartData]);
 
   const scatterData = useMemo(() => {
     const y0 = ySeries[0];
@@ -730,6 +816,13 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
                 ? `Y ομαδοποίηση · Count mode (${pivotSeries.length} κατηγορίες)`
                 : `Y άξονας — L αριστερά · R δεξιά (${ySeries.length} series)`
             }>
+              {/* Aggregation selector — shown when grouping applies */}
+              {!yIsCategorical && ySeries.length > 0 && (shouldGroup || !xIsNumeric) && (
+                <div className="flex items-center gap-2 pb-1">
+                  <span className="text-[10px] text-muted-foreground shrink-0">Συνάρτηση:</span>
+                  <AggFnBar value={aggFn} onChange={setAggFn} />
+                </div>
+              )}
 
               {/* Active pills */}
               <div className="flex flex-wrap gap-1.5 min-h-[26px]">

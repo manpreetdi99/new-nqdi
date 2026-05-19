@@ -211,6 +211,93 @@ WHERE LQ.OptionalWB IS NOT NULL
 GROUP BY FL.CollectionName, FL.ASideLocation
 ORDER BY FL.CollectionName, avg_mos DESC`,
   },
+  {
+    label: "LTE μετρήσεις (raw — για COUNT/SUM/AVG στο γράφημα)",
+    sql: `SELECT TOP 2000
+  FL.ASideLocation  AS Location,
+  CA.technology,
+  ROUND(CAST(LM.RSRP  AS FLOAT), 2) AS RSRP,
+  ROUND(CAST(LM.RSRQ  AS FLOAT), 2) AS RSRQ,
+  ROUND(CAST(LM.SINR0 AS FLOAT), 2) AS SINR
+FROM LTEMeasurementReport LM
+LEFT JOIN Sessions S  ON S.SessionId = LM.SessionId
+LEFT JOIN FileList FL ON FL.FileId   = S.FileId
+LEFT JOIN CallAnalysis CA ON CA.SessionId = LM.SessionId
+WHERE S.Valid IN (0, 1)
+  AND LM.RSRP IS NOT NULL
+ORDER BY LM.SessionId, LM.MsgTime`,
+  },
+  {
+    label: "GSM RxLev/RxQual ανά operator",
+    sql: `SELECT
+  FL.ASideLocation                              AS Location,
+  COUNT(*)                                      AS measurements,
+  ROUND(AVG(CAST(GM.RxLevSub  AS FLOAT)), 2)   AS avg_RxLev,
+  ROUND(MIN(CAST(GM.RxLevSub  AS FLOAT)), 2)   AS min_RxLev,
+  ROUND(MAX(CAST(GM.RxLevSub  AS FLOAT)), 2)   AS max_RxLev,
+  ROUND(AVG(CAST(GM.RxQualSub AS FLOAT)), 2)   AS avg_RxQual
+FROM GSMRadioParameters GM
+LEFT JOIN Sessions S  ON S.SessionId = GM.SessionId
+LEFT JOIN FileList FL ON FL.FileId   = S.FileId
+WHERE S.Valid IN (0, 1)
+  AND GM.RxLevSub IS NOT NULL
+GROUP BY FL.ASideLocation
+ORDER BY avg_RxLev DESC`,
+  },
+  {
+    label: "MOS raw ανά call (για COUNT/AVG στο γράφημα)",
+    sql: `SELECT TOP 2000
+  FL.ASideLocation                AS Location,
+  FL.CollectionName,
+  CA.technology,
+  CA.callStatus,
+  ROUND(LQ.OptionalWB, 3)        AS MOS,
+  ROUND(CA.setupTime, 2)         AS setupTime,
+  ROUND(CA.callDuration / 1000.0, 1) AS callDuration_s
+FROM ResultsLQ08Avg LQ
+LEFT JOIN Sessions S  ON S.SessionId  = LQ.SessionId
+LEFT JOIN CallAnalysis CA ON CA.SessionId = LQ.SessionId
+LEFT JOIN FileList FL ON FL.FileId    = S.FileId
+WHERE LQ.OptionalWB IS NOT NULL
+  AND S.Valid IN (0, 1)
+ORDER BY LQ.SessionId DESC`,
+  },
+  {
+    label: "Setup time ανά callType & technology",
+    sql: `SELECT
+  CA.callType,
+  CA.technology,
+  COUNT(*)                          AS calls,
+  ROUND(AVG(CA.setupTime), 2)       AS avg_setup_ms,
+  ROUND(MIN(CA.setupTime), 2)       AS min_setup_ms,
+  ROUND(MAX(CA.setupTime), 2)       AS max_setup_ms,
+  ROUND(
+    STDEV(CA.setupTime), 2)         AS stdev_setup_ms
+FROM CallAnalysis CA
+LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+WHERE S.Valid IN (0, 1)
+  AND CA.setupTime IS NOT NULL
+GROUP BY CA.callType, CA.technology
+ORDER BY CA.callType, avg_setup_ms`,
+  },
+  {
+    label: "Data sessions throughput ανά collection",
+    sql: `SELECT
+  FL.CollectionName,
+  FL.ASideLocation  AS Location,
+  COUNT(*)          AS sessions,
+  ROUND(AVG(CAST(DS.DLThroughput AS FLOAT)) / 1000.0, 2) AS avg_DL_Mbps,
+  ROUND(MAX(CAST(DS.DLThroughput AS FLOAT)) / 1000.0, 2) AS max_DL_Mbps,
+  ROUND(AVG(CAST(DS.ULThroughput AS FLOAT)) / 1000.0, 2) AS avg_UL_Mbps,
+  ROUND(SUM(CAST(DS.TransferredBytes AS FLOAT)) / 1048576.0, 2) AS total_MB
+FROM DataSessionAnalysis DS
+LEFT JOIN Sessions S  ON S.SessionId = DS.SessionId
+LEFT JOIN FileList FL ON FL.FileId   = S.FileId
+WHERE S.Valid IN (0, 1)
+  AND DS.DLThroughput IS NOT NULL
+GROUP BY FL.CollectionName, FL.ASideLocation
+ORDER BY avg_DL_Mbps DESC`,
+  },
 ];
 
 // ──────────────────────────────────────────────
