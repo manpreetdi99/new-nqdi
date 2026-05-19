@@ -56,8 +56,8 @@ interface QueryEditorProps {
 // ──────────────────────────────────────────────
 const TEMPLATES = [
   {
-    label: "All calls (top 200)",
-    sql: `SELECT TOP 200
+    label: "All calls",
+    sql: `SELECT
   CA.SessionId,
   CA.technology,
   CA.callMode,

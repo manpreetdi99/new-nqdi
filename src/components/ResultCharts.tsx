@@ -97,6 +97,7 @@ function pickDefaultXCol(columns: string[], sample: Record<string, unknown>[]): 
 // For the pie value, avoid count/total columns and prefer avg/mos/rate columns.
 const COUNT_COL_PATTERN = /^(count|total|calls|cnt|num|n_|rows)/i;
 const AVG_COL_PATTERN   = /^(avg|mean|mos|rate|pct|percent|ratio|score|throughput|rsrp|rsrq|sinr|setup|duration)/i;
+const ID_COL_PATTERN    = /^(id$|.*Id$|.*ID$|.*_id$|.*_ID$|MsgId|PosId|FactId|TestId|markerId)/i;
 
 function pickDefaultPieValue(numericCols: string[]): string {
   const avgCol = numericCols.find((c) => AVG_COL_PATTERN.test(c));
@@ -337,13 +338,15 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
   const [pieLabel,  setPieLabel]  = useState(columns[0] ?? "");
   const [pieValue,  setPieValue]  = useState(() => pickDefaultPieValue(numericCols));
 
-  const [ySeries, setYSeries] = useState<YSeries[]>(() =>
-    numericCols.slice(0, 2).map((col, i) => ({
+  const [ySeries, setYSeries] = useState<YSeries[]>(() => {
+    const nonIdNumerics = numericCols.filter((c) => !ID_COL_PATTERN.test(c));
+    const candidates = nonIdNumerics.length > 0 ? nonIdNumerics : numericCols;
+    return candidates.slice(0, 2).map((col, i) => ({
       col,
       side: "left" as YSide,
       color: CHART_PALETTE[i % CHART_PALETTE.length],
-    })),
-  );
+    }));
+  });
 
   const [grouping,  setGrouping]  = useState(true);
   const [numBins,   setNumBins]   = useState(DEFAULT_BINS);
