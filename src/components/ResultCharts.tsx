@@ -34,7 +34,7 @@ import {
 // ─── Module-level constants ───────────────────────────────────────────────────
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, LEGEND_WRAPPER_STYLE, DEFAULTS } from "@/lib/chartStyles";
 
-const MAX_POINTS = 600;
+const MAX_POINTS = Infinity;
 const GROUPING_THRESHOLD = 200; // auto-bin when slice has more rows than this
 const DEFAULT_BINS = 80;
 
@@ -97,7 +97,8 @@ function pickDefaultXCol(columns: string[], sample: Record<string, unknown>[]): 
 // For the pie value, avoid count/total columns and prefer avg/mos/rate columns.
 const COUNT_COL_PATTERN = /^(count|total|calls|cnt|num|n_|rows)/i;
 const AVG_COL_PATTERN   = /^(avg|mean|mos|rate|pct|percent|ratio|score|throughput|rsrp|rsrq|sinr|setup|duration)/i;
-const ID_COL_PATTERN    = /^(id$|.*Id$|.*ID$|.*_id$|.*_ID$|MsgId|PosId|FactId|TestId|markerId)/i;
+// Columns that are identifiers or RF channel numbers — not useful as Y metrics
+const ID_COL_PATTERN = /^(id|.*Id|.*ID|.*_id|.*_ID|MsgId|PosId|FactId|TestId|markerId|EARFCN|ARFCN|UARFCN|BCCH|BSIC|LAC|CId|TAC|TAI|NCI|PLMN|MCC|MNC|eNBId|NRCellId|PCI|PhyCellId|RFBand|Band)$/i;
 
 function pickDefaultPieValue(numericCols: string[]): string {
   const avgCol = numericCols.find((c) => AVG_COL_PATTERN.test(c));
@@ -339,9 +340,10 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
   const [pieValue,  setPieValue]  = useState(() => pickDefaultPieValue(numericCols));
 
   const [ySeries, setYSeries] = useState<YSeries[]>(() => {
-    const nonIdNumerics = numericCols.filter((c) => !ID_COL_PATTERN.test(c));
-    const candidates = nonIdNumerics.length > 0 ? nonIdNumerics : numericCols;
-    return candidates.slice(0, 2).map((col, i) => ({
+    const defaultX = pickDefaultXCol(columns, sample);
+    const nonIdNumerics = numericCols.filter((c) => !ID_COL_PATTERN.test(c) && c !== defaultX);
+    const candidates = nonIdNumerics.length > 0 ? nonIdNumerics : numericCols.filter((c) => c !== defaultX);
+    return (candidates.length > 0 ? candidates : numericCols).slice(0, 2).map((col, i) => ({
       col,
       side: "left" as YSide,
       color: CHART_PALETTE[i % CHART_PALETTE.length],
