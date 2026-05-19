@@ -155,11 +155,70 @@ const T_MARKERS: TableDef = {
     { name: "NetworkId", type: "id" },
   ],
 };
+const T_CALL_SESSION: TableDef = {
+  name: "CallSession", alias: "CS", category: "Network",
+  columns: [
+    { name: "SessionId", type: "id" }, { name: "FileId", type: "id" },
+    { name: "Callstatus", type: "str" }, { name: "Callcause", type: "str" },
+    { name: "Calltype", type: "str" }, { name: "Calldir", type: "str" },
+    { name: "VoiceCallType", type: "str" }, { name: "SetupTime", type: "num" },
+    { name: "CallDuration", type: "num" }, { name: "ErrorCode", type: "num" },
+    { name: "StartTime", type: "date" }, { name: "EndTime", type: "date" },
+  ],
+};
+const T_TESTINFO: TableDef = {
+  name: "Testinfo", alias: "TI", category: "Network",
+  columns: [
+    { name: "TestId", type: "id" }, { name: "SessionId", type: "id" },
+    { name: "FileId", type: "id" }, { name: "TestName", type: "str" },
+    { name: "TestType", type: "str" }, { name: "StartTime", type: "date" },
+    { name: "EndTime", type: "date" }, { name: "TestStatus", type: "str" },
+  ],
+};
+const T_NETWORK_INFO: TableDef = {
+  name: "NetworkInfo", alias: "NI", category: "Network",
+  columns: [
+    { name: "NetworkId", type: "id" }, { name: "FileId", type: "id" },
+    { name: "MsgTime", type: "date" }, { name: "Operator", type: "str" },
+    { name: "Technology", type: "str" }, { name: "CGI", type: "str" },
+    { name: "CGI2", type: "str" }, { name: "CGI3", type: "str" },
+    { name: "Band", type: "str" }, { name: "EARFCN", type: "num" },
+    { name: "PCI", type: "num" }, { name: "RSRP", type: "num" },
+    { name: "RSRQ", type: "num" }, { name: "SINR", type: "num" },
+  ],
+};
+const T_RESULTS_KPI: TableDef = {
+  name: "vResultsKPI", alias: "KPI", category: "Network",
+  columns: [
+    { name: "TestId", type: "id" }, { name: "SessionId", type: "id" },
+    { name: "ErrorCode", type: "num" }, { name: "ResultValue", type: "num" },
+    { name: "KPIName", type: "str" }, { name: "Units", type: "str" },
+  ],
+};
+const T_VOICE_CODEC: TableDef = {
+  name: "vVoiceCodecTest", alias: "VC", category: "Network",
+  columns: [
+    { name: "TestId", type: "id" }, { name: "SessionId", type: "id" },
+    { name: "FileId", type: "id" }, { name: "CodecName", type: "str" },
+    { name: "CodecRate", type: "num" }, { name: "Technology", type: "str" },
+    { name: "Duration", type: "num" }, { name: "MsgTime", type: "date" },
+  ],
+};
+const T_IP_THROUGHPUT: TableDef = {
+  name: "FactIPThroughput", alias: "IPT", category: "Data",
+  columns: [
+    { name: "FactId", type: "id" }, { name: "SessionId", type: "id" },
+    { name: "MsgTime", type: "date" }, { name: "DLThroughput", type: "num" },
+    { name: "ULThroughput", type: "num" }, { name: "Technology", type: "str" },
+    { name: "Host", type: "str" }, { name: "TestType", type: "str" },
+  ],
+};
 
 const ALL_TABLES: TableDef[] = [
   T_CALL_ANALYSIS, T_FILE_LIST, T_SESSIONS,
   T_LTE, T_GSM, T_TECHNOLOGY, T_MOS,
   T_LTE_SCANNER, T_GSM_SCANNER, T_CDR, T_MARKERS, T_POSITION,
+  T_CALL_SESSION, T_TESTINFO, T_NETWORK_INFO, T_RESULTS_KPI, T_VOICE_CODEC, T_IP_THROUGHPUT,
 ];
 
 const AC_COLS: ColDef[] = [{ name: "Comment", type: "str" }];
@@ -195,10 +254,45 @@ const JOINS_FOR: Record<string, JoinDef[]> = {
     { label: "Position", sql: "LEFT JOIN Position P ON P.PosId = MK.PosId",           alias: "P", columns: T_POSITION.columns },
     { label: "Sessions", sql: "LEFT JOIN Sessions S ON S.SessionId = MK.SessionId",   alias: "S", columns: T_SESSIONS.columns },
   ],
+  CallSession: [
+    { label: "FileList",     sql: "JOIN FileList FL ON FL.FileId = CS.FileId",                 alias: "FL",  columns: T_FILE_LIST.columns },
+    { label: "Sessions",     sql: "LEFT JOIN Sessions S ON S.SessionId = CS.SessionId",        alias: "S",   columns: T_SESSIONS.columns },
+    { label: "NetworkInfo",  sql: "LEFT JOIN NetworkInfo NI ON NI.FileId = CS.FileId",         alias: "NI",  columns: T_NETWORK_INFO.columns },
+    { label: "vResultsKPI",  sql: "LEFT JOIN vResultsKPI KPI ON KPI.SessionId = CS.SessionId", alias: "KPI", columns: T_RESULTS_KPI.columns },
+  ],
+  Testinfo: [
+    { label: "FileList",        sql: "JOIN FileList FL ON FL.FileId = TI.FileId",                     alias: "FL",  columns: T_FILE_LIST.columns },
+    { label: "Sessions",        sql: "LEFT JOIN Sessions S ON S.SessionId = TI.SessionId",            alias: "S",   columns: T_SESSIONS.columns },
+    { label: "ResultsLQ08Avg",  sql: "LEFT JOIN ResultsLQ08Avg LQ ON LQ.TestID = TI.TestId",          alias: "LQ",  columns: T_MOS.columns },
+    { label: "vVoiceCodecTest", sql: "LEFT JOIN vVoiceCodecTest VC ON VC.TestId = TI.TestId",         alias: "VC",  columns: T_VOICE_CODEC.columns },
+    { label: "vResultsKPI",     sql: "LEFT JOIN vResultsKPI KPI ON KPI.TestId = TI.TestId",           alias: "KPI", columns: T_RESULTS_KPI.columns },
+  ],
+  NetworkInfo: [
+    { label: "FileList",  sql: "JOIN FileList FL ON FL.FileId = NI.FileId",              alias: "FL",  columns: T_FILE_LIST.columns },
+    { label: "Sessions",  sql: "LEFT JOIN Sessions S ON S.FileId = NI.FileId",           alias: "S",   columns: T_SESSIONS.columns },
+    { label: "Position",  sql: "LEFT JOIN Position P ON P.SessionId = NI.FileId",        alias: "P",   columns: T_POSITION.columns },
+  ],
+  vResultsKPI: [
+    { label: "FileList",  sql: "JOIN FileList FL ON FL.FileId = KPI.FileId",             alias: "FL",  columns: T_FILE_LIST.columns },
+    { label: "Sessions",  sql: "LEFT JOIN Sessions S ON S.SessionId = KPI.SessionId",    alias: "S",   columns: T_SESSIONS.columns },
+    { label: "Testinfo",  sql: "LEFT JOIN Testinfo TI ON TI.TestId = KPI.TestId",        alias: "TI",  columns: T_TESTINFO.columns },
+  ],
+  vVoiceCodecTest: [
+    { label: "FileList",  sql: "JOIN FileList FL ON FL.FileId = VC.FileId",              alias: "FL",  columns: T_FILE_LIST.columns },
+    { label: "Sessions",  sql: "LEFT JOIN Sessions S ON S.SessionId = VC.SessionId",     alias: "S",   columns: T_SESSIONS.columns },
+    { label: "Testinfo",  sql: "LEFT JOIN Testinfo TI ON TI.TestId = VC.TestId",         alias: "TI",  columns: T_TESTINFO.columns },
+  ],
+  FactIPThroughput: [
+    { label: "FileList",  sql: "JOIN FileList FL ON FL.FileId = IPT.FileId",             alias: "FL",  columns: T_FILE_LIST.columns },
+    { label: "Sessions",  sql: "LEFT JOIN Sessions S ON S.SessionId = IPT.SessionId",    alias: "S",   columns: T_SESSIONS.columns },
+    { label: "Position",  sql: "LEFT JOIN Position P ON P.SessionId = IPT.SessionId",    alias: "P",   columns: T_POSITION.columns },
+    { label: "NetworkInfo", sql: "LEFT JOIN NetworkInfo NI ON NI.FileId = IPT.FileId",   alias: "NI",  columns: T_NETWORK_INFO.columns },
+    { label: "Testinfo",  sql: "LEFT JOIN Testinfo TI ON TI.SessionId = IPT.SessionId",  alias: "TI",  columns: T_TESTINFO.columns },
+  ],
 };
 
 const OPERATORS = ["=", "!=", ">", "<", ">=", "<=", "LIKE", "IN", "IS NULL", "IS NOT NULL"];
-const CATEGORIES = ["Voice", "Signal", "Data", "MOS", "Scanner", "Events", "Location"];
+const CATEGORIES = ["Voice", "Signal", "Data", "MOS", "Scanner", "Events", "Location", "Network"];
 const uid = () => Math.random().toString(36).slice(2, 8);
 const colKey = (alias: string, col: string) => `${alias}.${col}`;
 

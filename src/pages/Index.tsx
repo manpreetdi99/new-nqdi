@@ -723,12 +723,6 @@ const Index = () => {
               )}
             </AnimatePresence>
             <span>{filteredCallRecords.length} calls recorded</span>
-            {results.length > 0 && (
-              <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="flex items-center gap-1.5">
-                <span className="h-1.5 w-1.5 rounded-full bg-success animate-pulse-glow" />
-                {results.length} queries completed
-              </motion.span>
-            )}
           </div>
         </div>
       </header>
