@@ -490,45 +490,66 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
     });
   }, [xIsNumeric, yIsCategorical, ySeries, slice, xCol, aggFn]);
 
-  // Top-N unique values of the categorical Y column (by total count)
-  const pivotSeries = useMemo((): string[] => {
-    if (!yIsCategorical || ySeries.length === 0) return [];
-    const ycol = ySeries[0].col;
-    const totals: Record<string, number> = {};
-    for (const row of slice) {
-      const v = String(row[ycol] ?? "(blank)");
-      totals[v] = (totals[v] ?? 0) + 1;
-    }
-    return Object.entries(totals)
-      .sort((a, b) => b[1] - a[1])
-      .slice(0, 8)
-      .map(([v]) => v);
-  }, [yIsCategorical, ySeries, slice]);
+  // All categorical Y series (non-numeric columns)
+  const categoricalYSeries = useMemo(
+    () => ySeries.filter((s) => !numericCols.includes(s.col)),
+    [ySeries, numericCols],
+  );
 
-  // Pivot table: { __x, [yVal]: count, ... } sorted by total desc, top 40 X values
+  // Top-8 unique values per categorical Y column; prefixed with col name when multiple columns
+  const pivotSeries = useMemo((): Array<{ key: string; col: string; color: string }> => {
+    if (!yIsCategorical || categoricalYSeries.length === 0) return [];
+    const multiCol = categoricalYSeries.length > 1;
+    const result: Array<{ key: string; col: string; color: string }> = [];
+    for (const s of categoricalYSeries) {
+      const totals: Record<string, number> = {};
+      for (const row of slice) {
+        const v = String(row[s.col] ?? "(blank)");
+        totals[v] = (totals[v] ?? 0) + 1;
+      }
+      Object.entries(totals)
+        .sort((a, b) => b[1] - a[1])
+        .slice(0, 8)
+        .forEach(([v]) => {
+          result.push({
+            key: multiCol ? `${s.col}: ${v}` : v,
+            col: s.col,
+            color: CHART_PALETTE[result.length % CHART_PALETTE.length],
+          });
+        });
+    }
+    return result;
+  }, [yIsCategorical, categoricalYSeries, slice]);
+
+  // Pivot table: { __x, [key]: count, ... } — separate stack per source column
   const pivotData = useMemo((): Record<string, unknown>[] => {
-    if (!yIsCategorical || ySeries.length === 0 || pivotSeries.length === 0) return [];
-    const ycol = ySeries[0].col;
+    if (!yIsCategorical || categoricalYSeries.length === 0 || pivotSeries.length === 0) return [];
+    const multiCol = categoricalYSeries.length > 1;
     const agg: Record<string, Record<string, number>> = {};
     for (const row of slice) {
       const x = String(row[xCol] ?? "(blank)");
-      const y = String(row[ycol] ?? "(blank)");
       if (!agg[x]) agg[x] = {};
-      if (pivotSeries.includes(y)) agg[x][y] = (agg[x][y] ?? 0) + 1;
+      for (const s of categoricalYSeries) {
+        const rawV = String(row[s.col] ?? "(blank)");
+        const key = multiCol ? `${s.col}: ${rawV}` : rawV;
+        if (pivotSeries.some((ps) => ps.key === key)) {
+          agg[x][key] = (agg[x][key] ?? 0) + 1;
+        }
+      }
     }
     return Object.entries(agg)
       .map(([x, counts]) => {
         const out: Record<string, unknown> = { __x: x };
-        for (const v of pivotSeries) out[v] = counts[v] ?? 0;
+        for (const ps of pivotSeries) out[ps.key] = counts[ps.key] ?? 0;
         return out;
       })
       .sort((a, b) => {
-        const sa = pivotSeries.reduce((s, v) => s + ((a[v] as number) ?? 0), 0);
-        const sb = pivotSeries.reduce((s, v) => s + ((b[v] as number) ?? 0), 0);
+        const sa = pivotSeries.reduce((s, ps) => s + ((a[ps.key] as number) ?? 0), 0);
+        const sb = pivotSeries.reduce((s, ps) => s + ((b[ps.key] as number) ?? 0), 0);
         return sb - sa;
       })
       .slice(0, 40);
-  }, [yIsCategorical, ySeries, slice, xCol, pivotSeries]);
+  }, [yIsCategorical, categoricalYSeries, slice, xCol, pivotSeries]);
 
   const hasRight  = useMemo(() => ySeries.some((s) => s.side === "right"), [ySeries]);
   const leftLabel = useMemo(
@@ -698,10 +719,10 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
             />
             <Tooltip content={<CustomTooltip />} />
             <Legend formatter={fmtLegend} wrapperStyle={{ paddingTop: 8 }} />
-            {pivotSeries.map((val, i) => (
-              <Bar key={val} dataKey={val} yAxisId="left"
-                fill={CHART_PALETTE[i % CHART_PALETTE.length]} stackId="stack"
-                name={val} maxBarSize={60} fillOpacity={DEFAULTS.barFillOpacity}
+            {pivotSeries.map((ps) => (
+              <Bar key={ps.key} dataKey={ps.key} yAxisId="left"
+                fill={ps.color} stackId={ps.col}
+                name={ps.key} maxBarSize={60} fillOpacity={DEFAULTS.barFillOpacity}
               />
             ))}
           </ComposedChart>
