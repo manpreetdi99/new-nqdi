@@ -1232,6 +1232,7 @@ const Index = () => {
                 setSelectedCall(call);
                 setActiveTab("detail");
               }}
+              dataSessions={groupedDataSessions}
             />
           </TabsContent>
 
