@@ -75,7 +75,7 @@ WHERE S.Valid IN (0, 1)
 ORDER BY CA.SessionId DESC`,
   },
   {
-    label: "Drop / Fail summary",
+    label: "Drop / Fail / Sys Rel  summary",
     sql: `SELECT
   CA.callStatus,
   CA.callType,
