@@ -44,7 +44,7 @@ const PALETTE = [
   "hsl(120, 55%, 48%)",
 ];
 
-const MAX_POINTS = 600;
+const MAX_POINTS = Infinity;
 const GROUPING_THRESHOLD = 200; // auto-bin when slice has more rows than this
 const DEFAULT_BINS = 80;
 
