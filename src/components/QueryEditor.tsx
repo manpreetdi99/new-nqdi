@@ -86,44 +86,60 @@ ORDER BY CA.SessionId DESC`,
     label: "Drop / Fail / Sys Rel  summary",
     category: "General",
     sql: `SELECT
+  FL.ASideLocation AS Location,
   CA.callStatus,
   CA.callType,
   CA.technology,
   COUNT(*) AS total
 FROM CallAnalysis CA
-LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+LEFT JOIN FileList FL ON CA.FileId = FL.FileId
+LEFT JOIN Sessions S  ON S.SessionId = CA.SessionId
 WHERE S.Valid IN (0, 1)
-  AND (CA.callStatus LIKE '%Drop%' OR CA.callStatus LIKE '%Fail%')
-GROUP BY CA.callStatus, CA.callType, CA.technology
+  AND (CA.callStatus LIKE '%Drop%' OR CA.callStatus LIKE '%Fail%' OR CA.callStatus LIKE '%Sys%%Rel%')
+GROUP BY FL.ASideLocation, CA.callStatus, CA.callType, CA.technology
 ORDER BY total DESC`,
   },
   {
     label: "Collections in filelist",
     category: "General",
     sql: `SELECT
+  ASideLocation AS Location,
   CollectionName,
   COUNT(*) AS files,
   MIN(StartTime) AS first_file,
   MAX(StartTime) AS last_file
 FROM FileList
 WHERE CollectionName IS NOT NULL
-GROUP BY CollectionName
+GROUP BY ASideLocation, CollectionName
 ORDER BY last_file DESC`,
+  },
+  {
+    label: "Collections count",
+    category: "General",
+    sql: `SELECT
+  ASideLocation AS Location,
+  CollectionName,
+  COUNT(*) AS files
+FROM FileList
+WHERE CollectionName IS NOT NULL
+GROUP BY ASideLocation, CollectionName`,
   },
   // ── KPI ──
   {
     label: "Avg setup time per technology",
     category: "KPI",
     sql: `SELECT
+  FL.ASideLocation AS Location,
   CA.technology,
   COUNT(*)              AS calls,
   ROUND(AVG(CA.setupTime), 2) AS avg_setup_ms,
   ROUND(MIN(CA.setupTime), 2) AS min_setup_ms,
   ROUND(MAX(CA.setupTime), 2) AS max_setup_ms
 FROM CallAnalysis CA
-LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+LEFT JOIN FileList FL ON CA.FileId = FL.FileId
+LEFT JOIN Sessions S  ON S.SessionId = CA.SessionId
 WHERE S.Valid IN (0, 1)
-GROUP BY CA.technology
+GROUP BY FL.ASideLocation, CA.technology
 ORDER BY avg_setup_ms`,
   },
   {
@@ -171,6 +187,7 @@ ORDER BY FL.ASideLocation, total DESC`,
     label: "Setup time ανά callType & technology",
     category: "KPI",
     sql: `SELECT
+  FL.ASideLocation AS Location,
   CA.callType,
   CA.technology,
   COUNT(*)                          AS calls,
@@ -179,10 +196,11 @@ ORDER BY FL.ASideLocation, total DESC`,
   ROUND(MAX(CA.setupTime), 2)       AS max_setup_ms,
   ROUND(STDEV(CA.setupTime), 2)     AS stdev_setup_ms
 FROM CallAnalysis CA
-LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+LEFT JOIN FileList FL ON CA.FileId = FL.FileId
+LEFT JOIN Sessions S  ON S.SessionId = CA.SessionId
 WHERE S.Valid IN (0, 1)
   AND CA.setupTime IS NOT NULL
-GROUP BY CA.callType, CA.technology
+GROUP BY FL.ASideLocation, CA.callType, CA.technology
 ORDER BY CA.callType, avg_setup_ms`,
   },
   // ── MOS ──
@@ -190,6 +208,7 @@ ORDER BY CA.callType, avg_setup_ms`,
     label: "Avg MOS per collection",
     category: "MOS",
     sql: `SELECT
+  FL.ASideLocation AS Location,
   FL.CollectionName,
   COUNT(*)                  AS calls,
   ROUND(AVG(LQ.OptionalWB), 3) AS avg_mos,
@@ -199,7 +218,7 @@ FROM CallAnalysis CA
 LEFT JOIN FileList FL ON CA.FileId = FL.FileId
 LEFT JOIN ResultsLQ08Avg LQ ON LQ.SessionId = CA.SessionId
 WHERE LQ.OptionalWB IS NOT NULL
-GROUP BY FL.CollectionName
+GROUP BY FL.ASideLocation, FL.CollectionName
 ORDER BY avg_mos DESC`,
   },
   {
@@ -238,17 +257,62 @@ WHERE LQ.OptionalWB IS NOT NULL
   AND S.Valid IN (0, 1)
 ORDER BY LQ.SessionId DESC`,
   },
+  {
+    label: "MOS + Codec ανά call (FactSpeech + ResultsLQ08Avg)",
+    category: "MOS",
+    sql: `SELECT TOP 2000
+  FL.ASideLocation              AS Location,
+  FL.CollectionName,
+  FS.CodecName,
+  FS.CodecRate,
+  FS.Direction,
+  FS.SpeechAlgorithm            AS Algorithm,
+  FS.Band,
+  ROUND(LQ.OptionalWB, 3)       AS MOS_POLQA,
+  ROUND(FS.LQ, 3)               AS LQ_Speech,
+  FS.[Quality Category]         AS QualityCategory
+FROM FactSpeech FS
+  JOIN ResultsLQ08Avg LQ        ON LQ.MsgId = FS.MsgId
+  LEFT JOIN Sessions S          ON S.SessionId = FS.SessionId
+  LEFT JOIN FileList FL         ON FL.FileId   = S.FileId
+WHERE LQ.OptionalWB IS NOT NULL
+  AND S.Valid IN (0, 1)
+ORDER BY FS.SessionId DESC`,
+  },
+  {
+    label: "Avg MOS ανά Codec (FactSpeech + ResultsLQ08Avg)",
+    category: "MOS",
+    sql: `SELECT
+  FL.ASideLocation              AS Location,
+  FS.CodecName,
+  FS.CodecRate,
+  COUNT(*)                      AS calls,
+  ROUND(AVG(LQ.OptionalWB), 3)  AS avg_MOS,
+  ROUND(MIN(LQ.OptionalWB), 3)  AS min_MOS,
+  ROUND(MAX(LQ.OptionalWB), 3)  AS max_MOS
+FROM FactSpeech FS
+  JOIN ResultsLQ08Avg LQ        ON LQ.MsgId = FS.MsgId
+  LEFT JOIN Sessions S          ON S.SessionId = FS.SessionId
+  LEFT JOIN FileList FL         ON FL.FileId   = S.FileId
+WHERE LQ.OptionalWB IS NOT NULL
+  AND S.Valid IN (0, 1)
+GROUP BY FL.ASideLocation, FS.CodecName, FS.CodecRate
+ORDER BY avg_MOS DESC`,
+  },
   // ── Signal ──
   {
     label: "LTE signal per session",
     category: "Signal",
     sql: `SELECT TOP 500
+  FL.ASideLocation AS Location,
   LM.SessionId,
   LM.MsgTime,
   ROUND(LM.RSRP,  2) AS RSRP,
   ROUND(LM.RSRQ,  2) AS RSRQ,
   ROUND(LM.SINR0, 2) AS SINR0
 FROM LTEMeasurementReport LM
+LEFT JOIN Sessions S  ON S.SessionId = LM.SessionId
+LEFT JOIN FileList FL ON FL.FileId   = S.FileId
 ORDER BY LM.SessionId, LM.MsgTime`,
   },
   {
@@ -745,6 +809,7 @@ ORDER BY SessionID`,
     Networkinfo.NetworkID, Networkinfo.Operator, Networkinfo.Technology
 )
 SELECT
+  FL.ASideLocation AS Location,
   SessionCTE.FileID, SessionCTE.CallingModule, SessionCTE.Operator,
   CASE WHEN Testinfo.direction = 'B->A' THEN 'downlink'
        WHEN Testinfo.direction = 'A->B' THEN 'uplink' ELSE '--' END AS Direction,
@@ -760,11 +825,12 @@ SELECT
 FROM SessionCTE
   JOIN Testinfo ON SessionCTE.SessionID = Testinfo.SessionId
   JOIN ResultsLQ08Avg ON Testinfo.TestId = ResultsLQ08Avg.TestId
+  LEFT JOIN FileList FL ON FL.FileId = SessionCTE.FileID
   LEFT JOIN vVoiceCodecTest vvct ON Testinfo.TestID = vvct.TestID AND (
     (TestInfo.direction = 'A->B' AND vvct.Direction = 'U') OR
     (TestInfo.direction = 'B->A' AND vvct.Direction = 'D'))
 WHERE Testinfo.Valid = 1 AND ResultsLQ08Avg.OptionalWB >= 1 AND ResultsLQ08Avg.OptionalWB <= 5
-GROUP BY SessionCTE.FileID, SessionCTE.CallingModule, SessionCTE.Operator,
+GROUP BY FL.ASideLocation, SessionCTE.FileID, SessionCTE.CallingModule, SessionCTE.Operator,
   Testinfo.direction, SessionCTE.Technology, vvct.CodecName`,
   },
   // ── Codec ──
@@ -1385,13 +1451,14 @@ ORDER BY ti.TestId, ISNULL(aa.ActionId, aaf.ActionId)`,
     label: "OOKLA Speed Test DL/UL Split",
     category: "Data Tests",
     sql: `SELECT
+    Location,
     dir,
     COUNT(*)                                              AS total_tests,
     SUM(CASE WHEN ErrorCode = 0 THEN 1 ELSE 0 END)       AS success_count,
     AVG(CASE WHEN ErrorCode = 0 THEN thp END)             AS mean_mbps,
     AVG(CASE WHEN ErrorCode = 0 THEN ping_s END)          AS mean_ping_s
 FROM (
-    SELECT 'DL' AS dir, raap.ErrorCode,
+    SELECT fl.ASideLocation AS Location, 'DL' AS dir, raap.ErrorCode,
            CAST(raap.DLThroughput AS FLOAT) * 8.0 / 1000000.0      AS thp,
            CAST(ISNULL(raap.Ping, raap.Latency) AS FLOAT) / 1000.0 AS ping_s
     FROM ResultsAppActionPerformance raap
@@ -1400,7 +1467,7 @@ FROM (
     INNER JOIN FileList  fl ON s.FileId     = fl.FileId
     WHERE fl.CollectionName LIKE '%%' AND fl.ASideLocation LIKE '%%'
     UNION ALL
-    SELECT 'UL', raap.ErrorCode,
+    SELECT fl.ASideLocation, 'UL', raap.ErrorCode,
            CAST(raap.ULThroughput AS FLOAT) * 8.0 / 1000000.0,
            CAST(ISNULL(raap.Ping, raap.Latency) AS FLOAT) / 1000.0
     FROM ResultsAppActionPerformance raap
@@ -1409,8 +1476,8 @@ FROM (
     INNER JOIN FileList  fl ON s.FileId     = fl.FileId
     WHERE fl.CollectionName LIKE '%%' AND fl.ASideLocation LIKE '%%'
 ) combined
-GROUP BY dir
-ORDER BY dir DESC`,
+GROUP BY Location, dir
+ORDER BY Location, dir DESC`,
   },
   // ── Browsing ──
   {
@@ -1858,6 +1925,17 @@ const QueryEditor = ({
             Builder
           </Button>
 
+          {/* Show/hide SQL editor */}
+          <Button
+            variant={showSql ? "secondary" : "outline"}
+            size="sm"
+            onClick={() => setShowSql((v) => !v)}
+            className="text-xs gap-1"
+          >
+            <Code2 className="h-3.5 w-3.5" />
+            {showSql ? "Hide Query" : "Show Query"}
+          </Button>
+
           {/* Templates picker */}
           <div className="relative" ref={templatesRef}>
             <Button
@@ -2002,18 +2080,6 @@ const QueryEditor = ({
           );
         })}
 
-        {/* Show/hide SQL editor toggle */}
-        <button
-          onClick={() => setShowSql((v) => !v)}
-          className={`ml-auto flex items-center gap-1 px-2.5 py-1 rounded-t-md border border-b-0 text-[11px] transition-colors whitespace-nowrap ${
-            showSql
-              ? "bg-card border-border text-foreground"
-              : "bg-muted/40 border-transparent text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <Code2 className="h-3 w-3" />
-          {showSql ? "Hide Query" : "Show Query"}
-        </button>
       </div>
 
       {/* ── Editor area ── */}
