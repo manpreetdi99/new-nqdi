@@ -40,7 +40,7 @@ const DEFAULT_BINS = 80;
 
 // AXIS_STYLE and GRID_STYLE are imported from src/lib/chartStyles
 
-const fmtXTick   = (v: unknown) => String(v ?? "").slice(0, 14);
+const fmtXTick   = (v: unknown) => String(v ?? "").slice(0, 22);
 const fmtLegend  = (v: string) => <span className="text-xs text-foreground">{v}</span>;
 const fmtPieLabel = ({ name, percent }: { name: string; percent: number }) =>
   `${String(name).slice(0, 16)} ${(percent * 100).toFixed(1)}%`;
@@ -326,6 +326,17 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
   );
   const sample = useMemo(() => slice.slice(0, 40), [slice]);
 
+  // Unique string values per column — for filter chips (uses unfiltered slice)
+  const uniqueValsMap = useMemo(() => {
+    const map: Record<string, string[]> = {};
+    for (const col of columns) {
+      const seen = new Set<string>();
+      for (const row of slice) seen.add(String(row[col] ?? ""));
+      map[col] = [...seen].sort();
+    }
+    return map;
+  }, [slice, columns]);
+
   const numericCols = useMemo(
     () => columns.filter((c) => isNumericCol(c, sample)),
     [columns, sample],
@@ -333,8 +344,18 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
 
   // ── State ───────────────────────────────────────────────────────────────
 
+  const [filters,   setFilters]   = useState<Array<{ col: string; vals: string[] }>>([]);
+
+  const filteredSlice = useMemo(() => {
+    if (filters.length === 0) return slice;
+    return slice.filter((row) =>
+      filters.every((f) => f.vals.length === 0 || f.vals.includes(String(row[f.col] ?? "")))
+    );
+  }, [slice, filters]);
+
   const [chartType, setChartType] = useState<ChartType>("bar");
   const [xCol,      setXCol]      = useState(() => pickDefaultXCol(columns, sample));
+  const [xCol2,     setXCol2]     = useState("");
   const [addYCol,   setAddYCol]   = useState("");
   const [pieLabel,  setPieLabel]  = useState(columns[0] ?? "");
   const [pieValue,  setPieValue]  = useState(() => pickDefaultPieValue(numericCols));
@@ -391,7 +412,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
   // Bin slice into numBins buckets along X, aggregate Y by aggFn
   const binnedData = useMemo((): Record<string, unknown>[] | null => {
     if (!shouldGroup || ySeries.length === 0) return null;
-    const xVals = slice.map((r) => toNum(r[xCol])).filter((v): v is number => v !== null);
+    const xVals = filteredSlice.map((r) => toNum(r[xCol])).filter((v): v is number => v !== null);
     if (xVals.length === 0) return null;
     const xMin = Math.min(...xVals);
     const xMax = Math.max(...xVals);
@@ -404,7 +425,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
     const mins:     Record<number, Record<string, number>> = {};
     const maxs:     Record<number, Record<string, number>> = {};
 
-    for (const row of slice) {
+    for (const row of filteredSlice) {
       const x = toNum(row[xCol]);
       if (x === null) continue;
       const bi = Math.min(Math.floor((x - xMin) / binSize), numBins - 1);
@@ -438,7 +459,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
       }
       return hasData ? out : null;
     }).filter((d): d is Record<string, unknown> => d !== null);
-  }, [shouldGroup, slice, xCol, ySeries, numBins, aggFn]);
+  }, [shouldGroup, filteredSlice, xCol, ySeries, numBins, aggFn]);
 
   // ── Categorical / pivot mode ────────────────────────────────────────────
   // When the first Y series is a non-numeric column, we pivot:
@@ -460,8 +481,8 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
     const mins:      Record<string, Record<string, number>> = {};
     const maxs:      Record<string, Record<string, number>> = {};
 
-    for (const row of slice) {
-      const x = String(row[xCol] ?? "(blank)");
+    for (const row of filteredSlice) {
+      const x = xCol2 ? `${row[xCol] ?? "(blank)"} · ${row[xCol2] ?? "(blank)"}` : String(row[xCol] ?? "(blank)");
       if (!seen.has(x)) { seen.add(x); order.push(x); rowCounts[x] = 0; sums[x] = {}; yCounts[x] = {}; mins[x] = {}; maxs[x] = {}; }
       rowCounts[x]++;
       for (const s of ySeries) {
@@ -488,7 +509,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
       }
       return out;
     });
-  }, [xIsNumeric, yIsCategorical, ySeries, slice, xCol, aggFn]);
+  }, [xIsNumeric, yIsCategorical, ySeries, filteredSlice, xCol, xCol2, aggFn]);
 
   // All categorical Y series (non-numeric columns)
   const categoricalYSeries = useMemo(
@@ -503,7 +524,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
     const result: Array<{ key: string; col: string; color: string }> = [];
     for (const s of categoricalYSeries) {
       const totals: Record<string, number> = {};
-      for (const row of slice) {
+      for (const row of filteredSlice) {
         const v = String(row[s.col] ?? "(blank)");
         totals[v] = (totals[v] ?? 0) + 1;
       }
@@ -519,15 +540,15 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
         });
     }
     return result;
-  }, [yIsCategorical, categoricalYSeries, slice]);
+  }, [yIsCategorical, categoricalYSeries, filteredSlice]);
 
   // Pivot table: { __x, [key]: count, ... } — separate stack per source column
   const pivotData = useMemo((): Record<string, unknown>[] => {
     if (!yIsCategorical || categoricalYSeries.length === 0 || pivotSeries.length === 0) return [];
     const multiCol = categoricalYSeries.length > 1;
     const agg: Record<string, Record<string, number>> = {};
-    for (const row of slice) {
-      const x = String(row[xCol] ?? "(blank)");
+    for (const row of filteredSlice) {
+      const x = xCol2 ? `${row[xCol] ?? "(blank)"} · ${row[xCol2] ?? "(blank)"}` : String(row[xCol] ?? "(blank)");
       if (!agg[x]) agg[x] = {};
       for (const s of categoricalYSeries) {
         const rawV = String(row[s.col] ?? "(blank)");
@@ -549,7 +570,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
         return sb - sa;
       })
       .slice(0, 40);
-  }, [yIsCategorical, categoricalYSeries, slice, xCol, pivotSeries]);
+  }, [yIsCategorical, categoricalYSeries, filteredSlice, xCol, xCol2, pivotSeries]);
 
   const hasRight  = useMemo(() => ySeries.some((s) => s.side === "right"), [ySeries]);
   const leftLabel = useMemo(
@@ -563,12 +584,13 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
 
   const rawChartData = useMemo(
     () =>
-      slice.map((row) => {
-        const out: Record<string, unknown> = { __x: row[xCol] ?? "" };
+      filteredSlice.map((row) => {
+        const xVal = xCol2 ? `${row[xCol] ?? ""} · ${row[xCol2] ?? ""}` : (row[xCol] ?? "");
+        const out: Record<string, unknown> = { __x: xVal };
         for (const s of ySeries) out[s.col] = toNum(row[s.col]);
         return out;
       }),
-    [slice, xCol, ySeries],
+    [filteredSlice, xCol, xCol2, ySeries],
   );
 
   const chartData = useMemo(() => {
@@ -580,14 +602,14 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
   const scatterData = useMemo(() => {
     const y0 = ySeries[0];
     if (!y0) return [];
-    return slice
+    return filteredSlice
       .map((row) => ({ x: toNum(row[xCol]), y: toNum(row[y0.col]) }))
       .filter((p): p is { x: number; y: number } => p.x !== null && p.y !== null);
-  }, [slice, xCol, ySeries]);
+  }, [filteredSlice, xCol, ySeries]);
 
   const pieData = useMemo(() => {
     const agg: Record<string, number> = {};
-    for (const row of slice) {
+    for (const row of filteredSlice) {
       const k = String(row[pieLabel] ?? "(blank)");
       agg[k] = (agg[k] ?? 0) + (toNum(row[pieValue]) ?? 0);
     }
@@ -595,7 +617,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
       .map(([name, value]) => ({ name, value }))
       .sort((a, b) => b.value - a.value)
       .slice(0, 20);
-  }, [slice, pieLabel, pieValue]);
+  }, [filteredSlice, pieLabel, pieValue]);
 
   // ── Series renderer ─────────────────────────────────────────────────────
 
@@ -733,14 +755,21 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
     if (ySeries.length === 0) return <ChartEmpty message="Πρόσθεσε τουλάχιστον ένα Y column." />;
 
     return (
-      <ResponsiveContainer width="100%" height={H}>
+      <ResponsiveContainer width="100%" height={xIsNumeric ? H : H + 60}>
         <ComposedChart
           data={chartData}
-          margin={{ top: 8, right: hasRight ? 64 : 20, left: 0, bottom: 36 }}
+          margin={{ top: 8, right: hasRight ? 64 : 20, left: xIsNumeric ? 0 : 50, bottom: xIsNumeric ? 36 : 90 }}
         >
           <CartesianGrid {...GRID_STYLE} />
-          <XAxis dataKey="__x" {...AXIS_STYLE} tickFormatter={fmtXTick} interval="preserveStartEnd">
-            <Label value={xCol} offset={-12} position="insideBottom" fontSize={10} fill="hsl(var(--muted-foreground))" />
+          <XAxis
+            dataKey="__x"
+            {...AXIS_STYLE}
+            tickFormatter={fmtXTick}
+            interval={xIsNumeric ? "preserveStartEnd" : 0}
+            angle={xIsNumeric ? 0 : -35}
+            textAnchor={xIsNumeric ? "middle" : "end"}
+          >
+            <Label value={xCol} offset={xIsNumeric ? -12 : -75} position="insideBottom" fontSize={10} fill="hsl(var(--muted-foreground))" />
           </XAxis>
           <YAxis yAxisId="left" orientation="left" {...AXIS_STYLE} width={56}
             label={leftLabel ? { value: leftLabel, angle: -90, position: "insideLeft", fontSize: 9, fill: "hsl(var(--muted-foreground))", dx: -4 } : undefined}
@@ -789,6 +818,14 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
               <FieldSelect value={xCol} onChange={setXCol}>
                 {columns.map((c) => <option key={c} value={c}>{c}</option>)}
               </FieldSelect>
+
+              {/* Optional second X column — combines as "col1 · col2" */}
+              {!xIsNumeric && (
+                <FieldSelect value={xCol2} onChange={setXCol2}>
+                  <option value="">— + συνδυασμός column —</option>
+                  {columns.filter((c) => c !== xCol).map((c) => <option key={c} value={c}>{c}</option>)}
+                </FieldSelect>
+              )}
 
               {/* Grouping controls — only when X is numeric */}
               {xIsNumeric && (
@@ -927,6 +964,77 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
             </ConfigCard>
           </div>
         )}
+      </div>
+
+      {/* ── Filters ── */}
+      <div className="px-4 py-2.5 border-b border-border/60 bg-muted/5 space-y-2">
+        <div className="flex items-center gap-2">
+          <span className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/70">Φίλτρα</span>
+          <button
+            onClick={() => setFilters((f) => [...f, { col: columns[0] ?? "", vals: [] }])}
+            className="flex items-center gap-1 px-2 py-0.5 rounded border border-dashed border-primary/40 bg-primary/5 text-primary text-[10px] font-medium hover:bg-primary/10 transition-colors"
+          >
+            <Plus className="h-3 w-3" />
+            Προσθήκη
+          </button>
+          {filters.length > 0 && (
+            <button
+              onClick={() => setFilters([])}
+              className="ml-auto text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+            >
+              Καθαρισμός όλων
+            </button>
+          )}
+        </div>
+
+        {filters.map((f, fi) => (
+          <div key={fi} className="rounded-md border border-border/60 bg-muted/20 p-2 space-y-1.5">
+            <div className="flex items-center gap-2">
+              <select
+                value={f.col}
+                onChange={(e) => setFilters((prev) => prev.map((x, i) => i === fi ? { col: e.target.value, vals: [] } : x))}
+                className="flex-1 bg-background border border-border rounded-md px-2 py-1 text-[11px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
+              >
+                {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+              </select>
+              <button
+                onClick={() => setFilters((prev) => prev.filter((_, i) => i !== fi))}
+                className="opacity-50 hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10"
+              >
+                <X className="h-3 w-3" />
+              </button>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {(uniqueValsMap[f.col] ?? []).map((v) => {
+                const selected = f.vals.includes(v);
+                return (
+                  <button
+                    key={v}
+                    onClick={() =>
+                      setFilters((prev) =>
+                        prev.map((x, i) => {
+                          if (i !== fi) return x;
+                          const next = x.vals.includes(v)
+                            ? x.vals.filter((s) => s !== v)
+                            : [...x.vals, v];
+                          return { ...x, vals: next };
+                        })
+                      )
+                    }
+                    className={[
+                      "px-2 py-0.5 rounded-full text-[10px] font-mono border transition-all",
+                      selected
+                        ? "bg-primary/15 border-primary/40 text-primary"
+                        : "bg-muted/30 border-border/40 text-muted-foreground hover:text-foreground hover:border-border",
+                    ].join(" ")}
+                  >
+                    {String(v).slice(0, 28)}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        ))}
       </div>
 
       {/* ── Chart canvas ── */}
