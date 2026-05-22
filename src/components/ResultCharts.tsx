@@ -32,13 +32,11 @@ import {
 } from "lucide-react";
 
 // ─── Module-level constants ───────────────────────────────────────────────────
-import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, LEGEND_WRAPPER_STYLE, DEFAULTS } from "@/lib/chartStyles";
+import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, DEFAULTS } from "@/lib/chartStyles";
 
 const MAX_POINTS = Infinity;
 const GROUPING_THRESHOLD = 200; // auto-bin when slice has more rows than this
 const DEFAULT_BINS = 80;
-
-// AXIS_STYLE and GRID_STYLE are imported from src/lib/chartStyles
 
 const fmtXTick   = (v: unknown) => String(v ?? "").slice(0, 22);
 const fmtLegend  = (v: string) => <span className="text-xs text-foreground">{v}</span>;
@@ -623,13 +621,6 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
 
   const renderSeries = useCallback(
     (s: YSeries) => {
-      const shared = {
-        dataKey: s.col,
-        yAxisId: s.side,
-        stroke:  s.color,
-        fill:    s.color,
-        name:    `${s.col} (${s.side === "left" ? "L" : "R"})`,
-      };
       if (chartType === "bar")
         return (
           <Bar
@@ -938,7 +929,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
               <FieldSelect
                 value={ySeries[0]?.col ?? ""}
                 onChange={(v) =>
-                  setYSeries(v ? [{ col: v, side: "left", color: PALETTE[0] }] : [])
+                  setYSeries(v ? [{ col: v, side: "left", color: CHART_PALETTE[0] }] : [])
                 }
               >
                 <option value="">— επιλογή —</option>

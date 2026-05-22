@@ -11,8 +11,6 @@ interface BenchmarkChartsProps {
   results: BenchmarkResult[];
 }
 
-// Palette and common defaults are imported from src/lib/chartStyles
-
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload) return null;
   return (

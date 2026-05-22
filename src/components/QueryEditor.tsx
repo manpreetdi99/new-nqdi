@@ -57,7 +57,7 @@ interface QueryEditorProps {
 const TEMPLATE_CATEGORY_ORDER = [
   "General", "KPI", "MOS", "Signal", "Data",
   "LQ Voice", "LQ Stats", "Codec", "SRVCC", "Events", "Cell ID",
-  "Data Tests", "Browsing", "Multimedia",
+  "Data Tests", "Browsing", "Multimedia", "5G",
 ] as const;
 
 const TEMPLATES: { label: string; category: string; sql: string }[] = [
@@ -112,6 +112,13 @@ FROM FileList
 WHERE CollectionName IS NOT NULL
 GROUP BY ASideLocation, CollectionName
 ORDER BY last_file DESC`,
+  },
+  {
+    label: "All Collection Names",
+    category: "General",
+    sql: `SELECT DISTINCT CollectionName
+FROM FileList
+ORDER BY CollectionName`,
   },
   {
     label: "Collections count",
@@ -1672,6 +1679,92 @@ WHERE CollectionName like '%%' AND
   FactIPThroughput.PosId = Position.PosId AND
   FactIPThroughput.NetworkId = NetworkInfo.NetworkId AND
   FactIPThroughput.direction = 'Downlink'`,
+  },
+  // ── 5G ──
+  {
+    label: "5G Phone – SS-RSRP / RSRQ / SINR (avg ανά θέση)",
+    category: "5G",
+    sql: `SELECT
+  nr.NRARFCN,
+  AVG(nr.RSRP)                  AS [SS-RSRP],
+  AVG(nr.RSRQ)                  AS [SS-RSRQ],
+  AVG(nr.SINR)                  AS [SS-SINR],
+  CAST(pos.latitude  AS FLOAT)  AS latitude,
+  CAST(pos.longitude AS FLOAT)  AS longitude,
+  fl.CollectionName,
+  fl.ASideLocation              AS Location,
+  NRcarrier.CarrierIndexName
+FROM [dbo].[FactNR5GRadio] nr
+LEFT JOIN Position           pos       ON pos.PosId   = nr.PosId
+LEFT JOIN FileList           fl        ON fl.FileId   = nr.FileId
+LEFT JOIN DmnNR5GCarrierInfo NRcarrier ON NRcarrier.DmnId = nr.DmnIdNR5GCarrierInfo
+WHERE fl.Valid = 1
+  AND fl.CollectionName LIKE '%%'
+GROUP BY nr.SessionId, nr.PosId, nr.NRARFCN,
+         pos.latitude, pos.longitude,
+         fl.CollectionName, fl.ASideLocation, NRcarrier.CarrierIndexName
+ORDER BY nr.PosId`,
+  },
+  {
+    label: "5G Phone – raw μετρήσεις (FactNR5GRadio)",
+    category: "5G",
+    sql: `SELECT TOP 2000
+  nr.SessionId,
+  nr.PosId,
+  nr.NRARFCN,
+  nr.PCI,
+  nr.RSRP                       AS [SS-RSRP],
+  nr.RSRQ                       AS [SS-RSRQ],
+  nr.SINR                       AS [SS-SINR],
+  nr.FullDate,
+  CAST(pos.latitude  AS FLOAT)  AS latitude,
+  CAST(pos.longitude AS FLOAT)  AS longitude,
+  fl.CollectionName,
+  fl.ASideLocation              AS Location
+FROM [dbo].[FactNR5GRadio] nr
+LEFT JOIN Position pos ON pos.PosId  = nr.PosId
+LEFT JOIN FileList fl  ON fl.FileId  = nr.FileId
+WHERE fl.Valid = 1
+  AND fl.CollectionName LIKE '%%'
+ORDER BY nr.FullDate`,
+  },
+  {
+    label: "5G Scanner – SS-RSRP top beam (FactNR5GScannerBeam)",
+    category: "5G",
+    sql: `SELECT
+  nr.PCI,
+  nr.AbsFreqSSB                 AS NRARFCN,
+  nr.SS_RSRP,
+  nr.SS_SINR,
+  fl.CollectionName,
+  fl.ASideLocation              AS Location,
+  CAST(pos.Latitude  AS FLOAT)  AS latitude,
+  CAST(pos.Longitude AS FLOAT)  AS longitude
+FROM [dbo].[FactNR5GScannerBeam] nr
+LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId] = nr.[FileId]
+LEFT JOIN [dbo].[Position] pos ON pos.[PosId] = nr.[PosId]
+WHERE nr.[DmnIdTopN_SS_RSRP] = 1
+  AND fl.CollectionName LIKE '%%'
+ORDER BY latitude, longitude`,
+  },
+  {
+    label: "5G Scanner – avg SS-RSRP ανά NRARFCN & collection",
+    category: "5G",
+    sql: `SELECT
+  nr.AbsFreqSSB                        AS NRARFCN,
+  fl.CollectionName,
+  fl.ASideLocation                     AS Location,
+  COUNT(*)                             AS measurements,
+  ROUND(AVG(nr.SS_RSRP), 2)           AS avg_SS_RSRP,
+  ROUND(MIN(nr.SS_RSRP), 2)           AS min_SS_RSRP,
+  ROUND(MAX(nr.SS_RSRP), 2)           AS max_SS_RSRP,
+  ROUND(AVG(nr.SS_SINR), 2)           AS avg_SS_SINR
+FROM [dbo].[FactNR5GScannerBeam] nr
+LEFT JOIN [dbo].[FileList] fl ON fl.[FileId] = nr.[FileId]
+WHERE nr.[DmnIdTopN_SS_RSRP] = 1
+  AND fl.CollectionName LIKE '%%'
+GROUP BY nr.AbsFreqSSB, fl.CollectionName, fl.ASideLocation
+ORDER BY fl.ASideLocation, nr.AbsFreqSSB`,
   },
 ];
 

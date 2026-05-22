@@ -12,6 +12,7 @@ import DataSessionDetail from "@/components/DataSessionDetail";
 import DataSessionsList from "@/components/DataSessionsList";
 import CallsMap from "@/components/CallsMap";
 import AntennasMap from "@/components/AntennasMap";
+import QueryMap from "@/components/QueryMap";
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import type { CallRecord } from "@/lib/callData";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -672,40 +673,44 @@ const Index = () => {
             </div>
           </div>
 
-          <div className="flex items-center gap-2">
-            {/* Edit Filters button */}
-            <button
-              type="button"
-              onClick={() => setShowFilterPanel(true)}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border bg-muted hover:bg-muted/70 text-xs font-medium text-foreground transition-colors"
-            >
-              <SlidersHorizontal className="h-3.5 w-3.5 text-primary" />
-              Edit Filters
-              {(selectedCallsCollections.length > 0 || sessionValidFilter !== "all" || statusFilters.length > 0) && (
-                <span className="ml-1 h-4 w-4 rounded-full bg-primary text-primary-foreground text-[9px] flex items-center justify-center font-bold">
-                  {selectedCallsCollections.length + (sessionValidFilter !== "all" ? 1 : 0) + statusFilters.length}
-                </span>
-              )}
-            </button>
+          {!["queries", "query-map", "map2"].includes(activeTab) && (
+            <div className="flex items-center gap-2">
+              {/* Edit Filters button */}
+              <button
+                type="button"
+                onClick={() => setShowFilterPanel(true)}
+                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border bg-muted hover:bg-muted/70 text-xs font-medium text-foreground transition-colors"
+              >
+                <SlidersHorizontal className="h-3.5 w-3.5 text-primary" />
+                Edit Filters
+                {(selectedCallsCollections.length > 0 || sessionValidFilter !== "all" || statusFilters.length > 0) && (
+                  <span className="ml-1 h-4 w-4 rounded-full bg-primary text-primary-foreground text-[9px] flex items-center justify-center font-bold">
+                    {selectedCallsCollections.length + (sessionValidFilter !== "all" ? 1 : 0) + statusFilters.length}
+                  </span>
+                )}
+              </button>
 
-            <div className="bg-card border border-border rounded-lg px-3 py-2">
-              <p className="text-[11px] text-muted-foreground mb-1">Active filters</p>
-              <div className="flex flex-wrap gap-1.5">
-                <Badge variant="secondary" className="text-[10px]">DB: {selectedDatabase || "—"}</Badge>
-                <Badge variant="secondary" className="text-[10px]">Collections: {selectedCallsCollections.length === 0 ? "None" : selectedCallsCollections.join(', ')}</Badge>
-                <Badge variant="secondary" className="text-[10px]">Locations: {selectedLocations.length === 0 ? "All" : selectedLocations.length}</Badge>
+              <div className="bg-card border border-border rounded-lg px-3 py-2">
+                <p className="text-[11px] text-muted-foreground mb-1">Active filters</p>
+                <div className="flex flex-wrap gap-1.5">
+                  <Badge variant="secondary" className="text-[10px]">DB: {selectedDatabase || "—"}</Badge>
+                  <Badge variant="secondary" className="text-[10px]">Collections: {selectedCallsCollections.length === 0 ? "None" : selectedCallsCollections.length === 1 ? selectedCallsCollections[0] : `${selectedCallsCollections.length} selected`}</Badge>
+                  <Badge variant="secondary" className="text-[10px]">Locations: {selectedLocations.length === 0 ? "All" : selectedLocations.length}</Badge>
+                </div>
               </div>
             </div>
-          </div>
+          )}
 
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            <button
-              type="button"
-              onClick={clearCallsFilters}
-              className="text-[15px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70"
-            >
-              Clear filters
-            </button>
+            {!["queries", "query-map", "map2"].includes(activeTab) && (
+              <button
+                type="button"
+                onClick={clearCallsFilters}
+                className="text-[15px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70"
+              >
+                Clear filters
+              </button>
+            )}
             <AnimatePresence>
               {showScrollTop && (
                 <motion.button
@@ -722,7 +727,9 @@ const Index = () => {
                 </motion.button>
               )}
             </AnimatePresence>
-            <span>{filteredCallRecords.length} calls recorded</span>
+            {!["queries", "query-map", "map2"].includes(activeTab) && (
+              <span>{filteredCallRecords.length} calls recorded</span>
+            )}
           </div>
         </div>
       </header>
@@ -733,6 +740,9 @@ const Index = () => {
             <TabsList className="bg-muted border border-border">
               <TabsTrigger value="queries" className="gap-1.5 text-xs">
                 <Database className="h-3.5 w-3.5" /> Queries
+              </TabsTrigger>
+              <TabsTrigger value="query-map" className="gap-1.5 text-xs">
+                <MapPin className="h-3.5 w-3.5 text-emerald-400" /> Query Map
               </TabsTrigger>
               <TabsTrigger value="calls" className="gap-1.5 text-xs">
                 <Phone className="h-3.5 w-3.5" /> All Calls
@@ -779,7 +789,7 @@ const Index = () => {
                 isRunning={isRunning}
                 collectionNames={collectionNames}
                 collectionsLoading={collectionsLoading}
-                results={results}
+                results={results.map(r => ({ ...r, label: r.queryLabel }))}
                 totalTime={totalTime}
               />
             </section>
@@ -1269,6 +1279,13 @@ const Index = () => {
 
           <TabsContent value="map2">
             <AntennasMap />
+          </TabsContent>
+
+          <TabsContent value="query-map">
+            <QueryMap
+              databases={databases}
+              defaultDatabase={selectedDatabase}
+            />
           </TabsContent>
         </Tabs>
       </main>

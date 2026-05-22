@@ -213,12 +213,32 @@ const T_IP_THROUGHPUT: TableDef = {
     { name: "Host", type: "str" }, { name: "TestType", type: "str" },
   ],
 };
+const T_NR5G_RADIO: TableDef = {
+  name: "FactNR5GRadio", alias: "NR", category: "5G",
+  columns: [
+    { name: "SessionId", type: "id" }, { name: "PosId", type: "id" },
+    { name: "FileId", type: "id" }, { name: "FullDate", type: "date" },
+    { name: "NRARFCN", type: "num" }, { name: "PCI", type: "num" },
+    { name: "RSRP", type: "num" }, { name: "RSRQ", type: "num" },
+    { name: "SINR", type: "num" }, { name: "DmnIdNR5GCarrierInfo", type: "id" },
+  ],
+};
+const T_NR5G_SCANNER: TableDef = {
+  name: "FactNR5GScannerBeam", alias: "NRS", category: "5G",
+  columns: [
+    { name: "PosId", type: "id" }, { name: "FileId", type: "id" },
+    { name: "PCI", type: "num" }, { name: "AbsFreqSSB", type: "num" },
+    { name: "SS_RSRP", type: "num" }, { name: "SS_SINR", type: "num" },
+    { name: "DmnIdTopN_SS_RSRP", type: "num" },
+  ],
+};
 
 const ALL_TABLES: TableDef[] = [
   T_CALL_ANALYSIS, T_FILE_LIST, T_SESSIONS,
   T_LTE, T_GSM, T_TECHNOLOGY, T_MOS,
   T_LTE_SCANNER, T_GSM_SCANNER, T_CDR, T_MARKERS, T_POSITION,
   T_CALL_SESSION, T_TESTINFO, T_NETWORK_INFO, T_RESULTS_KPI, T_VOICE_CODEC, T_IP_THROUGHPUT,
+  T_NR5G_RADIO, T_NR5G_SCANNER,
 ];
 
 const AC_COLS: ColDef[] = [{ name: "Comment", type: "str" }];
@@ -289,11 +309,92 @@ const JOINS_FOR: Record<string, JoinDef[]> = {
     { label: "NetworkInfo", sql: "LEFT JOIN NetworkInfo NI ON NI.FileId = IPT.FileId",   alias: "NI",  columns: T_NETWORK_INFO.columns },
     { label: "Testinfo",  sql: "LEFT JOIN Testinfo TI ON TI.SessionId = IPT.SessionId",  alias: "TI",  columns: T_TESTINFO.columns },
   ],
+  FactNR5GRadio: [
+    { label: "Position", sql: "LEFT JOIN Position POS ON POS.PosId = NR.PosId",   alias: "POS", columns: T_POSITION.columns },
+    { label: "FileList", sql: "LEFT JOIN FileList FL  ON FL.FileId  = NR.FileId",  alias: "FL",  columns: T_FILE_LIST.columns },
+    { label: "Sessions", sql: "LEFT JOIN Sessions S   ON S.SessionId = NR.SessionId", alias: "S", columns: T_SESSIONS.columns },
+  ],
+  FactNR5GScannerBeam: [
+    { label: "Position", sql: "LEFT JOIN Position POS ON POS.PosId = NRS.PosId",  alias: "POS", columns: T_POSITION.columns },
+    { label: "FileList", sql: "LEFT JOIN FileList FL  ON FL.FileId  = NRS.FileId", alias: "FL",  columns: T_FILE_LIST.columns },
+  ],
 };
 
 const OPERATORS = ["=", "!=", ">", "<", ">=", "<=", "LIKE", "IN", "IS NULL", "IS NOT NULL"];
-const CATEGORIES = ["Voice", "Signal", "Data", "MOS", "Scanner", "Events", "Location", "Network"];
+const CATEGORIES = ["Voice", "Signal", "Data", "MOS", "Scanner", "Events", "Location", "Network", "5G"];
 const uid = () => Math.random().toString(36).slice(2, 8);
+
+// ─── Templates ─────────────────────────────────────────────────────────────
+
+interface TemplateDef {
+  label: string;
+  description: string;
+  tableName: string;
+  cols: string[];       // alias.column keys
+  distinct?: boolean;
+  topN?: string;
+  orderCol?: string;
+  orderDir?: "ASC" | "DESC";
+  wheres?: Omit<WhereRow, "id">[];
+}
+
+const QUERY_TEMPLATES: TemplateDef[] = [
+  {
+    label: "Distinct Collection Names",
+    description: "Unique collection names from FileList",
+    tableName: "FileList",
+    cols: ["FL.CollectionName"],
+    distinct: true,
+    orderCol: "FL.CollectionName",
+    orderDir: "ASC",
+  },
+  {
+    label: "Call Summary",
+    description: "Call status, tech, duration from CallAnalysis",
+    tableName: "CallAnalysis",
+    cols: ["CA.SessionId", "CA.callStatus", "CA.technology", "CA.callDir", "CA.setupTime", "CA.callDuration"],
+    topN: "500",
+    orderCol: "CA.callDuration",
+    orderDir: "DESC",
+  },
+  {
+    label: "LTE Signal Samples",
+    description: "RSRP / RSRQ / SINR measurements",
+    tableName: "LTEMeasurementReport",
+    cols: ["LMR.SessionId", "LMR.MsgTime", "LMR.EARFCN", "LMR.PhyCellId", "LMR.RSRP", "LMR.RSRQ", "LMR.SINR0"],
+    topN: "1000",
+    orderCol: "LMR.MsgTime",
+    orderDir: "ASC",
+  },
+  {
+    label: "Data Transfer Results",
+    description: "CDR throughput and test status",
+    tableName: "CDRCombined",
+    cols: ["CC.SessionId", "CC.Technology", "CC.[Test Name]", "CC.[Transfer Status]", "CC.[Transfer Throughput (kbps)]", "CC.TestDirection"],
+    topN: "500",
+    orderCol: "CC.[Transfer Throughput (kbps)]",
+    orderDir: "DESC",
+  },
+  {
+    label: "5G Phone – SS-RSRP/SINR",
+    description: "5G NR μετρήσεις SS-RSRP/RSRQ/SINR από FactNR5GRadio",
+    tableName: "FactNR5GRadio",
+    cols: ["NR.SessionId", "NR.PosId", "NR.NRARFCN", "NR.PCI", "NR.RSRP", "NR.RSRQ", "NR.SINR", "NR.FullDate"],
+    topN: "2000",
+    orderCol: "NR.PosId",
+    orderDir: "ASC",
+  },
+  {
+    label: "5G Scanner – SS-RSRP top beam",
+    description: "5G NR scanner κορυφαία δέσμη SS-RSRP από FactNR5GScannerBeam",
+    tableName: "FactNR5GScannerBeam",
+    cols: ["NRS.PCI", "NRS.AbsFreqSSB", "NRS.SS_RSRP", "NRS.SS_SINR"],
+    topN: "2000",
+    orderCol: "NRS.SS_RSRP",
+    orderDir: "DESC",
+    wheres: [{ alias: "NRS", column: "DmnIdTopN_SS_RSRP", op: "=", value: "1", connector: "AND" }],
+  },
+];
 const colKey = (alias: string, col: string) => `${alias}.${col}`;
 
 // ─── Type badge ────────────────────────────────────────────────────────────
@@ -384,6 +485,7 @@ export default function QueryBuilder({ onApply }: { onApply: (sql: string) => vo
   const [wheres, setWheres]           = useState<WhereRow[]>([]);
   const [useTopN, setUseTopN]         = useState(false);
   const [topN, setTopN]               = useState("500");
+  const [useDistinct, setUseDistinct] = useState(false);
   const [orderCol, setOrderCol]       = useState("");
   const [orderDir, setOrderDir]       = useState<"ASC" | "DESC">("DESC");
 
@@ -410,6 +512,19 @@ export default function QueryBuilder({ onApply }: { onApply: (sql: string) => vo
     ));
     setWheres([]);
     setOrderCol("");
+    setUseDistinct(false);
+  };
+
+  const applyTemplate = (tpl: TemplateDef) => {
+    setPrimaryName(tpl.tableName);
+    setActiveJoins([]);
+    setSelCols(new Set(tpl.cols));
+    setWheres(tpl.wheres ? tpl.wheres.map((w) => ({ ...w, id: uid() })) : []);
+    setUseDistinct(!!tpl.distinct);
+    setUseTopN(!!tpl.topN);
+    setTopN(tpl.topN ?? "500");
+    setOrderCol(tpl.orderCol ?? "");
+    setOrderDir(tpl.orderDir ?? "DESC");
   };
 
   const toggleJoin   = (label: string) => setActiveJoins((prev) => prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label]);
@@ -429,7 +544,7 @@ export default function QueryBuilder({ onApply }: { onApply: (sql: string) => vo
     joinDefs.forEach((j) => j.columns.forEach((c) => { if (selCols.has(colKey(j.alias, c.name))) colLines.push(`  ${j.alias}.${c.name}`); }));
 
     const lines: string[] = [
-      `SELECT ${useTopN && topN ? `TOP ${topN} ` : ""}`,
+      `SELECT ${useDistinct ? "DISTINCT " : ""}${useTopN && topN ? `TOP ${topN} ` : ""}`,
       colLines.length > 0 ? colLines.join(",\n") : `  ${alias}.*`,
       `FROM ${primaryTable.name} ${alias}`,
       ...joinDefs.flatMap((j) => j.sql.split("\n")),
@@ -493,6 +608,23 @@ export default function QueryBuilder({ onApply }: { onApply: (sql: string) => vo
             className="overflow-hidden"
           >
             <div className="border-t border-border divide-y divide-border/50">
+
+              {/* ── Templates ── */}
+              <div className="px-4 py-2.5 bg-muted/5">
+                <p className="text-[9px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">Templates</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {QUERY_TEMPLATES.map((tpl) => (
+                    <button
+                      key={tpl.label}
+                      onClick={() => applyTemplate(tpl)}
+                      title={tpl.description}
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded-md border border-border/60 bg-muted/30 hover:bg-primary/10 hover:border-primary/40 hover:text-primary text-[10px] text-muted-foreground transition-all"
+                    >
+                      {tpl.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
 
               {/* ── 1. Table ── */}
               <div className="px-4 py-3">
@@ -644,6 +776,16 @@ export default function QueryBuilder({ onApply }: { onApply: (sql: string) => vo
               <div className="px-4 py-3">
                 <StepLabel n={5} label="TOP / ORDER BY" />
                 <div className="flex flex-wrap items-center gap-3">
+                  <label className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                    <input
+                      type="checkbox"
+                      checked={useDistinct}
+                      onChange={(e) => setUseDistinct(e.target.checked)}
+                      className="accent-primary"
+                    />
+                    DISTINCT
+                  </label>
+
                   <label className="flex items-center gap-2 text-[10px] text-muted-foreground">
                     <input
                       type="checkbox"
