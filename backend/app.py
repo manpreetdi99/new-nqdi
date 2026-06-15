@@ -308,33 +308,55 @@ def list_locations(
     database: str = Query(..., min_length=1),
     collection: list[str] | None = Query(default=None),
 ):
+    conn = None
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
 
-        query = """
+        selected_collections = [col for col in (collection or []) if col and col.strip()]
+
+        filelist_query = """
             SELECT DISTINCT ASideLocation
             FROM FileList
             WHERE ASideLocation IS NOT NULL
         """
         params = []
-        
-        selected_collections = [col for col in (collection or []) if col and col.strip()]
         if selected_collections:
             placeholders = ", ".join(["?"] * len(selected_collections))
-            query += f" AND CollectionName IN ({placeholders})"
+            filelist_query += f" AND CollectionName IN ({placeholders})"
             params.extend(selected_collections)
-            
-        query += " ORDER BY ASideLocation"
 
-        cursor.execute(query, tuple(params))
+        filelist_query += " ORDER BY ASideLocation"
 
+        try:
+            cursor.execute(filelist_query, tuple(params))
+            rows = cursor.fetchall()
+            if rows:
+                return {"locations": [row[0] for row in rows if row[0]]}
+        except Exception:
+            rows = []
+
+        dmn_query = """
+            SELECT DISTINCT Location
+            FROM DmnFile
+            WHERE Location IS NOT NULL
+        """
+        dmn_params = []
+        if selected_collections:
+            placeholders = ", ".join(["?"] * len(selected_collections))
+            dmn_query += f" AND CollectionName IN ({placeholders})"
+            dmn_params.extend(selected_collections)
+
+        dmn_query += " ORDER BY Location"
+
+        cursor.execute(dmn_query, tuple(dmn_params))
         rows = cursor.fetchall()
-        conn.close()
-
         return {"locations": [row[0] for row in rows if row[0]]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn is not None:
+            conn.close()
 
 @app.get("/api/databases")
 def list_databases():
@@ -389,23 +411,39 @@ def run_benchmark(req: QueryRequest):
 
 @app.get("/api/collections")
 def list_collections(database: str = Query(..., min_length=1)):
+    conn = None
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
 
+        try:
+            cursor.execute("""
+                SELECT DISTINCT CollectionName
+                FROM filelist
+                WHERE CollectionName IS NOT NULL
+                ORDER BY CollectionName
+            """)
+
+            rows = cursor.fetchall()
+            if rows:
+                return {"collections": [row[0] for row in rows if row[0]]}
+        except Exception:
+            rows = []
+
         cursor.execute("""
             SELECT DISTINCT CollectionName
-            FROM filelist
+            FROM DmnFile
             WHERE CollectionName IS NOT NULL
             ORDER BY CollectionName
         """)
 
         rows = cursor.fetchall()
-        conn.close()
-
         return {"collections": [row[0] for row in rows if row[0]]}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn is not None:
+            conn.close()
 
 @app.get("/api/lte_values")
 def get_lte_values(
@@ -1086,6 +1124,199 @@ def get_call_context_signal(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@app.get("/api/call_context_signal_b_side")
+def get_call_context_signal_b_side(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1),
+    window_sec: int = Query(default=10, ge=5, le=300)
+):
+    """LTE RSRP/RSRQ in ±window_sec window for the B-side session of the call."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                         ELSE CA.SessionId END AS ASessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+            ),
+            call_info AS (
+                SELECT TOP 1
+                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                    ) AS end_time
+                FROM CallAnalysis CA
+                INNER JOIN pair_root PR ON CA.SessionId = PR.ASessionId
+            ),
+            b_side AS (
+                SELECT TOP (1)
+                    CA.SessionId AS BSessionId,
+                    COALESCE(CA.FileId, S.FileId, SB.FileId) AS BFileId
+                FROM CallAnalysis CA
+                LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+                INNER JOIN pair_root PR ON CA.SessionIdA = PR.ASessionId
+                WHERE CA.Side = 'B'
+            ),
+            b_sessions AS (
+                SELECT S.SessionId AS SID
+                FROM Sessions S
+                CROSS JOIN b_side bs
+                WHERE S.FileId = bs.BFileId
+
+                UNION
+
+                SELECT SB.SessionId AS SID
+                FROM SessionsB SB
+                CROSS JOIN b_side bs
+                WHERE SB.FileId = bs.BFileId
+
+                UNION
+
+                SELECT bs.BSessionId AS SID
+                FROM b_side bs
+            ),
+            win AS (
+                SELECT
+                    DATEADD(SECOND, -?, ci.start_time) AS window_start,
+                    DATEADD(SECOND,  ?, ci.end_time)   AS window_end,
+                    ci.start_time,
+                    ci.end_time
+                FROM call_info ci
+            )
+            SELECT
+                lmr.MsgTime,
+                lmr.SessionId,
+                lmr.EARFCN,
+                lmr.PhyCellId,
+                ROUND(lmr.RSRP,  2) AS RSRP,
+                ROUND(lmr.RSRQ,  2) AS RSRQ,
+                ROUND(lmr.SINR0, 2) AS SINR0,
+                ROUND(lmr.SINR1, 2) AS SINR1,
+                p.Latitude,
+                p.Longitude,
+                CASE
+                    WHEN lmr.MsgTime < w.start_time THEN 'before'
+                    WHEN lmr.MsgTime > w.end_time   THEN 'after'
+                    ELSE 'during'
+                END AS phase
+            FROM win w
+            INNER JOIN b_sessions bss ON 1=1
+            INNER JOIN LTEMeasurementReport lmr
+                ON  lmr.SessionId = bss.SID
+                AND lmr.MsgTime BETWEEN w.window_start AND w.window_end
+            LEFT JOIN Position p ON p.PosId = lmr.PosId
+            ORDER BY lmr.MsgTime
+        """, (session_id, session_id, window_sec, window_sec))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+        conn.close()
+
+        return {"signal": [{columns[i]: row[i] for i in range(len(columns))} for row in rows]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/gsm_context_signal_b_side")
+def get_gsm_context_signal_b_side(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1),
+    window_sec: int = Query(default=10, ge=10, le=300)
+):
+    """GSM RxLev/RxQual in ±window_sec window for the B-side session of the call."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                         ELSE CA.SessionId END AS ASessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+            ),
+            call_info AS (
+                SELECT TOP 1
+                    CA.callStartTimeStamp AS start_time,
+                    DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp) AS end_time
+                FROM CallAnalysis CA
+                INNER JOIN pair_root PR ON CA.SessionId = PR.ASessionId
+            ),
+            b_side AS (
+                SELECT TOP (1)
+                    CA.SessionId AS BSessionId,
+                    COALESCE(CA.FileId, S.FileId, SB.FileId) AS BFileId
+                FROM CallAnalysis CA
+                LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+                INNER JOIN pair_root PR ON CA.SessionIdA = PR.ASessionId
+                WHERE CA.Side = 'B'
+            ),
+            b_sessions AS (
+                SELECT S.SessionId AS SID
+                FROM Sessions S
+                CROSS JOIN b_side bs
+                WHERE S.FileId = bs.BFileId
+
+                UNION
+
+                SELECT SB.SessionId AS SID
+                FROM SessionsB SB
+                CROSS JOIN b_side bs
+                WHERE SB.FileId = bs.BFileId
+
+                UNION
+
+                SELECT bs.BSessionId AS SID
+                FROM b_side bs
+            ),
+            win AS (
+                SELECT
+                    DATEADD(SECOND, -?, ci.start_time) AS window_start,
+                    DATEADD(SECOND,  ?, ci.end_time)   AS window_end,
+                    ci.start_time,
+                    ci.end_time
+                FROM call_info ci
+            )
+            SELECT
+                g.MsgTime,
+                g.SessionId,
+                COALESCE(g.RxLevSub,  g.RxLevFull)  AS RxLevSub,
+                COALESCE(g.RxQualSub, g.RxQualFull) AS RxQualSub,
+                p.Latitude,
+                p.Longitude,
+                CASE
+                    WHEN g.MsgTime < w.start_time THEN 'before'
+                    WHEN g.MsgTime > w.end_time   THEN 'after'
+                    ELSE 'during'
+                END AS phase
+            FROM win w
+            INNER JOIN b_sessions bss ON 1=1
+            INNER JOIN GSMMeasReport g
+                ON  g.SessionId = bss.SID
+                AND g.MsgTime BETWEEN w.window_start AND w.window_end
+            LEFT JOIN Position p ON p.PosId = g.PosId
+            ORDER BY g.MsgTime
+        """, (session_id, session_id, window_sec, window_sec))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+        conn.close()
+
+        return {"signal": [{columns[i]: row[i] for i in range(len(columns))} for row in rows]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @app.get("/api/call_context_technology")
 def get_call_context_technology(
     database: str = Query(..., min_length=1),
@@ -1306,19 +1537,18 @@ def get_call_paging_info(
                 for row in cursor.fetchall()
             ]
 
-        # 1. Call window
+        # 1. Call window — uses CA columns directly (same pattern as call_context_signal)
         cursor.execute("""
             ;WITH target_call AS (
                 SELECT TOP (1)
                     CA.SessionId AS SelectedSessionId,
                     CA.SessionIdA,
                     CA.Side,
-                    COALESCE(S.FileId, SB.FileId) AS FileId,
-                    COALESCE(S.startTime, SB.startTime) AS CallStart,
+                    CA.FileId,
+                    CA.callStartTimeStamp AS CallStart,
                     COALESCE(
-                        DATEADD(ms, S.duration, S.startTime),
-                        DATEADD(ms, SB.duration, SB.startTime),
-                        DATEADD(ms, CA.callDuration, COALESCE(S.startTime, SB.startTime))
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
                     ) AS CallEnd,
                     CA.callStatus,
                     CA.code,
@@ -1328,11 +1558,9 @@ def get_call_paging_info(
                     CA.callType,
                     CA.callDir
                 FROM CallAnalysis CA
-                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
-                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
                    OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
-                ORDER BY COALESCE(S.startTime, SB.startTime)
+                ORDER BY CA.callStartTimeStamp
             )
             SELECT
                 *,
@@ -1355,16 +1583,13 @@ def get_call_paging_info(
         cursor.execute("""
             ;WITH target_call AS (
                 SELECT TOP (1)
-                    COALESCE(S.FileId, SB.FileId) AS FileId,
-                    COALESCE(S.startTime, SB.startTime) AS CallStart,
+                    CA.FileId,
+                    CA.callStartTimeStamp AS CallStart,
                     COALESCE(
-                        DATEADD(ms, S.duration, S.startTime),
-                        DATEADD(ms, SB.duration, SB.startTime),
-                        DATEADD(ms, CA.callDuration, COALESCE(S.startTime, SB.startTime))
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
                     ) AS CallEnd
                 FROM CallAnalysis CA
-                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
-                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
                    OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
             ),
@@ -1382,8 +1607,6 @@ def get_call_paging_info(
                 FROM Sessions S
                 CROSS JOIN bounds B
                 WHERE S.FileId = B.FileId
-                  AND S.startTime <= B.PostEnd
-                  AND DATEADD(ms, S.duration, S.startTime) >= B.PreStart
 
                 UNION
 
@@ -1391,8 +1614,6 @@ def get_call_paging_info(
                 FROM SessionsB SB
                 CROSS JOIN bounds B
                 WHERE SB.FileId = B.FileId
-                  AND SB.startTime <= B.PostEnd
-                  AND DATEADD(ms, SB.duration, SB.startTime) >= B.PreStart
             )
             SELECT
                 CASE
@@ -1455,16 +1676,13 @@ def get_call_paging_info(
         cursor.execute("""
             ;WITH target_call AS (
                 SELECT TOP (1)
-                    COALESCE(S.FileId, SB.FileId) AS FileId,
-                    COALESCE(S.startTime, SB.startTime) AS CallStart,
+                    CA.FileId,
+                    CA.callStartTimeStamp AS CallStart,
                     COALESCE(
-                        DATEADD(ms, S.duration, S.startTime),
-                        DATEADD(ms, SB.duration, SB.startTime),
-                        DATEADD(ms, CA.callDuration, COALESCE(S.startTime, SB.startTime))
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
                     ) AS CallEnd
                 FROM CallAnalysis CA
-                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
-                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
                    OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
             ),
@@ -1482,8 +1700,6 @@ def get_call_paging_info(
                 FROM Sessions S
                 CROSS JOIN bounds B
                 WHERE S.FileId = B.FileId
-                  AND S.startTime <= B.PostEnd
-                  AND DATEADD(ms, S.duration, S.startTime) >= B.PreStart
 
                 UNION
 
@@ -1491,8 +1707,6 @@ def get_call_paging_info(
                 FROM SessionsB SB
                 CROSS JOIN bounds B
                 WHERE SB.FileId = B.FileId
-                  AND SB.startTime <= B.PostEnd
-                  AND DATEADD(ms, SB.duration, SB.startTime) >= B.PreStart
             )
             SELECT
                 CASE
@@ -1516,15 +1730,14 @@ def get_call_paging_info(
                 R.MsgTypeName,
                 R.Direction,
                 R.MsgName,
-                R.Msg
+                LEFT(R.Msg, 500) AS Msg
             FROM vLTERRCMessages R
             INNER JOIN sessions_in_window SI ON SI.SessionId = R.SessionId
             CROSS JOIN bounds B
             WHERE R.MsgTime BETWEEN B.PreStart AND B.PostEnd
               AND (
                     R.MsgTypeName LIKE '%Paging%'
-                 OR R.MsgName LIKE '%Paging%'
-                 OR R.Msg LIKE '%Paging%'
+                 OR R.MsgName    LIKE '%Paging%'
               )
             ORDER BY R.MsgTime
         """, (session_id, session_id, before_seconds, after_seconds))
@@ -1536,16 +1749,13 @@ def get_call_paging_info(
             cursor.execute("""
                 ;WITH target_call AS (
                     SELECT TOP (1)
-                        COALESCE(S.FileId, SB.FileId) AS FileId,
-                        COALESCE(S.startTime, SB.startTime) AS CallStart,
+                        CA.FileId,
+                        CA.callStartTimeStamp AS CallStart,
                         COALESCE(
-                            DATEADD(ms, S.duration, S.startTime),
-                            DATEADD(ms, SB.duration, SB.startTime),
-                            DATEADD(ms, CA.callDuration, COALESCE(S.startTime, SB.startTime))
+                            CA.callEndTimeStamp,
+                            DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
                         ) AS CallEnd
                     FROM CallAnalysis CA
-                    LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
-                    LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                     WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
                        OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
                 ),
@@ -1563,8 +1773,6 @@ def get_call_paging_info(
                     FROM Sessions S
                     CROSS JOIN bounds B
                     WHERE S.FileId = B.FileId
-                      AND S.startTime <= B.PostEnd
-                      AND DATEADD(ms, S.duration, S.startTime) >= B.PreStart
 
                     UNION
 
@@ -1572,8 +1780,6 @@ def get_call_paging_info(
                     FROM SessionsB SB
                     CROSS JOIN bounds B
                     WHERE SB.FileId = B.FileId
-                      AND SB.startTime <= B.PostEnd
-                      AND DATEADD(ms, SB.duration, SB.startTime) >= B.PreStart
                 )
                 SELECT
                     CASE
@@ -1598,10 +1804,7 @@ def get_call_paging_info(
                 INNER JOIN sessions_in_window SI ON SI.SessionId = R.SessionId
                 CROSS JOIN bounds B
                 WHERE R.MsgTime BETWEEN B.PreStart AND B.PostEnd
-                  AND (
-                        R.MsgTypeName LIKE '%Paging%'
-                     OR R.Msg LIKE '%Paging%'
-                  )
+                  AND R.MsgTypeName LIKE '%Paging%'
                 ORDER BY R.MsgTime
             """, (session_id, session_id, before_seconds, after_seconds))
 
@@ -1643,7 +1846,7 @@ def get_call_paging_info(
                 "details": row,
             })
 
-        timeline.sort(key=lambda x: x["time"] or "")
+        timeline.sort(key=lambda x: (x["time"] is None, x["time"] or ""))
 
         return {
             "callWindow": call_window,
@@ -2116,6 +2319,63 @@ def get_lte_scanner_measurement(
         return {"aSide": a_side, "bSide": b_side}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+class RunMapRequest(BaseModel):
+    database: str
+    collection: str
+    gpx_path: str = ""
+    max_workers: int = 6
+
+
+@app.post("/api/run_map")
+def run_map(req: RunMapRequest):
+    """
+    Trigger main_mt.run_for_collection() and return captured stdout logs + output path.
+    The main_mt.py / panel_*.py files must be importable from sys.path.
+    """
+    import sys
+    import io
+    import contextlib
+
+    # Add the folder that contains main_mt.py to the Python path if needed.
+    # Adjust this path to wherever main_mt.py lives on this machine.
+    MAP_SCRIPTS_DIR = r"C:\Users\Mechanical Engineer\Documents\VALIDATION_MAPS"
+    if MAP_SCRIPTS_DIR not in sys.path:
+        sys.path.insert(0, MAP_SCRIPTS_DIR)
+
+    try:
+        import main_mt  # type: ignore
+    except ImportError as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Cannot import main_mt: {e}. Make sure MAP_SCRIPTS_DIR is correct."
+        )
+
+    log_buffer = io.StringIO()
+    output_html = None
+
+    try:
+        with contextlib.redirect_stdout(log_buffer):
+            output_html = main_mt.run_for_collection(
+                req.collection,
+                req.database,
+                input_gpx=req.gpx_path if req.gpx_path.strip() else None,
+                max_workers=req.max_workers,
+            )
+    except Exception as e:
+        raw_logs = [l for l in log_buffer.getvalue().splitlines() if l.strip()]
+        raw_logs.append(f"ERROR: {e}")
+        raise HTTPException(status_code=500, detail="\n".join(raw_logs))
+
+    logs = [l for l in log_buffer.getvalue().splitlines() if l.strip()]
+
+    html_content = None
+    if output_html and os.path.isfile(output_html):
+        with open(output_html, "r", encoding="utf-8") as f:
+            html_content = f.read()
+
+    return {"output_path": output_html, "html_content": html_content, "logs": logs, "success": True}
 
 
 @app.get("/api/wcdma_values")

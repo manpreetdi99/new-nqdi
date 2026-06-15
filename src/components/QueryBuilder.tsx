@@ -120,6 +120,7 @@ const T_LTE_SCANNER: TableDef = {
     { name: "RSRP", type: "num" }, { name: "RSRQ", type: "num" },
     { name: "SINR", type: "num" }, { name: "RSSI", type: "num" },
     { name: "MCC", type: "num" }, { name: "MNC", type: "num" },
+    { name: "DmnIdFile", type: "id" }, { name: "DmnIdPosition", type: "id" },
   ],
 };
 const T_GSM_SCANNER: TableDef = {
@@ -130,6 +131,7 @@ const T_GSM_SCANNER: TableDef = {
     { name: "RFBand", type: "num" }, { name: "BSIC", type: "num" },
     { name: "RxLev", type: "num" }, { name: "CId", type: "num" },
     { name: "LAC", type: "num" },
+    { name: "DmnIdFile", type: "id" }, { name: "DmnIdPosition", type: "id" },
   ],
 };
 const T_CDR: TableDef = {
@@ -221,6 +223,7 @@ const T_NR5G_RADIO: TableDef = {
     { name: "NRARFCN", type: "num" }, { name: "PCI", type: "num" },
     { name: "RSRP", type: "num" }, { name: "RSRQ", type: "num" },
     { name: "SINR", type: "num" }, { name: "DmnIdNR5GCarrierInfo", type: "id" },
+    { name: "DmnIdFile", type: "id" }, { name: "DmnIdPosition", type: "id" },
   ],
 };
 const T_NR5G_SCANNER: TableDef = {
@@ -229,11 +232,92 @@ const T_NR5G_SCANNER: TableDef = {
     { name: "PosId", type: "id" }, { name: "FileId", type: "id" },
     { name: "PCI", type: "num" }, { name: "AbsFreqSSB", type: "num" },
     { name: "SS_RSRP", type: "num" }, { name: "SS_SINR", type: "num" },
-    { name: "DmnIdTopN_SS_RSRP", type: "num" },
+    { name: "DmnIdTopN_SS_RSRP", type: "num" }, { name: "DmnIdTopN_SS_SINR", type: "num" },
+    { name: "DmnIdFile", type: "id" }, { name: "DmnIdPosition", type: "id" },
+  ],
+};
+const T_DMN_FILE: TableDef = {
+  name: "DmnFile", alias: "DF", category: "SmartAnalytics R24",
+  columns: [
+    { name: "DmnId", type: "id" }, { name: "FileId", type: "id" },
+    { name: "FileName", type: "str" }, { name: "CollectionName", type: "str" },
+    { name: "CampaignName", type: "str" }, { name: "Location", type: "str" },
+    { name: "TaskName", type: "str" }, { name: "Zone", type: "str" },
+    { name: "Side", type: "str" }, { name: "Valid", type: "str" },
+    { name: "InvalidReason", type: "str" },
+  ],
+};
+const T_DMN_POSITION: TableDef = {
+  name: "DmnPosition", alias: "DP", category: "SmartAnalytics R24",
+  columns: [
+    { name: "DmnId", type: "id" }, { name: "PosId", type: "id" },
+    { name: "Latitude", type: "num" }, { name: "Longitude", type: "num" },
+    { name: "Speed", type: "num" }, { name: "Altitude", type: "num" },
+    { name: "Direction", type: "num" }, { name: "NavigationMode", type: "str" },
+  ],
+};
+const T_FACT_CDR_VOICE: TableDef = {
+  name: "FactCDRVoice", alias: "FCV", category: "SmartAnalytics R24",
+  columns: [
+    { name: "SessionIdA", type: "id" }, { name: "SessionIdB", type: "id" },
+    { name: "FileIdA", type: "id" }, { name: "FileIdB", type: "id" },
+    { name: "CallSessionStartTS", type: "date" }, { name: "CallSessionEndTs", type: "date" },
+    { name: "CallStatus", type: "str" }, { name: "CallType", type: "str" },
+    { name: "CallDirection", type: "str" }, { name: "CallModeA", type: "str" },
+    { name: "CallTechnologyA", type: "str" }, { name: "SessionStartTechnologyA", type: "str" },
+    { name: "CallSetupTime_s", type: "num" }, { name: "CallDuration_s", type: "num" },
+    { name: "AvgSQ", type: "num" }, { name: "MinSQ", type: "num" },
+    { name: "LatitudeA", type: "num" }, { name: "LongitudeA", type: "num" },
+    { name: "Valid", type: "str" }, { name: "InvalidReason", type: "str" },
+    { name: "DmnIdFile", type: "id" },
+  ],
+};
+const T_FACT_CDR_COMBINED: TableDef = {
+  name: "FactCDRCombined", alias: "FCC", category: "SmartAnalytics R24",
+  columns: [
+    { name: "SessionId", type: "id" }, { name: "TestId", type: "id" },
+    { name: "FileId", type: "id" }, { name: "[Test Start TS]", type: "date" },
+    { name: "[Test Name]", type: "str" }, { name: "Technology", type: "str" },
+    { name: "[Start Technology]", type: "str" }, { name: "[Transfer Status]", type: "str" },
+    { name: "[Scoring Status]", type: "str" }, { name: "TestDirection", type: "str" },
+    { name: "Host", type: "str" }, { name: "[Transfer Throughput (kbps)]", type: "num" },
+    { name: "[Capacity_Sustainable Throughput (kbps)]", type: "num" },
+    { name: "[Ping_RTT Avg (ms)]", type: "num" },
+    { name: "[YouTube_Avg. Video MOS]", type: "num" },
+    { name: "LAT", type: "num" }, { name: "LON", type: "num" },
+    { name: "valid", type: "num" }, { name: "InvalidReason", type: "str" },
+    { name: "DmnIdFile", type: "id" },
+  ],
+};
+const T_FACT_LTE_RADIO: TableDef = {
+  name: "FactLTERadio", alias: "FLR", category: "SmartAnalytics R24",
+  columns: [
+    { name: "FactId", type: "id" }, { name: "FullDate", type: "date" },
+    { name: "SessionId", type: "id" }, { name: "FileId", type: "id" },
+    { name: "PosId", type: "id" }, { name: "EARFCN", type: "num" },
+    { name: "PhyCellId", type: "num" }, { name: "RSRP", type: "num" },
+    { name: "RSRQ", type: "num" }, { name: "RSSI", type: "num" },
+    { name: "SINR", type: "num" }, { name: "DistanceToBTS", type: "num" },
+    { name: "CGI", type: "str" }, { name: "DmnIdFile", type: "id" },
+    { name: "DmnIdPosition", type: "id" },
+  ],
+};
+const T_FACT_GSM_RADIO: TableDef = {
+  name: "FactGSMRadio", alias: "FGR", category: "SmartAnalytics R24",
+  columns: [
+    { name: "FactId", type: "id" }, { name: "FullDate", type: "date" },
+    { name: "SessionId", type: "id" }, { name: "FileId", type: "id" },
+    { name: "PosId", type: "id" }, { name: "RxLev", type: "num" },
+    { name: "RxQual", type: "num" }, { name: "RxLevSub", type: "num" },
+    { name: "RxQualSub", type: "num" }, { name: "BCCH", type: "num" },
+    { name: "BSIC", type: "num" }, { name: "CGI", type: "str" },
+    { name: "DistanceToBTS", type: "num" }, { name: "DmnIdFile", type: "id" },
+    { name: "DmnIdPosition", type: "id" },
   ],
 };
 
 const ALL_TABLES: TableDef[] = [
+  T_FACT_CDR_VOICE, T_FACT_CDR_COMBINED, T_FACT_LTE_RADIO, T_FACT_GSM_RADIO, T_DMN_FILE, T_DMN_POSITION,
   T_CALL_ANALYSIS, T_FILE_LIST, T_SESSIONS,
   T_LTE, T_GSM, T_TECHNOLOGY, T_MOS,
   T_LTE_SCANNER, T_GSM_SCANNER, T_CDR, T_MARKERS, T_POSITION,
@@ -244,6 +328,20 @@ const ALL_TABLES: TableDef[] = [
 const AC_COLS: ColDef[] = [{ name: "Comment", type: "str" }];
 
 const JOINS_FOR: Record<string, JoinDef[]> = {
+  FactCDRVoice: [
+    { label: "DmnFile", sql: "LEFT JOIN DmnFile DF ON DF.DmnId = FCV.DmnIdFile", alias: "DF", columns: T_DMN_FILE.columns },
+  ],
+  FactCDRCombined: [
+    { label: "DmnFile", sql: "LEFT JOIN DmnFile DF ON DF.DmnId = FCC.DmnIdFile", alias: "DF", columns: T_DMN_FILE.columns },
+  ],
+  FactLTERadio: [
+    { label: "DmnFile", sql: "LEFT JOIN DmnFile DF ON DF.DmnId = FLR.DmnIdFile", alias: "DF", columns: T_DMN_FILE.columns },
+    { label: "DmnPosition", sql: "LEFT JOIN DmnPosition DP ON DP.DmnId = FLR.DmnIdPosition", alias: "DP", columns: T_DMN_POSITION.columns },
+  ],
+  FactGSMRadio: [
+    { label: "DmnFile", sql: "LEFT JOIN DmnFile DF ON DF.DmnId = FGR.DmnIdFile", alias: "DF", columns: T_DMN_FILE.columns },
+    { label: "DmnPosition", sql: "LEFT JOIN DmnPosition DP ON DP.DmnId = FGR.DmnIdPosition", alias: "DP", columns: T_DMN_POSITION.columns },
+  ],
   CallAnalysis: [
     { label: "FileList",          sql: "LEFT JOIN FileList FL ON FL.FileId = CA.FileId",                                                                                               alias: "FL",  columns: T_FILE_LIST.columns },
     { label: "Sessions",          sql: "LEFT JOIN Sessions S ON S.SessionId = CA.SessionId",                                                                                           alias: "S",   columns: T_SESSIONS.columns },
@@ -268,8 +366,16 @@ const JOINS_FOR: Record<string, JoinDef[]> = {
     { label: "Sessions",        sql: "LEFT JOIN Sessions S ON S.SessionId = CC.SessionId",                                                                                             alias: "S",  columns: T_SESSIONS.columns },
     { label: "AnalysisComment", sql: "LEFT JOIN AnalysisCommentSessionsBridge ACSB ON ACSB.sessionID = CC.SessionId\nLEFT JOIN AnalysisComment AC ON ACSB.commentId = AC.commentID",  alias: "AC", columns: AC_COLS },
   ],
-  FactLTEScanner: [{ label: "Position", sql: "LEFT JOIN Position P ON P.PosId = FLS.PosId", alias: "P", columns: T_POSITION.columns }],
-  FactGSMScanner: [{ label: "Position", sql: "LEFT JOIN Position P ON P.PosId = FGS.PosId", alias: "P", columns: T_POSITION.columns }],
+  FactLTEScanner: [
+    { label: "DmnFile", sql: "LEFT JOIN DmnFile DF ON DF.DmnId = FLS.DmnIdFile", alias: "DF", columns: T_DMN_FILE.columns },
+    { label: "DmnPosition", sql: "LEFT JOIN DmnPosition DP ON DP.DmnId = FLS.DmnIdPosition", alias: "DP", columns: T_DMN_POSITION.columns },
+    { label: "Position", sql: "LEFT JOIN Position P ON P.PosId = FLS.PosId", alias: "P", columns: T_POSITION.columns },
+  ],
+  FactGSMScanner: [
+    { label: "DmnFile", sql: "LEFT JOIN DmnFile DF ON DF.DmnId = FGS.DmnIdFile", alias: "DF", columns: T_DMN_FILE.columns },
+    { label: "DmnPosition", sql: "LEFT JOIN DmnPosition DP ON DP.DmnId = FGS.DmnIdPosition", alias: "DP", columns: T_DMN_POSITION.columns },
+    { label: "Position", sql: "LEFT JOIN Position P ON P.PosId = FGS.PosId", alias: "P", columns: T_POSITION.columns },
+  ],
   Markers: [
     { label: "Position", sql: "LEFT JOIN Position P ON P.PosId = MK.PosId",           alias: "P", columns: T_POSITION.columns },
     { label: "Sessions", sql: "LEFT JOIN Sessions S ON S.SessionId = MK.SessionId",   alias: "S", columns: T_SESSIONS.columns },
@@ -310,18 +416,22 @@ const JOINS_FOR: Record<string, JoinDef[]> = {
     { label: "Testinfo",  sql: "LEFT JOIN Testinfo TI ON TI.SessionId = IPT.SessionId",  alias: "TI",  columns: T_TESTINFO.columns },
   ],
   FactNR5GRadio: [
+    { label: "DmnFile", sql: "LEFT JOIN DmnFile DF ON DF.DmnId = NR.DmnIdFile", alias: "DF", columns: T_DMN_FILE.columns },
+    { label: "DmnPosition", sql: "LEFT JOIN DmnPosition DP ON DP.DmnId = NR.DmnIdPosition", alias: "DP", columns: T_DMN_POSITION.columns },
     { label: "Position", sql: "LEFT JOIN Position POS ON POS.PosId = NR.PosId",   alias: "POS", columns: T_POSITION.columns },
     { label: "FileList", sql: "LEFT JOIN FileList FL  ON FL.FileId  = NR.FileId",  alias: "FL",  columns: T_FILE_LIST.columns },
     { label: "Sessions", sql: "LEFT JOIN Sessions S   ON S.SessionId = NR.SessionId", alias: "S", columns: T_SESSIONS.columns },
   ],
   FactNR5GScannerBeam: [
+    { label: "DmnFile", sql: "LEFT JOIN DmnFile DF ON DF.DmnId = NRS.DmnIdFile", alias: "DF", columns: T_DMN_FILE.columns },
+    { label: "DmnPosition", sql: "LEFT JOIN DmnPosition DP ON DP.DmnId = NRS.DmnIdPosition", alias: "DP", columns: T_DMN_POSITION.columns },
     { label: "Position", sql: "LEFT JOIN Position POS ON POS.PosId = NRS.PosId",  alias: "POS", columns: T_POSITION.columns },
     { label: "FileList", sql: "LEFT JOIN FileList FL  ON FL.FileId  = NRS.FileId", alias: "FL",  columns: T_FILE_LIST.columns },
   ],
 };
 
 const OPERATORS = ["=", "!=", ">", "<", ">=", "<=", "LIKE", "IN", "IS NULL", "IS NOT NULL"];
-const CATEGORIES = ["Voice", "Signal", "Data", "MOS", "Scanner", "Events", "Location", "Network", "5G"];
+const CATEGORIES = ["SmartAnalytics R24", "Voice", "Signal", "Data", "MOS", "Scanner", "Events", "Location", "Network", "5G"];
 const uid = () => Math.random().toString(36).slice(2, 8);
 
 // ─── Templates ─────────────────────────────────────────────────────────────
@@ -330,6 +440,7 @@ interface TemplateDef {
   label: string;
   description: string;
   tableName: string;
+  joins?: string[];
   cols: string[];       // alias.column keys
   distinct?: boolean;
   topN?: string;
@@ -346,6 +457,61 @@ const QUERY_TEMPLATES: TemplateDef[] = [
     cols: ["FL.CollectionName"],
     distinct: true,
     orderCol: "FL.CollectionName",
+    orderDir: "ASC",
+  },
+  {
+    label: "R24 Voice Calls",
+    description: "Documented voice CDR from FactCDRVoice + DmnFile",
+    tableName: "FactCDRVoice",
+    joins: ["DmnFile"],
+    cols: [
+      "FCV.SessionIdA", "FCV.SessionIdB", "DF.CollectionName", "DF.Location",
+      "FCV.CallSessionStartTS", "FCV.CallStatus", "FCV.CallType", "FCV.CallDirection",
+      "FCV.CallModeA", "FCV.CallTechnologyA", "FCV.CallSetupTime_s", "FCV.CallDuration_s", "FCV.AvgSQ",
+    ],
+    topN: "1000",
+    orderCol: "FCV.CallSessionStartTS",
+    orderDir: "DESC",
+  },
+  {
+    label: "R24 Data Sessions",
+    description: "Documented data/app CDR from FactCDRCombined + DmnFile",
+    tableName: "FactCDRCombined",
+    joins: ["DmnFile"],
+    cols: [
+      "FCC.SessionId", "FCC.TestId", "DF.CollectionName", "DF.Location",
+      "FCC.[Test Start TS]", "FCC.[Test Name]", "FCC.Technology", "FCC.[Transfer Status]",
+      "FCC.[Transfer Throughput (kbps)]", "FCC.[Capacity_Sustainable Throughput (kbps)]",
+      "FCC.[Ping_RTT Avg (ms)]", "FCC.[YouTube_Avg. Video MOS]", "FCC.LAT", "FCC.LON",
+    ],
+    topN: "1000",
+    orderCol: "FCC.[Test Start TS]",
+    orderDir: "DESC",
+  },
+  {
+    label: "R24 LTE Radio",
+    description: "Documented LTE RF measurements from FactLTERadio",
+    tableName: "FactLTERadio",
+    joins: ["DmnFile", "DmnPosition"],
+    cols: [
+      "FLR.FullDate", "DF.CollectionName", "DF.Location", "DP.Latitude", "DP.Longitude",
+      "FLR.EARFCN", "FLR.PhyCellId", "FLR.RSRP", "FLR.RSRQ", "FLR.SINR",
+    ],
+    topN: "2000",
+    orderCol: "FLR.FullDate",
+    orderDir: "ASC",
+  },
+  {
+    label: "R24 GSM Radio",
+    description: "Documented GSM RF measurements from FactGSMRadio",
+    tableName: "FactGSMRadio",
+    joins: ["DmnFile", "DmnPosition"],
+    cols: [
+      "FGR.FullDate", "DF.CollectionName", "DF.Location", "DP.Latitude", "DP.Longitude",
+      "FGR.BCCH", "FGR.BSIC", "FGR.RxLevSub", "FGR.RxQualSub",
+    ],
+    topN: "2000",
+    orderCol: "FGR.FullDate",
     orderDir: "ASC",
   },
   {
@@ -396,6 +562,72 @@ const QUERY_TEMPLATES: TemplateDef[] = [
   },
 ];
 const colKey = (alias: string, col: string) => `${alias}.${col}`;
+
+// ─── SQL → Builder state parser ────────────────────────────────────────────
+
+function parseSqlIntoBuilderState(sql: string): {
+  primaryName: string;
+  activeJoins: string[];
+  selCols: Set<string>;
+  wheres: WhereRow[];
+  useDistinct: boolean;
+  useTopN: boolean;
+  topN: string;
+  orderCol: string;
+  orderDir: "ASC" | "DESC";
+} | null {
+  const s = sql.replace(/\r?\n/g, " ").replace(/\s+/g, " ").trim();
+
+  const fromMatch = s.match(/\bFROM\s+(\w+)\s+(\w+)/i);
+  if (!fromMatch) return null;
+  const tbl = ALL_TABLES.find((t) => t.name.toLowerCase() === fromMatch[1].toLowerCase());
+  if (!tbl) return null;
+
+  const useDistinct = /SELECT\s+DISTINCT\b/i.test(s);
+  const topMatch = s.match(/SELECT\s+(?:DISTINCT\s+)?TOP\s+(\d+)\b/i);
+  const useTopN = !!topMatch;
+  const topN = topMatch ? topMatch[1] : "500";
+
+  const availJoins = JOINS_FOR[tbl.name] ?? [];
+  const activeJoins: string[] = [];
+  for (const j of availJoins) {
+    const flat = j.sql.replace(/\r?\n/g, " ");
+    const m = flat.match(/JOIN\s+(\w+)\s/i);
+    if (m && new RegExp(`\\bJOIN\\s+${m[1]}\\b`, "i").test(s)) {
+      activeJoins.push(j.label);
+    }
+  }
+  const joinDefs = availJoins.filter((j) => activeJoins.includes(j.label));
+
+  const fromIdx = s.search(/\bFROM\b/i);
+  const selectStr = s
+    .substring(0, fromIdx)
+    .replace(/SELECT\s+(?:DISTINCT\s+)?(?:TOP\s+\d+\s+)?/i, "")
+    .trim();
+
+  const allColKeys = [
+    ...tbl.columns.map((c) => `${tbl.alias}.${c.name}`),
+    ...joinDefs.flatMap((j) => j.columns.map((c) => `${j.alias}.${c.name}`)),
+  ];
+  const selCols = new Set<string>();
+  if (!selectStr.endsWith("*")) {
+    for (const key of allColKeys) {
+      const dot = key.indexOf(".");
+      const a = key.substring(0, dot);
+      const c = key.substring(dot + 1);
+      const escaped = c.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      if (new RegExp(`\\b${a}\\.${escaped}\\b`, "i").test(selectStr)) {
+        selCols.add(key);
+      }
+    }
+  }
+
+  const orderMatch = s.match(/\bORDER\s+BY\s+(.+?)\s+(ASC|DESC)\b/i);
+  const orderCol = orderMatch ? orderMatch[1] : "";
+  const orderDir = orderMatch ? (orderMatch[2].toUpperCase() as "ASC" | "DESC") : "DESC";
+
+  return { primaryName: tbl.name, activeJoins, selCols, wheres: [], useDistinct, useTopN, topN, orderCol, orderDir };
+}
 
 // ─── Type badge ────────────────────────────────────────────────────────────
 
@@ -475,19 +707,23 @@ function ColGroup({
 
 // ─── Component ─────────────────────────────────────────────────────────────
 
-export default function QueryBuilder({ onApply }: { onApply: (sql: string) => void }) {
+export default function QueryBuilder({ onApply, initialSql }: { onApply: (sql: string) => void; initialSql?: string }) {
+  const _init = initialSql ? parseSqlIntoBuilderState(initialSql) : null;
+
   const [open, setOpen]               = useState(false);
-  const [primaryName, setPrimaryName] = useState("CallAnalysis");
-  const [activeJoins, setActiveJoins] = useState<string[]>([]);
+  const [primaryName, setPrimaryName] = useState(_init?.primaryName ?? "CallAnalysis");
+  const [activeJoins, setActiveJoins] = useState<string[]>(_init?.activeJoins ?? []);
   const [selCols, setSelCols]         = useState<Set<string>>(
-    new Set(["CA.SessionId", "CA.callStatus", "CA.technology", "CA.callDir", "CA.setupTime", "CA.callDuration"]),
+    _init?.selCols && _init.selCols.size > 0
+      ? _init.selCols
+      : new Set(["CA.SessionId", "CA.callStatus", "CA.technology", "CA.callDir", "CA.setupTime", "CA.callDuration"]),
   );
-  const [wheres, setWheres]           = useState<WhereRow[]>([]);
-  const [useTopN, setUseTopN]         = useState(false);
-  const [topN, setTopN]               = useState("500");
-  const [useDistinct, setUseDistinct] = useState(false);
-  const [orderCol, setOrderCol]       = useState("");
-  const [orderDir, setOrderDir]       = useState<"ASC" | "DESC">("DESC");
+  const [wheres, setWheres]           = useState<WhereRow[]>(_init?.wheres ?? []);
+  const [useTopN, setUseTopN]         = useState(_init?.useTopN ?? false);
+  const [topN, setTopN]               = useState(_init?.topN ?? "500");
+  const [useDistinct, setUseDistinct] = useState(_init?.useDistinct ?? false);
+  const [orderCol, setOrderCol]       = useState(_init?.orderCol ?? "");
+  const [orderDir, setOrderDir]       = useState<"ASC" | "DESC">(_init?.orderDir ?? "DESC");
 
   const primaryTable   = ALL_TABLES.find((t) => t.name === primaryName) ?? T_CALL_ANALYSIS;
   const availableJoins = JOINS_FOR[primaryName] ?? [];
@@ -517,7 +753,7 @@ export default function QueryBuilder({ onApply }: { onApply: (sql: string) => vo
 
   const applyTemplate = (tpl: TemplateDef) => {
     setPrimaryName(tpl.tableName);
-    setActiveJoins([]);
+    setActiveJoins(tpl.joins ?? []);
     setSelCols(new Set(tpl.cols));
     setWheres(tpl.wheres ? tpl.wheres.map((w) => ({ ...w, id: uid() })) : []);
     setUseDistinct(!!tpl.distinct);
@@ -528,7 +764,13 @@ export default function QueryBuilder({ onApply }: { onApply: (sql: string) => vo
   };
 
   const toggleJoin   = (label: string) => setActiveJoins((prev) => prev.includes(label) ? prev.filter((l) => l !== label) : [...prev, label]);
-  const toggleCol    = (alias: string, col: string) => setSelCols((prev) => { const n = new Set(prev); n.has(colKey(alias, col)) ? n.delete(colKey(alias, col)) : n.add(colKey(alias, col)); return n; });
+  const toggleCol    = (alias: string, col: string) => setSelCols((prev) => {
+    const n = new Set(prev);
+    const key = colKey(alias, col);
+    if (n.has(key)) n.delete(key);
+    else n.add(key);
+    return n;
+  });
   const selectAll    = (alias: string, cols: ColDef[]) => setSelCols((prev) => { const n = new Set(prev); cols.forEach((c) => n.add(colKey(alias, c.name))); return n; });
   const clearAll     = (alias: string, cols: ColDef[]) => setSelCols((prev) => { const n = new Set(prev); cols.forEach((c) => n.delete(colKey(alias, c.name))); return n; });
   const removeWhere  = (id: string) => setWheres((prev) => prev.filter((w) => w.id !== id));

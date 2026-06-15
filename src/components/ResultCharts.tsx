@@ -1,4 +1,4 @@
-import { useCallback, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ComposedChart,
   Line,
@@ -16,6 +16,7 @@ import {
   Legend,
   ResponsiveContainer,
   Label,
+  ReferenceLine,
 } from "recharts";
 import {
   BarChart2,
@@ -29,7 +30,12 @@ import {
   ChevronRight,
   BarChart,
   Layers2,
+  SlidersHorizontal,
+  TrendingUp,
+  TrendingDown,
+  Minus,
 } from "lucide-react";
+import { motion, AnimatePresence } from "framer-motion";
 
 // ─── Module-level constants ───────────────────────────────────────────────────
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, DEFAULTS } from "@/lib/chartStyles";
@@ -45,7 +51,7 @@ const fmtPieLabel = ({ name, percent }: { name: string; percent: number }) =>
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type ChartType = "line" | "bar" | "area" | "scatter" | "pie";
+export type ChartType = "line" | "bar" | "area" | "scatter" | "pie";
 type YSide = "left" | "right";
 type AggFn = "count" | "sum" | "avg" | "min" | "max";
 
@@ -58,6 +64,11 @@ interface YSeries {
 interface ResultChartsProps {
   columns: string[];
   data: Record<string, unknown>[];
+  defaultChartType?: ChartType;
+  defaultXCol?: string;
+  defaultYCols?: string[];
+  defaultAggFn?: AggFn;
+  defaultAggEnabled?: boolean;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -315,7 +326,7 @@ function ChartEmpty({ message }: { message: string }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ResultCharts({ columns, data }: ResultChartsProps) {
+export default function ResultCharts({ columns, data, defaultChartType, defaultXCol, defaultYCols, defaultAggFn, defaultAggEnabled }: ResultChartsProps) {
   // ── Derived from props ──────────────────────────────────────────────────
 
   const slice  = useMemo(
@@ -351,15 +362,22 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
     );
   }, [slice, filters]);
 
-  const [chartType, setChartType] = useState<ChartType>("bar");
-  const [xCol,      setXCol]      = useState(() => pickDefaultXCol(columns, sample));
+  const [chartType, setChartType] = useState<ChartType>(defaultChartType ?? "bar");
+  const [xCol,      setXCol]      = useState(() => defaultXCol ?? pickDefaultXCol(columns, sample));
   const [xCol2,     setXCol2]     = useState("");
   const [addYCol,   setAddYCol]   = useState("");
   const [pieLabel,  setPieLabel]  = useState(columns[0] ?? "");
   const [pieValue,  setPieValue]  = useState(() => pickDefaultPieValue(numericCols));
 
   const [ySeries, setYSeries] = useState<YSeries[]>(() => {
-    const defaultX = pickDefaultXCol(columns, sample);
+    if (defaultYCols?.length) {
+      return defaultYCols.map((col, i) => ({
+        col,
+        side: "left" as YSide,
+        color: CHART_PALETTE[i % CHART_PALETTE.length],
+      }));
+    }
+    const defaultX = defaultXCol ?? pickDefaultXCol(columns, sample);
     const nonIdNumerics = numericCols.filter((c) => !ID_COL_PATTERN.test(c) && c !== defaultX);
     const candidates = nonIdNumerics.length > 0 ? nonIdNumerics : numericCols.filter((c) => c !== defaultX);
     return (candidates.length > 0 ? candidates : numericCols).slice(0, 2).map((col, i) => ({
@@ -369,9 +387,27 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
     }));
   });
 
-  const [grouping,  setGrouping]  = useState(true);
-  const [numBins,   setNumBins]   = useState(DEFAULT_BINS);
-  const [aggFn,     setAggFn]     = useState<AggFn>("avg");
+  const [grouping,    setGrouping]    = useState(true);
+  const [numBins,     setNumBins]     = useState(DEFAULT_BINS);
+  const [aggFn,       setAggFn]       = useState<AggFn>(defaultAggFn ?? "avg");
+  const [aggEnabled,  setAggEnabled]  = useState(defaultAggEnabled ?? true);
+  const [showRowLimitWarn, setShowRowLimitWarn] = useState(false);
+  const [showConfig,  setShowConfig]  = useState(false);
+  const warnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const tooManyRows = data.length > 1000;
+
+  const handleAggToggle = useCallback(() => {
+    if (aggEnabled && tooManyRows) {
+      setShowRowLimitWarn(true);
+      if (warnTimerRef.current) clearTimeout(warnTimerRef.current);
+      warnTimerRef.current = setTimeout(() => setShowRowLimitWarn(false), 3500);
+      return;
+    }
+    setAggEnabled((v) => !v);
+  }, [aggEnabled, tooManyRows]);
+
+  useEffect(() => () => { if (warnTimerRef.current) clearTimeout(warnTimerRef.current); }, []);
 
   // ── Y series handlers ───────────────────────────────────────────────────
 
@@ -409,7 +445,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
 
   // Bin slice into numBins buckets along X, aggregate Y by aggFn
   const binnedData = useMemo((): Record<string, unknown>[] | null => {
-    if (!shouldGroup || ySeries.length === 0) return null;
+    if (!aggEnabled || !shouldGroup || ySeries.length === 0) return null;
     const xVals = filteredSlice.map((r) => toNum(r[xCol])).filter((v): v is number => v !== null);
     if (xVals.length === 0) return null;
     const xMin = Math.min(...xVals);
@@ -457,7 +493,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
       }
       return hasData ? out : null;
     }).filter((d): d is Record<string, unknown> => d !== null);
-  }, [shouldGroup, filteredSlice, xCol, ySeries, numBins, aggFn]);
+  }, [aggEnabled, shouldGroup, filteredSlice, xCol, ySeries, numBins, aggFn]);
 
   // ── Categorical / pivot mode ────────────────────────────────────────────
   // When the first Y series is a non-numeric column, we pivot:
@@ -470,7 +506,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
 
   // Group categorical X rows by X value, aggregate Y by aggFn
   const categoricalAggData = useMemo((): Record<string, unknown>[] | null => {
-    if (xIsNumeric || yIsCategorical || ySeries.length === 0) return null;
+    if (!aggEnabled || xIsNumeric || yIsCategorical || ySeries.length === 0) return null;
     const order: string[] = [];
     const seen = new Set<string>();
     const rowCounts: Record<string, number>                 = {};
@@ -507,7 +543,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
       }
       return out;
     });
-  }, [xIsNumeric, yIsCategorical, ySeries, filteredSlice, xCol, xCol2, aggFn]);
+  }, [aggEnabled, xIsNumeric, yIsCategorical, ySeries, filteredSlice, xCol, xCol2, aggFn]);
 
   // All categorical Y series (non-numeric columns)
   const categoricalYSeries = useMemo(
@@ -617,6 +653,26 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
       .slice(0, 20);
   }, [filteredSlice, pieLabel, pieValue]);
 
+  // ── Per-series stats (avg / min / max / count) for KPI cards ───────────
+
+  const stats = useMemo(() => {
+    if (chartType === "pie" || chartType === "scatter" || ySeries.length === 0) return [];
+    return ySeries
+      .filter((s) => numericCols.includes(s.col))
+      .map((s) => {
+        const vals = filteredSlice
+          .map((r) => toNum(r[s.col]))
+          .filter((v): v is number => v !== null);
+        if (vals.length === 0) return null;
+        const sum = vals.reduce((a, b) => a + b, 0);
+        const avg = sum / vals.length;
+        const min = Math.min(...vals);
+        const max = Math.max(...vals);
+        return { col: s.col, color: s.color, avg, min, max, count: vals.length };
+      })
+      .filter((s): s is NonNullable<typeof s> => s !== null);
+  }, [chartType, ySeries, filteredSlice, numericCols]);
+
   // ── Series renderer ─────────────────────────────────────────────────────
 
   const renderSeries = useCallback(
@@ -671,7 +727,7 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
   // ── Chart render ────────────────────────────────────────────────────────
 
   const chart = useMemo(() => {
-    const H = 320;
+    const H = 350;
 
     if (chartType === "pie") {
       if (!pieValue || pieData.length === 0)
@@ -784,252 +840,288 @@ export default function ResultCharts({ columns, data }: ResultChartsProps) {
   const isScatter = chartType === "scatter";
   const isPie     = chartType === "pie";
 
+  const fmtStat = (n: number) => n.toLocaleString("el-GR", { maximumFractionDigits: 2 });
+
   return (
     <div className="rounded-lg border border-border bg-background overflow-hidden">
 
-      {/* ── Header: chart type ── */}
+      {/* ── Header ── */}
       <div className="flex items-center gap-3 px-4 pt-3 pb-2.5 border-b border-border/60 bg-muted/20">
         <ChartTypeBar value={chartType} onChange={setChartType} />
-        {data.length > MAX_POINTS && (
-          <span className="ml-auto text-[10px] text-muted-foreground bg-muted/50 border border-border rounded px-1.5 py-0.5">
-            Πρώτες {MAX_POINTS.toLocaleString()} γραμμές
-          </span>
-        )}
-      </div>
-
-      {/* ── Axis config ── */}
-      <div className="px-4 py-3 border-b border-border/60 bg-muted/10">
-
-        {/* Line / Bar / Area */}
-        {isXY && (
-          <div className="grid gap-3 grid-cols-1 sm:grid-cols-[160px_1fr]">
-
-            {/* X axis */}
-            <ConfigCard label="X άξονας">
-              <FieldSelect value={xCol} onChange={setXCol}>
-                {columns.map((c) => <option key={c} value={c}>{c}</option>)}
-              </FieldSelect>
-
-              {/* Optional second X column — combines as "col1 · col2" */}
-              {!xIsNumeric && (
-                <FieldSelect value={xCol2} onChange={setXCol2}>
-                  <option value="">— + συνδυασμός column —</option>
-                  {columns.filter((c) => c !== xCol).map((c) => <option key={c} value={c}>{c}</option>)}
-                </FieldSelect>
-              )}
-
-              {/* Grouping controls — only when X is numeric */}
-              {xIsNumeric && (
-                <div className="pt-1 space-y-1.5">
-                  <button
-                    onClick={() => setGrouping((v) => !v)}
-                    className={[
-                      "flex items-center gap-1.5 text-[10px] font-medium transition-colors w-full",
-                      grouping
-                        ? "text-primary"
-                        : "text-muted-foreground hover:text-foreground",
-                    ].join(" ")}
-                  >
-                    <Layers2 className="h-3 w-3 shrink-0" />
-                    {grouping ? "Ομαδοποίηση ενεργή" : "Ομαδοποίηση ανενεργή"}
-                    {shouldGroup && binnedData && (
-                      <span className="ml-auto font-mono text-[9px] text-muted-foreground">
-                        {binnedData.length} bins · avg
-                      </span>
-                    )}
-                    {grouping && !shouldGroup && (
-                      <span className="ml-auto font-mono text-[9px] text-muted-foreground">
-                        &lt;{GROUPING_THRESHOLD + 1} γρ.
-                      </span>
-                    )}
-                  </button>
-
-                  {grouping && (
-                    <div className="flex items-center gap-2">
-                      <input
-                        type="range"
-                        min={10}
-                        max={200}
-                        step={5}
-                        value={numBins}
-                        onChange={(e) => setNumBins(Number(e.target.value))}
-                        className="flex-1 h-1 accent-primary cursor-pointer"
-                      />
-                      <span className="text-[10px] font-mono text-muted-foreground w-8 text-right">
-                        {numBins}
-                      </span>
-                    </div>
-                  )}
-                </div>
-              )}
-            </ConfigCard>
-
-            {/* Y series */}
-            <ConfigCard label={
-              yIsCategorical
-                ? `Y ομαδοποίηση · Count mode (${pivotSeries.length} κατηγορίες)`
-                : `Y άξονας — L αριστερά · R δεξιά (${ySeries.length} series)`
-            }>
-              {/* Aggregation selector — shown when grouping applies */}
-              {!yIsCategorical && ySeries.length > 0 && (shouldGroup || !xIsNumeric) && (
-                <div className="flex items-center gap-2 pb-1">
-                  <span className="text-[10px] text-muted-foreground shrink-0">Συνάρτηση:</span>
-                  <AggFnBar value={aggFn} onChange={setAggFn} />
-                </div>
-              )}
-
-              {/* Active pills */}
-              <div className="flex flex-wrap gap-1.5 min-h-[26px]">
-                {ySeries.length === 0
-                  ? <span className="text-[10px] text-muted-foreground italic self-center">Κανένα Y column επιλεγμένο</span>
-                  : ySeries.map((s) => (
-                      <YPill
-                        key={s.col}
-                        series={s}
-                        onToggleSide={() => toggleSide(s.col)}
-                        onRemove={() => removeY(s.col)}
-                      />
-                    ))}
-              </div>
-
-              {/* Add Y row */}
-              {availableToAdd.length > 0 && (
-                <div className="flex items-center gap-1.5 mt-1">
-                  <select
-                    value={addYCol}
-                    onChange={(e) => setAddYCol(e.target.value)}
-                    className="flex-1 min-w-0 bg-background border border-border rounded-md px-2 py-1.5 text-[11px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-                  >
-                    <option value="">— προσθήκη column —</option>
-                    {availableToAdd.map((c) => <option key={c} value={c}>{c}</option>)}
-                  </select>
-                  <button
-                    onClick={addY}
-                    disabled={!addYCol}
-                    className="flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-dashed border-primary/40 bg-primary/5 text-primary text-[11px] font-medium hover:bg-primary/10 disabled:opacity-30 disabled:cursor-not-allowed transition-colors shrink-0"
-                  >
-                    <Plus className="h-3 w-3" />
-                    Προσθήκη
-                  </button>
-                </div>
-              )}
-            </ConfigCard>
-          </div>
-        )}
-
-        {/* Scatter config */}
-        {isScatter && (
-          <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
-            <ConfigCard label="X (αριθμητικό)">
-              <FieldSelect value={xCol} onChange={setXCol}>
-                {numericCols.map((c) => <option key={c} value={c}>{c}</option>)}
-              </FieldSelect>
-            </ConfigCard>
-            <ConfigCard label="Y (αριθμητικό)">
-              <FieldSelect
-                value={ySeries[0]?.col ?? ""}
-                onChange={(v) =>
-                  setYSeries(v ? [{ col: v, side: "left", color: CHART_PALETTE[0] }] : [])
-                }
-              >
-                <option value="">— επιλογή —</option>
-                {numericCols.filter((c) => c !== xCol).map((c) => <option key={c} value={c}>{c}</option>)}
-              </FieldSelect>
-            </ConfigCard>
-          </div>
-        )}
-
-        {/* Pie config */}
-        {isPie && (
-          <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
-            <ConfigCard label="Label column">
-              <FieldSelect value={pieLabel} onChange={setPieLabel}>
-                {columns.map((c) => <option key={c} value={c}>{c}</option>)}
-              </FieldSelect>
-            </ConfigCard>
-            <ConfigCard label="Value column (αριθμητικό)">
-              <FieldSelect value={pieValue} onChange={setPieValue}>
-                <option value="">— επιλογή —</option>
-                {numericCols.map((c) => <option key={c} value={c}>{c}</option>)}
-              </FieldSelect>
-            </ConfigCard>
-          </div>
-        )}
-      </div>
-
-      {/* ── Filters ── */}
-      <div className="px-4 py-2.5 border-b border-border/60 bg-muted/5 space-y-2">
-        <div className="flex items-center gap-2">
-          <span className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/70">Φίλτρα</span>
-          <button
-            onClick={() => setFilters((f) => [...f, { col: columns[0] ?? "", vals: [] }])}
-            className="flex items-center gap-1 px-2 py-0.5 rounded border border-dashed border-primary/40 bg-primary/5 text-primary text-[10px] font-medium hover:bg-primary/10 transition-colors"
-          >
-            <Plus className="h-3 w-3" />
-            Προσθήκη
-          </button>
+        <div className="ml-auto flex items-center gap-2">
           {filters.length > 0 && (
-            <button
-              onClick={() => setFilters([])}
-              className="ml-auto text-[10px] text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Καθαρισμός όλων
-            </button>
+            <span className="text-[10px] text-amber-500 font-medium bg-amber-500/10 border border-amber-500/30 rounded px-1.5 py-0.5">
+              {filters.length} φίλτρο{filters.length > 1 ? "α" : ""}
+            </span>
           )}
+          {filteredSlice.length < slice.length && (
+            <span className="text-[10px] text-muted-foreground bg-muted/50 border border-border rounded px-1.5 py-0.5 font-mono">
+              {filteredSlice.length.toLocaleString("el-GR")} / {slice.length.toLocaleString("el-GR")} γρ.
+            </span>
+          )}
+          <button
+            onClick={() => setShowConfig((v) => !v)}
+            className={[
+              "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-[10px] font-medium transition-all",
+              showConfig
+                ? "bg-primary/15 border-primary/40 text-primary"
+                : "bg-muted/40 border-border text-muted-foreground hover:text-foreground hover:bg-muted/60",
+            ].join(" ")}
+          >
+            <SlidersHorizontal className="h-3 w-3" />
+            Ρυθμίσεις
+          </button>
         </div>
-
-        {filters.map((f, fi) => (
-          <div key={fi} className="rounded-md border border-border/60 bg-muted/20 p-2 space-y-1.5">
-            <div className="flex items-center gap-2">
-              <select
-                value={f.col}
-                onChange={(e) => setFilters((prev) => prev.map((x, i) => i === fi ? { col: e.target.value, vals: [] } : x))}
-                className="flex-1 bg-background border border-border rounded-md px-2 py-1 text-[11px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40"
-              >
-                {columns.map((c) => <option key={c} value={c}>{c}</option>)}
-              </select>
-              <button
-                onClick={() => setFilters((prev) => prev.filter((_, i) => i !== fi))}
-                className="opacity-50 hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10"
-              >
-                <X className="h-3 w-3" />
-              </button>
-            </div>
-            <div className="flex flex-wrap gap-1">
-              {(uniqueValsMap[f.col] ?? []).map((v) => {
-                const selected = f.vals.includes(v);
-                return (
-                  <button
-                    key={v}
-                    onClick={() =>
-                      setFilters((prev) =>
-                        prev.map((x, i) => {
-                          if (i !== fi) return x;
-                          const next = x.vals.includes(v)
-                            ? x.vals.filter((s) => s !== v)
-                            : [...x.vals, v];
-                          return { ...x, vals: next };
-                        })
-                      )
-                    }
-                    className={[
-                      "px-2 py-0.5 rounded-full text-[10px] font-mono border transition-all",
-                      selected
-                        ? "bg-primary/15 border-primary/40 text-primary"
-                        : "bg-muted/30 border-border/40 text-muted-foreground hover:text-foreground hover:border-border",
-                    ].join(" ")}
-                  >
-                    {String(v).slice(0, 28)}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ))}
       </div>
+
+      {/* ── Collapsible config + filters ── */}
+      <AnimatePresence initial={false}>
+        {showConfig && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeInOut" }}
+            className="overflow-hidden border-b border-border/60"
+          >
+            {/* Axis config */}
+            <div className="px-4 py-3 border-b border-border/40 bg-muted/10 space-y-3">
+              <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/60">Άξονες</p>
+
+              {isXY && (
+                <div className="grid gap-3 grid-cols-1 sm:grid-cols-[160px_1fr]">
+                  <ConfigCard label="X άξονας">
+                    <FieldSelect value={xCol} onChange={setXCol}>
+                      {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </FieldSelect>
+                    {!xIsNumeric && (
+                      <FieldSelect value={xCol2} onChange={setXCol2}>
+                        <option value="">— + συνδυασμός column —</option>
+                        {columns.filter((c) => c !== xCol).map((c) => <option key={c} value={c}>{c}</option>)}
+                      </FieldSelect>
+                    )}
+                    {xIsNumeric && (
+                      <div className="pt-1 space-y-1.5">
+                        <button
+                          onClick={() => setGrouping((v) => !v)}
+                          className={[
+                            "flex items-center gap-1.5 text-[10px] font-medium transition-colors w-full",
+                            grouping ? "text-primary" : "text-muted-foreground hover:text-foreground",
+                          ].join(" ")}
+                        >
+                          <Layers2 className="h-3 w-3 shrink-0" />
+                          {grouping ? "Ομαδοποίηση ενεργή" : "Ομαδοποίηση ανενεργή"}
+                          {shouldGroup && binnedData && (
+                            <span className="ml-auto font-mono text-[9px] text-muted-foreground">{binnedData.length} bins</span>
+                          )}
+                        </button>
+                        {grouping && (
+                          <div className="flex items-center gap-2">
+                            <input type="range" min={10} max={200} step={5} value={numBins}
+                              onChange={(e) => setNumBins(Number(e.target.value))}
+                              className="flex-1 h-1 accent-primary cursor-pointer" />
+                            <span className="text-[10px] font-mono text-muted-foreground w-8 text-right">{numBins}</span>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </ConfigCard>
+
+                  <ConfigCard label={
+                    yIsCategorical
+                      ? `Y ομαδοποίηση · Count mode (${pivotSeries.length} κατηγορίες)`
+                      : `Y άξονας — L αριστερά · R δεξιά (${ySeries.length} series)`
+                  }>
+                    {!yIsCategorical && ySeries.length > 0 && (shouldGroup || !xIsNumeric) && (
+                      <div className="space-y-1 pb-1">
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={handleAggToggle}
+                            className={[
+                              "shrink-0 w-7 h-4 rounded-full transition-colors border",
+                              aggEnabled ? "bg-primary border-primary/70" : "bg-muted border-border",
+                            ].join(" ")}
+                          >
+                            <span className={[
+                              "block w-3 h-3 rounded-full bg-background shadow transition-transform mx-0.5",
+                              aggEnabled ? "translate-x-3" : "translate-x-0",
+                            ].join(" ")} />
+                          </button>
+                          <span className={["text-[10px] shrink-0", aggEnabled ? "text-muted-foreground" : "text-muted-foreground/40"].join(" ")}>
+                            Συνάρτηση:
+                          </span>
+                          {aggEnabled && <AggFnBar value={aggFn} onChange={setAggFn} />}
+                        </div>
+                        {showRowLimitWarn && (
+                          <p className="text-[10px] text-amber-500 font-medium">
+                            Δεν μπορείς να απενεργοποιήσεις τη συνάρτηση — {data.length.toLocaleString("el-GR")} rows.
+                          </p>
+                        )}
+                      </div>
+                    )}
+                    <div className="flex flex-wrap gap-1.5 min-h-[26px]">
+                      {ySeries.length === 0
+                        ? <span className="text-[10px] text-muted-foreground italic self-center">Κανένα Y column επιλεγμένο</span>
+                        : ySeries.map((s) => (
+                            <YPill key={s.col} series={s} onToggleSide={() => toggleSide(s.col)} onRemove={() => removeY(s.col)} />
+                          ))}
+                    </div>
+                    {availableToAdd.length > 0 && (
+                      <div className="flex items-center gap-1.5 mt-1">
+                        <select value={addYCol} onChange={(e) => setAddYCol(e.target.value)}
+                          className="flex-1 min-w-0 bg-background border border-border rounded-md px-2 py-1.5 text-[11px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40">
+                          <option value="">— προσθήκη column —</option>
+                          {availableToAdd.map((c) => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                        <button onClick={addY} disabled={!addYCol}
+                          className="flex items-center gap-1 px-2.5 py-1.5 rounded-md border border-dashed border-primary/40 bg-primary/5 text-primary text-[11px] font-medium hover:bg-primary/10 disabled:opacity-30 disabled:cursor-not-allowed transition-colors shrink-0">
+                          <Plus className="h-3 w-3" /> Προσθήκη
+                        </button>
+                      </div>
+                    )}
+                  </ConfigCard>
+                </div>
+              )}
+
+              {isScatter && (
+                <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+                  <ConfigCard label="X (αριθμητικό)">
+                    <FieldSelect value={xCol} onChange={setXCol}>
+                      {numericCols.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </FieldSelect>
+                  </ConfigCard>
+                  <ConfigCard label="Y (αριθμητικό)">
+                    <FieldSelect value={ySeries[0]?.col ?? ""}
+                      onChange={(v) => setYSeries(v ? [{ col: v, side: "left", color: CHART_PALETTE[0] }] : [])}>
+                      <option value="">— επιλογή —</option>
+                      {numericCols.filter((c) => c !== xCol).map((c) => <option key={c} value={c}>{c}</option>)}
+                    </FieldSelect>
+                  </ConfigCard>
+                </div>
+              )}
+
+              {isPie && (
+                <div className="grid gap-3 grid-cols-1 sm:grid-cols-2">
+                  <ConfigCard label="Label column">
+                    <FieldSelect value={pieLabel} onChange={setPieLabel}>
+                      {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </FieldSelect>
+                  </ConfigCard>
+                  <ConfigCard label="Value column (αριθμητικό)">
+                    <FieldSelect value={pieValue} onChange={setPieValue}>
+                      <option value="">— επιλογή —</option>
+                      {numericCols.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </FieldSelect>
+                  </ConfigCard>
+                </div>
+              )}
+            </div>
+
+            {/* Filters */}
+            <div className="px-4 py-2.5 bg-muted/5 space-y-2">
+              <div className="flex items-center gap-2">
+                <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/60">Φίλτρα</p>
+                <button
+                  onClick={() => setFilters((f) => [...f, { col: columns[0] ?? "", vals: [] }])}
+                  className="flex items-center gap-1 px-2 py-0.5 rounded border border-dashed border-primary/40 bg-primary/5 text-primary text-[10px] font-medium hover:bg-primary/10 transition-colors"
+                >
+                  <Plus className="h-3 w-3" /> Προσθήκη
+                </button>
+                {filters.length > 0 && (
+                  <button onClick={() => setFilters([])} className="ml-auto text-[10px] text-muted-foreground hover:text-foreground transition-colors">
+                    Καθαρισμός όλων
+                  </button>
+                )}
+              </div>
+              {filters.map((f, fi) => (
+                <div key={fi} className="rounded-md border border-border/60 bg-muted/20 p-2 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <select value={f.col}
+                      onChange={(e) => setFilters((prev) => prev.map((x, i) => i === fi ? { col: e.target.value, vals: [] } : x))}
+                      className="flex-1 bg-background border border-border rounded-md px-2 py-1 text-[11px] font-mono text-foreground focus:outline-none focus:ring-1 focus:ring-primary/40">
+                      {columns.map((c) => <option key={c} value={c}>{c}</option>)}
+                    </select>
+                    <button onClick={() => setFilters((prev) => prev.filter((_, i) => i !== fi))}
+                      className="opacity-50 hover:opacity-100 transition-opacity p-1 rounded hover:bg-destructive/10">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                  <div className="flex flex-wrap gap-1">
+                    {(uniqueValsMap[f.col] ?? []).map((v) => {
+                      const selected = f.vals.includes(v);
+                      return (
+                        <button key={v}
+                          onClick={() => setFilters((prev) => prev.map((x, i) => {
+                            if (i !== fi) return x;
+                            const next = x.vals.includes(v) ? x.vals.filter((s) => s !== v) : [...x.vals, v];
+                            return { ...x, vals: next };
+                          }))}
+                          className={[
+                            "px-2 py-0.5 rounded-full text-[10px] font-mono border transition-all",
+                            selected
+                              ? "bg-primary/15 border-primary/40 text-primary"
+                              : "bg-muted/30 border-border/40 text-muted-foreground hover:text-foreground hover:border-border",
+                          ].join(" ")}
+                        >
+                          {String(v).slice(0, 28)}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* ── KPI stat cards ── */}
+      {!isPie && !isScatter && stats.length > 0 && (
+        <div className="px-4 py-2.5 border-b border-border/40 bg-muted/5 flex flex-wrap gap-2.5">
+          {stats.map((s) => {
+            const trend = s.avg > (s.min + s.max) / 2
+              ? <TrendingUp className="h-3 w-3 text-emerald-400" />
+              : <TrendingDown className="h-3 w-3 text-red-400" />;
+            return (
+              <div
+                key={s.col}
+                className="flex items-stretch gap-0 rounded-lg border overflow-hidden"
+                style={{ borderColor: s.color + "40" }}
+              >
+                {/* color swatch */}
+                <div className="w-1 shrink-0" style={{ backgroundColor: s.color }} />
+                {/* label */}
+                <div className="flex items-center gap-1.5 px-2.5 py-1.5 bg-muted/20 border-r border-border/30">
+                  <span className="text-[10px] font-mono font-semibold truncate max-w-[90px]" style={{ color: s.color }}>
+                    {s.col}
+                  </span>
+                  {trend}
+                </div>
+                {/* stat cells */}
+                {[
+                  { label: "AVG", value: fmtStat(s.avg), highlight: true },
+                  { label: "MIN", value: fmtStat(s.min), highlight: false },
+                  { label: "MAX", value: fmtStat(s.max), highlight: false },
+                  { label: "N",   value: s.count.toLocaleString("el-GR"), highlight: false },
+                ].map(({ label, value, highlight }) => (
+                  <div key={label} className="flex flex-col items-center justify-center px-3 py-1 border-r border-border/30 last:border-0 min-w-[52px]">
+                    <span className="text-[8px] font-bold uppercase tracking-wider text-muted-foreground/60">{label}</span>
+                    <span
+                      className={["text-[12px] font-mono font-semibold leading-tight", highlight ? "" : "text-muted-foreground"].join(" ")}
+                      style={highlight ? { color: s.color } : undefined}
+                    >
+                      {value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      )}
 
       {/* ── Chart canvas ── */}
-      <div className="px-2 py-3">
+      <div className="px-2 py-4">
         {chart}
       </div>
     </div>

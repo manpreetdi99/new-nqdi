@@ -499,3 +499,40 @@ export async function fetchGsmContextSignal(
   const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
   return requestJson(`/api/gsm_context_signal?${params.toString()}`);
 }
+
+export async function fetchCallContextSignalBSide(
+  database: string,
+  session_id: string,
+  window_sec = 10
+): Promise<{ signal: any[] }> {
+  const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
+  return requestJson(`/api/call_context_signal_b_side?${params.toString()}`);
+}
+
+export async function fetchGsmContextSignalBSide(
+  database: string,
+  session_id: string,
+  window_sec = 10
+): Promise<{ signal: any[] }> {
+  const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
+  return requestJson(`/api/gsm_context_signal_b_side?${params.toString()}`);
+}
+
+export interface RunMapResponse {
+  output_path: string | null;
+  logs: string[];
+  success: boolean;
+}
+
+export async function runMapGenerator(
+  database: string,
+  collection: string,
+  gpx_path: string,
+  max_workers: number
+): Promise<RunMapResponse> {
+  return requestJson("/api/run_map", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ database, collection, gpx_path, max_workers }),
+  });
+}

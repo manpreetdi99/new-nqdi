@@ -21,15 +21,24 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { motion, AnimatePresence } from "framer-motion";
 import QueryBuilder from "@/components/QueryBuilder";
-import ResultCharts from "@/components/ResultCharts";
+import ResultCharts, { type ChartType } from "@/components/ResultCharts";
 
 // ──────────────────────────────────────────────
 // Types
 // ──────────────────────────────────────────────
+interface DefaultChart {
+  type: ChartType;
+  xCol: string;
+  yCols: string[];
+  aggFn?: "count" | "sum" | "avg" | "min" | "max";
+  aggEnabled?: boolean;
+}
+
 interface QueryTab {
   id: string;
   label: string;
   sql: string;
+  defaultChart?: DefaultChart;
 }
 
 interface QueryResult {
@@ -55,15 +64,194 @@ interface QueryEditorProps {
 // Quick-pick templates
 // ──────────────────────────────────────────────
 const TEMPLATE_CATEGORY_ORDER = [
+  "SmartAnalytics R24",
   "General", "KPI", "MOS", "Signal", "Data",
   "LQ Voice", "LQ Stats", "Codec", "SRVCC", "Events", "Cell ID",
   "Data Tests", "Browsing", "Multimedia", "5G",
 ] as const;
 
-const TEMPLATES: { label: string; category: string; sql: string }[] = [
+const TEMPLATES: { label: string; category: string; sql: string; defaultChart?: DefaultChart }[] = [
+  {
+    label: "R24 Voice calls",
+    category: "SmartAnalytics R24",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["CallStatus"], aggFn: "sum", aggEnabled: false },
+    sql: `SELECT TOP 1000
+  FCV.SessionIdA,
+  FCV.SessionIdB,
+  DF.CollectionName,
+  DF.Location,
+  FCV.CallSessionStartTS,
+  FCV.CallStatus,
+  FCV.CallType,
+  FCV.CallDirection,
+  FCV.CallModeA,
+  FCV.CallTechnologyA,
+  FCV.SessionStartTechnologyA,
+  ROUND(FCV.CallSetupTime_s, 3) AS setup_s,
+  ROUND(FCV.CallDuration_s, 3) AS duration_s,
+  ROUND(FCV.AvgSQ, 3) AS avg_mos,
+  FCV.Valid,
+  FCV.InvalidReason
+FROM FactCDRVoice FCV
+LEFT JOIN DmnFile DF ON DF.DmnId = FCV.DmnIdFile
+ORDER BY FCV.CallSessionStartTS DESC`,
+  },
+  {
+    label: "R24 Voice KPI by location",
+    category: "SmartAnalytics R24",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["total_calls", "bad_calls"], aggFn: "sum", aggEnabled: false },
+    sql: `SELECT
+  DF.CollectionName,
+  DF.Location,
+  COUNT(*) AS total_calls,
+  SUM(CASE
+        WHEN FCV.CallStatus LIKE '%Drop%'
+          OR FCV.CallStatus LIKE '%Fail%'
+          OR FCV.CallStatus LIKE '%System Release%'
+        THEN 1 ELSE 0
+      END) AS bad_calls,
+  ROUND(100.0 * SUM(CASE
+        WHEN FCV.CallStatus LIKE '%Drop%'
+          OR FCV.CallStatus LIKE '%Fail%'
+          OR FCV.CallStatus LIKE '%System Release%'
+        THEN 1 ELSE 0
+      END) / NULLIF(COUNT(*), 0), 2) AS bad_call_pct,
+  ROUND(AVG(FCV.CallSetupTime_s), 3) AS avg_setup_s,
+  ROUND(AVG(FCV.CallDuration_s), 3) AS avg_duration_s,
+  ROUND(AVG(FCV.AvgSQ), 3) AS avg_mos
+FROM FactCDRVoice FCV
+LEFT JOIN DmnFile DF ON DF.DmnId = FCV.DmnIdFile
+GROUP BY DF.CollectionName, DF.Location
+ORDER BY bad_call_pct DESC, total_calls DESC`,
+  },
+  {
+    label: "R24 Data sessions",
+    category: "SmartAnalytics R24",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["TransferThroughputKbps"], aggFn: "avg", aggEnabled: true },
+    sql: `SELECT TOP 1000
+  C.SessionId,
+  C.TestId,
+  DF.CollectionName,
+  DF.Location,
+  C.[Test Start TS],
+  C.[Test Name],
+  C.Technology,
+  C.[Start Technology],
+  C.[Transfer Status],
+  C.[Scoring Status],
+  C.TestDirection,
+  C.Host,
+  ROUND(CAST(C.[Transfer Throughput (kbps)] AS FLOAT), 2) AS TransferThroughputKbps,
+  ROUND(CAST(C.[Capacity_Sustainable Throughput (kbps)] AS FLOAT), 2) AS CapacityThroughputKbps,
+  ROUND(CAST(C.[Ping_RTT Avg (ms)] AS FLOAT), 2) AS PingRttAvgMs,
+  ROUND(CAST(C.[YouTube_Avg. Video MOS] AS FLOAT), 3) AS YoutubeMos,
+  C.LAT,
+  C.LON,
+  C.valid,
+  C.InvalidReason
+FROM FactCDRCombined C
+LEFT JOIN DmnFile DF ON DF.DmnId = C.DmnIdFile
+ORDER BY C.[Test Start TS] DESC`,
+  },
+  {
+    label: "R24 Data KPI by test",
+    category: "SmartAnalytics R24",
+    defaultChart: { type: "bar", xCol: "TestName", yCols: ["avg_transfer_kbps", "avg_capacity_kbps"], aggFn: "avg", aggEnabled: false },
+    sql: `SELECT
+  DF.CollectionName,
+  DF.Location,
+  C.[Test Name] AS TestName,
+  COUNT(*) AS tests,
+  SUM(CASE WHEN C.[Scoring Status] LIKE '%Fail%' OR C.[Transfer Status] LIKE '%Fail%' THEN 1 ELSE 0 END) AS failed_tests,
+  ROUND(AVG(CAST(C.[Transfer Throughput (kbps)] AS FLOAT)), 2) AS avg_transfer_kbps,
+  ROUND(AVG(CAST(C.[Capacity_Sustainable Throughput (kbps)] AS FLOAT)), 2) AS avg_capacity_kbps,
+  ROUND(AVG(CAST(C.[Ping_RTT Avg (ms)] AS FLOAT)), 2) AS avg_ping_ms,
+  ROUND(AVG(CAST(C.[YouTube_Avg. Video MOS] AS FLOAT)), 3) AS avg_youtube_mos
+FROM FactCDRCombined C
+LEFT JOIN DmnFile DF ON DF.DmnId = C.DmnIdFile
+GROUP BY DF.CollectionName, DF.Location, C.[Test Name]
+ORDER BY DF.CollectionName, DF.Location, TestName`,
+  },
+  {
+    label: "R24 LTE radio quality",
+    category: "SmartAnalytics R24",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_rsrp", "avg_sinr"], aggFn: "avg", aggEnabled: false },
+    sql: `SELECT
+  DF.CollectionName,
+  DF.Location,
+  LR.EARFCN,
+  LR.PhyCellId AS PCI,
+  COUNT(*) AS samples,
+  ROUND(AVG(CAST(LR.RSRP AS FLOAT)), 2) AS avg_rsrp,
+  ROUND(AVG(CAST(LR.RSRQ AS FLOAT)), 2) AS avg_rsrq,
+  ROUND(AVG(CAST(LR.SINR AS FLOAT)), 2) AS avg_sinr,
+  ROUND(MIN(CAST(LR.RSRP AS FLOAT)), 2) AS min_rsrp
+FROM FactLTERadio LR
+LEFT JOIN DmnFile DF ON DF.DmnId = LR.DmnIdFile
+WHERE LR.RSRP IS NOT NULL
+GROUP BY DF.CollectionName, DF.Location, LR.EARFCN, LR.PhyCellId
+ORDER BY avg_rsrp ASC`,
+  },
+  {
+    label: "R24 GSM radio quality",
+    category: "SmartAnalytics R24",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_rxlev", "avg_rxqual"], aggFn: "avg", aggEnabled: false },
+    sql: `SELECT
+  DF.CollectionName,
+  DF.Location,
+  GR.BCCH,
+  GR.BSIC,
+  COUNT(*) AS samples,
+  ROUND(AVG(CAST(GR.RxLevSub AS FLOAT)), 2) AS avg_rxlev,
+  ROUND(AVG(CAST(GR.RxQualSub AS FLOAT)), 2) AS avg_rxqual,
+  ROUND(MIN(CAST(GR.RxLevSub AS FLOAT)), 2) AS min_rxlev,
+  ROUND(MAX(CAST(GR.RxQualSub AS FLOAT)), 2) AS max_rxqual
+FROM FactGSMRadio GR
+LEFT JOIN DmnFile DF ON DF.DmnId = GR.DmnIdFile
+WHERE GR.RxLevSub IS NOT NULL
+GROUP BY DF.CollectionName, DF.Location, GR.BCCH, GR.BSIC
+ORDER BY avg_rxlev ASC`,
+  },
+  {
+    label: "R24 LTE scanner top RSRP",
+    category: "SmartAnalytics R24",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_rsrp", "avg_sinr"], aggFn: "avg", aggEnabled: false },
+    sql: `SELECT
+  DF.CollectionName,
+  DF.Location,
+  LS.EARFCN,
+  LS.PCI,
+  COUNT(*) AS samples,
+  ROUND(AVG(CAST(LS.RSRP AS FLOAT)), 2) AS avg_rsrp,
+  ROUND(AVG(CAST(LS.RSRQ AS FLOAT)), 2) AS avg_rsrq,
+  ROUND(AVG(CAST(LS.SINR AS FLOAT)), 2) AS avg_sinr
+FROM FactLTEScanner LS
+LEFT JOIN DmnFile DF ON DF.DmnId = LS.DmnIdFile
+WHERE LS.DmnIdTopN_RSRP = 1
+GROUP BY DF.CollectionName, DF.Location, LS.EARFCN, LS.PCI
+ORDER BY avg_rsrp ASC`,
+  },
+  {
+    label: "R24 Capacity summary",
+    category: "SmartAnalytics R24",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_sustainable_kbps"], aggFn: "avg", aggEnabled: false },
+    sql: `SELECT
+  DF.CollectionName,
+  DF.Location,
+  COUNT(*) AS tests,
+  ROUND(AVG(CAST(CAP.SustainableThroughput AS FLOAT)), 2) AS avg_sustainable_kbps,
+  ROUND(MAX(CAST(CAP.SustainableThroughput AS FLOAT)), 2) AS max_sustainable_kbps,
+  ROUND(AVG(CAST(CAP.RoundTripTime AS FLOAT)), 2) AS avg_rtt_ms,
+  SUM(CASE WHEN CAP.CountSuccessful = 1 THEN 1 ELSE 0 END) AS successful_tests
+FROM FactCapacity CAP
+LEFT JOIN DmnFile DF ON DF.DmnId = CAP.DmnIdFile
+GROUP BY DF.CollectionName, DF.Location
+ORDER BY avg_sustainable_kbps DESC`,
+  },
   {
     label: "All calls",
     category: "General",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["callStatus"], aggFn: "sum", aggEnabled: false },
     sql: `SELECT
   CA.SessionId,
   CA.technology,
@@ -85,6 +273,7 @@ ORDER BY CA.SessionId DESC`,
   {
     label: "Drop / Fail / Sys Rel  summary",
     category: "General",
+    defaultChart: { type: "bar", xCol: "callStatus", yCols: ["total"], aggFn: "sum", aggEnabled: true },
     sql: `SELECT
   FL.ASideLocation AS Location,
   CA.callStatus,
@@ -100,44 +289,23 @@ GROUP BY FL.ASideLocation, CA.callStatus, CA.callType, CA.technology
 ORDER BY total DESC`,
   },
   {
-    label: "Collections in filelist",
-    category: "General",
-    sql: `SELECT
-  ASideLocation AS Location,
-  CollectionName,
-  COUNT(*) AS files,
-  MIN(StartTime) AS first_file,
-  MAX(StartTime) AS last_file
-FROM FileList
-WHERE CollectionName IS NOT NULL
-GROUP BY ASideLocation, CollectionName
-ORDER BY last_file DESC`,
-  },
-  {
     label: "All Collection Names",
     category: "General",
     sql: `SELECT DISTINCT CollectionName
 FROM FileList
 ORDER BY CollectionName`,
   },
-  {
-    label: "Collections count",
-    category: "General",
-    sql: `SELECT
-  ASideLocation AS Location,
-  CollectionName,
-  COUNT(*) AS files
-FROM FileList
-WHERE CollectionName IS NOT NULL
-GROUP BY ASideLocation, CollectionName`,
-  },
+ 
+  
   // ── KPI ──
   {
     label: "Avg setup time per technology",
     category: "KPI",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_setup_ms"], aggFn: "avg", aggEnabled: false },
     sql: `SELECT
   FL.ASideLocation AS Location,
   CA.technology,
+  FL.CollectionName,
   COUNT(*)              AS calls,
   ROUND(AVG(CA.setupTime), 2) AS avg_setup_ms,
   ROUND(MIN(CA.setupTime), 2) AS min_setup_ms,
@@ -146,12 +314,13 @@ FROM CallAnalysis CA
 LEFT JOIN FileList FL ON CA.FileId = FL.FileId
 LEFT JOIN Sessions S  ON S.SessionId = CA.SessionId
 WHERE S.Valid IN (0, 1)
-GROUP BY FL.ASideLocation, CA.technology
-ORDER BY avg_setup_ms`,
+GROUP BY FL.ASideLocation, CA.technology, FL.CollectionName
+ORDER BY avg_setup_ms,FL.CollectionName`,
   },
   {
     label: "KPIs ανά operator (calls)",
     category: "KPI",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["total_calls", "drop_fail"], aggFn: "sum", aggEnabled: false },
     sql: `SELECT
   FL.ASideLocation                            AS Location,
   COUNT(*)                                    AS total_calls,
@@ -170,25 +339,6 @@ LEFT JOIN ResultsLQ08Avg LQ  ON LQ.SessionId = CA.SessionId
 WHERE S.Valid IN (0, 1)
 GROUP BY FL.ASideLocation
 ORDER BY total_calls DESC`,
-  },
-  {
-    label: "Drop/Fail rate ανά operator",
-    category: "KPI",
-    sql: `SELECT
-  FL.ASideLocation                            AS Location,
-  CA.technology,
-  COUNT(*)                                    AS total,
-  SUM(CASE WHEN CA.callStatus LIKE '%Drop%'  THEN 1 ELSE 0 END) AS dropped,
-  SUM(CASE WHEN CA.callStatus LIKE '%Fail%'  THEN 1 ELSE 0 END) AS failed,
-  ROUND(
-    100.0 * SUM(CASE WHEN CA.callStatus LIKE '%Drop%' OR CA.callStatus LIKE '%Fail%'
-                     THEN 1 ELSE 0 END) / NULLIF(COUNT(*), 0), 2) AS drop_fail_pct
-FROM CallAnalysis CA
-LEFT JOIN FileList FL ON CA.FileId   = FL.FileId
-LEFT JOIN Sessions S  ON S.SessionId = CA.SessionId
-WHERE S.Valid IN (0, 1)
-GROUP BY FL.ASideLocation, CA.technology
-ORDER BY FL.ASideLocation, total DESC`,
   },
   {
     label: "Setup time ανά callType & technology",
@@ -212,25 +362,9 @@ ORDER BY CA.callType, avg_setup_ms`,
   },
   // ── MOS ──
   {
-    label: "Avg MOS per collection",
-    category: "MOS",
-    sql: `SELECT
-  FL.ASideLocation AS Location,
-  FL.CollectionName,
-  COUNT(*)                  AS calls,
-  ROUND(AVG(LQ.OptionalWB), 3) AS avg_mos,
-  ROUND(MIN(LQ.OptionalWB), 3) AS min_mos,
-  ROUND(MAX(LQ.OptionalWB), 3) AS max_mos
-FROM CallAnalysis CA
-LEFT JOIN FileList FL ON CA.FileId = FL.FileId
-LEFT JOIN ResultsLQ08Avg LQ ON LQ.SessionId = CA.SessionId
-WHERE LQ.OptionalWB IS NOT NULL
-GROUP BY FL.ASideLocation, FL.CollectionName
-ORDER BY avg_mos DESC`,
-  },
-  {
     label: "MOS ανά operator & collection",
     category: "MOS",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_mos"], aggFn: "avg", aggEnabled: false },
     sql: `SELECT
   FL.CollectionName,
   FL.ASideLocation  AS Location,
@@ -248,7 +382,8 @@ ORDER BY FL.CollectionName, avg_mos DESC`,
   {
     label: "MOS raw ανά call (για γράφημα)",
     category: "MOS",
-    sql: `SELECT TOP 2000
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["MOS"], aggFn: "avg", aggEnabled: true },
+    sql: `SELECT
   FL.ASideLocation                AS Location,
   FL.CollectionName,
   CA.technology,
@@ -267,7 +402,7 @@ ORDER BY LQ.SessionId DESC`,
   {
     label: "MOS + Codec ανά call (FactSpeech + ResultsLQ08Avg)",
     category: "MOS",
-    sql: `SELECT TOP 2000
+    sql: `SELECT
   FL.ASideLocation              AS Location,
   FL.CollectionName,
   FS.CodecName,
@@ -289,6 +424,7 @@ ORDER BY FS.SessionId DESC`,
   {
     label: "Avg MOS ανά Codec (FactSpeech + ResultsLQ08Avg)",
     category: "MOS",
+    defaultChart: { type: "bar", xCol: "CodecName", yCols: ["avg_MOS"], aggFn: "avg", aggEnabled: false },
     sql: `SELECT
   FL.ASideLocation              AS Location,
   FS.CodecName,
@@ -307,24 +443,10 @@ GROUP BY FL.ASideLocation, FS.CodecName, FS.CodecRate
 ORDER BY avg_MOS DESC`,
   },
   // ── Signal ──
-  {
-    label: "LTE signal per session",
-    category: "Signal",
-    sql: `SELECT TOP 500
-  FL.ASideLocation AS Location,
-  LM.SessionId,
-  LM.MsgTime,
-  ROUND(LM.RSRP,  2) AS RSRP,
-  ROUND(LM.RSRQ,  2) AS RSRQ,
-  ROUND(LM.SINR0, 2) AS SINR0
-FROM LTEMeasurementReport LM
-LEFT JOIN Sessions S  ON S.SessionId = LM.SessionId
-LEFT JOIN FileList FL ON FL.FileId   = S.FileId
-ORDER BY LM.SessionId, LM.MsgTime`,
-  },
-  {
+   {
     label: "Avg RSRP ανά operator",
     category: "Signal",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_RSRP", "avg_SINR"], aggFn: "avg", aggEnabled: false },
     sql: `SELECT
   FL.ASideLocation  AS Location,
   COUNT(*)          AS measurements,
@@ -342,7 +464,8 @@ ORDER BY avg_RSRP DESC`,
   {
     label: "LTE μετρήσεις raw (για γράφημα)",
     category: "Signal",
-    sql: `SELECT TOP 2000
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["RSRP", "SINR"], aggFn: "avg", aggEnabled: true },
+    sql: `SELECT
   FL.ASideLocation  AS Location,
   CA.technology,
   ROUND(CAST(LM.RSRP  AS FLOAT), 2) AS RSRP,
@@ -398,6 +521,7 @@ WHERE CollectionName LIKE '%%' AND FileList.ASideLocation LIKE '%Data%'`,
   {
     label: "Data sessions throughput ανά collection",
     category: "Data",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_DL_Mbps", "avg_UL_Mbps"], aggFn: "avg", aggEnabled: false },
     sql: `SELECT
   FL.CollectionName,
   FL.ASideLocation  AS Location,
@@ -415,146 +539,9 @@ GROUP BY FL.CollectionName, FL.ASideLocation
 ORDER BY avg_DL_Mbps DESC`,
   },
   // ── LQ Voice ──
+
   {
-    label: "LQ Call Data (Free A)",
-    category: "LQ Voice",
-    sql: `SELECT
-  FileList.ASideFileName,
-  FileList.CollectionName,
-  FileList.CampaignName,
-  FileList.UserName,
-  FileList.ASideLocation,
-  Filelist.ASideDevice,
-  Filelist.BSideDevice,
-  Filelist.ASideNumber,
-  FileList.BSideNumber,
-  Filelist.FileID,
-  CallSession.SessionId AS 'SessionId',
-  CallSession.callStatus AS 'CallStatus',
-  Callsession.Callcause,
-  Callsession.Calltype,
-  Callsession.Calldir,
-  Case when Callsession.callDir like 'A->B' then 'MOC'
-       when Callsession.callDir like 'B->A' then 'MTC' else NULL end as 'MOCMTC',
-  Callsession.VoiceCalltype,
-  CallSession.CallTechnology AS 'Technology',
-  Networkinfo.Operator,
-  Networkinfo.Technology,
-  case when Callsession.callDir like 'A->B' and CallSession.CallMode in ('VoLTE','SRVCC') then 'VoLTE Call'
-       when Callsession.callDir like 'A->B' and CallSession.CallMode in ('CSFB','CS') then 'CS call'
-       when Callsession.callDir like 'B->A' and CallSession.CallModeB in ('VoLTE','SRVCC') then 'VoLTE Call'
-       when Callsession.callDir like 'B->A' and CallSession.CallModeB in ('CSFB','CS') then 'CS call'
-       when callDir like 'A->B' and CallMode in ('-') and CallSession.CallTechnology like ('%lte%') then 'VoLTE Call'
-       when callDir like 'A->B' and CallMode in ('-') and CallSession.CallTechnology like ('%UMTS%') then 'CS call'
-       when callDir like 'A->B' and CallMode in ('-') and CallSession.CallTechnology like ('%GSM%') then 'CS call'
-       when callDir like 'A->B' and CallMode like ('%Unknown%') and CallSession.CallTechnology like ('%5G%') then 'VoLTE Call'
-       when callDir like 'B->A' and CallModeB in ('-') and CallSession.CallTechnologyB like ('%lte%') then 'VoLTE Call'
-       when callDir like 'B->A' and CallModeB in ('-') and CallSession.CallTechnologyB like ('%UMTS%') then 'CS call'
-       when callDir like 'B->A' and CallModeB in ('-') and CallSession.CallTechnologyB like ('%GSM%') then 'CS call'
-       when callDir like 'B->A' and CallModeB like ('%Unknown%') and CallSession.CallTechnologyB like ('%5G%') then 'VoLTE Call'
-       else NULL end as 'CustomCallMode',
-  Sessions.startTime,
-  sessions.duration,
-  min(CASE WHEN vResultsKPI.KPIId = 11013 and vResultsKPI.ErrorCode=0
-       and (Callsession.callDir like 'A->B' and CallSession.CallMode in ('VoLTE','SRVCC')
-        or  Callsession.callDir like 'B->A' and CallSession.CallModeB in ('VoLTE','SRVCC'))
-       and Callsession.Callstatus in ('Completed','Dropped')
-       THEN vResultsKPI.Duration*0.001 else NULL END) AS 'CallSetupTimeVoLTE',
-  min(CASE WHEN vResultsKPI.KPIId = 10108 and vResultsKPI.ErrorCode=0
-       and (Callsession.callDir like 'A->B' and CallSession.CallMode in ('CSFB','CS')
-        or  Callsession.callDir like 'B->A' and CallSession.CallModeB in ('CSFB','CS'))
-       and Callsession.Callstatus in ('Completed','Dropped')
-       THEN vResultsKPI.Duration*0.001
-       WHEN vResultsKPI.KPIId = 11013 and vResultsKPI.ErrorCode=0
-       and (Callsession.callDir like 'A->B' and CallSession.CallMode in ('CSFB','CS')
-        or  Callsession.callDir like 'B->A' and CallSession.CallModeB in ('CSFB','CS'))
-       and Callsession.Callstatus in ('Completed','Dropped')
-       THEN vResultsKPI.Duration*0.001 else NULL END) AS 'CallSetupTimeCS',
-  Case When Callsession.Callstatus in ('Completed','Dropped','Failed') then 1 else 0 end as 'CallAttemps',
-  Case When Callsession.Callstatus in ('Failed') then 0 else 1 end as 'Callconnected',
-  Case When Callsession.Callstatus in ('Completed') then 1 else 0 end as 'CallCompleted',
-  Case When Callsession.Callstatus in ('Dropped') then 1 else 0 end as 'CallDropped',
-  Case When Callsession.Callstatus in ('Failed') then 1 else 0 end as 'CallFailed'
-FROM NetworkInfo, CallSession
-  JOIN Sessions ON CallSession.SessionId = Sessions.SessionId
-  JOIN FileList ON FileList.FileId = Sessions.FileId
-  LEFT JOIN vResultsLQAvg ON CallSession.SessionId = vResultsLQAvg.SessionId
-  LEFT JOIN TestInfo ON TestInfo.TestId = vResultsLQAvg.TestId
-  LEFT JOIN vResultsKPI ON CallSession.SessionId = vResultsKPI.SessionId
-WHERE CollectionName like '%%' AND
-  Sessions.valid = 1 AND
-  callStatus IN ('Completed','Failed','Dropped') AND
-  ASideLocation like '%Free A%' AND
-  Callsession.VoiceCallType In('Intrusive') AND
-  Networkinfo.NetworkId=(Select max(nf.NetworkId) From Networkinfo nf Where Filelist.FileId = nf.FileId And Sessions.StartTime > nf.Msgtime)
-GROUP BY
-  FileList.ASideFileName, FileList.TestDescription, FileList.CollectionName, FileList.CampaignName,
-  FileList.UserName, FileList.ASideLocation, Filelist.ASideDevice, Filelist.BSideDevice,
-  Filelist.ASideNumber, FileList.BSideNumber, Filelist.FileID, sessions.duration,
-  Callsession.Callcause, CallSession.SessionId, Callsession.Calltype, Callsession.Calldir,
-  FileList.TaskName, CallSession.CallTechnology, CallSession.CallTechnologyB, Networkinfo.Technology,
-  CallSession.CallMode, CallSession.CallModeB, callStatus, Networkinfo.Operator,
-  Callsession.VoiceCalltype, Sessions.startTime
-ORDER BY SessionId`,
-  },
-  {
-    label: "LQ Call Data (GSM)",
-    category: "LQ Voice",
-    sql: `SELECT
-  FileList.ASideFileName,
-  FileList.TestDescription,
-  FileList.CollectionName,
-  FileList.CampaignName,
-  FileList.UserName,
-  Filelist.ASideLocation,
-  Filelist.ASideDevice,
-  Filelist.BSideDevice,
-  Filelist.ASideNumber,
-  FileList.BSideNumber,
-  Filelist.FileID,
-  Sessions.SessionID,
-  Callsession.Callstatus,
-  Callsession.Callcause,
-  Callsession.Calltype,
-  Callsession.Calldir,
-  Case when Callsession.callDir like 'A->B' then 'MOC'
-       when Callsession.callDir like 'B->A' then 'MTC' else NULL end as 'MOCMTC',
-  Callsession.VoiceCalltype,
-  Networkinfo.NetworkID,
-  Networkinfo.Operator,
-  Networkinfo.Technology,
-  vResultsKPI.KPIID,
-  vResultsKPI.StartTime,
-  vResultsKPI.EndTime,
-  vResultsKPI.Duration*0.001,
-  Case When Callsession.callDir like 'A->B' and vResultsKPI.ErrorCode=0
-       and Callsession.Callstatus in ('Completed','Dropped')
-       And Networkinfo.Technology in ('UMTS 2100','UMTS 900','GSM 900','GSM 1800')
-       then vResultsKPI.Duration*0.001 else NULL end as 'MOCSetupTime',
-  Case When Callsession.callDir like 'B->A' and vResultsKPI.ErrorCode=0
-       and Callsession.Callstatus in ('Completed','Dropped')
-       And Networkinfo.Technology in ('UMTS 2100','UMTS 900','GSM 900','GSM 1800')
-       then vResultsKPI.Duration*0.001 else NULL end as 'MTCSetupTime',
-  vResultsKPI.ErrorCode,
-  Case When Callsession.Callstatus in ('Completed','Dropped','Failed') then 1 else 0 end as 'CallAttemps',
-  Case When vResultsKPI.ErrorCode=0 then 1 else 0 end as 'Callconnected',
-  Case When Callsession.Callstatus in ('Completed') then 1 else 0 end as 'CallCompleted',
-  Case When Callsession.Callstatus in ('Dropped') then 1 else 0 end as 'CallDropped',
-  Case When Callsession.Callstatus in ('Failed') then 1 else 0 end as 'CallFailed'
-FROM Networkinfo,
-  Filelist
-  Join Sessions On(Filelist.FileID=Sessions.FileID)
-  Join Callsession On(Sessions.SessionID=Callsession.SessionID)
-  Left Join vResultsKPI On(Sessions.SessionID=vResultsKPI.SessionID and vResultsKPI.KPIID=10100)
-WHERE CollectionName like '%%' AND
-  Sessions.Valid=1 AND
-  Callsession.Callstatus Not In('System Release') AND
-  Callsession.VoiceCallType In('Intrusive') AND
-  Networkinfo.NetworkId=(Select max(nf.NetworkId) From Networkinfo nf Where Filelist.FileId = nf.FileId And Sessions.StartTime > nf.Msgtime) AND
-  ASideLocation Like '%GSM'`,
-  },
-  {
-    label: "LQ UMTS/GSM Data (Free A)",
+    label: "MOS (Free A)",
     category: "LQ Voice",
     sql: `SELECT
   NetworkInfo.CID,
@@ -623,142 +610,7 @@ WHERE CollectionName like '%%' AND
   ASideLocation Like '%GSM'`,
   },
   // ── LQ Stats ──
-  {
-    label: "LQ Statistic Data (Free A)",
-    category: "LQ Stats",
-    sql: `WITH SessionCTE AS (
-  SELECT
-    Filelist.FileID, Sessions.SessionID,
-    Networkinfo.NetworkID, Networkinfo.Operator, Networkinfo.Technology
-  FROM Networkinfo, Filelist
-    JOIN Sessions ON Filelist.FileID = Sessions.FileID
-    JOIN Callsession ON Sessions.SessionID = Callsession.SessionID
-  WHERE Sessions.Valid = 1
-    AND Callsession.Callstatus NOT IN ('System Release')
-    AND Callsession.VoiceCallType IN ('Intrusive')
-    AND Networkinfo.NetworkId = (
-      SELECT MAX(nf.NetworkId) FROM Networkinfo nf
-      WHERE Filelist.FileId = nf.FileId AND Sessions.StartTime > nf.Msgtime)
-  GROUP BY Filelist.FileID, Sessions.SessionID, Networkinfo.NetworkID, Networkinfo.Operator, Networkinfo.Technology
-),
-LQSilenceCTE AS (
-  SELECT SessionCTE.*, Testinfo.TestId, ResultsLQ08Avg.LQWB, ResultsLQ08Avg.OptionalWB,
-    ResultsLQ08Avg.qualityCode,
-    CASE WHEN SUBSTRING(REVERSE(ResultsLQ08Avg.QualityCode), 10, 1) LIKE '1' THEN 1 ELSE NULL END AS Silence
-  FROM SessionCTE
-    JOIN Testinfo ON SessionCTE.SessionId = Testinfo.SessionId
-    JOIN ResultsLQ08Avg ON Testinfo.TestID = ResultsLQ08Avg.TestID
-  WHERE ResultsLQ08Avg.Appl % 10 <> 0
-)
-SELECT
-  FileList.ASideFileName, FileList.TestDescription, FileList.CollectionName,
-  FileList.CampaignName, FileList.UserName, FileList.ASideLocation,
-  FileList.ASideDevice, FileList.BSideDevice, FileList.ASideNumber, FileList.BSideNumber,
-  FileList.FileID, SessionCTE.SessionID,
-  Callsession.Callstatus, Callsession.Callcause, Callsession.Calltype,
-  Callsession.Calldir, Callsession.VoiceCalltype,
-  SessionCTE.NetworkID, SessionCTE.Operator,
-  CASE WHEN SessionCTE.Technology LIKE '%LTE%' THEN 'VoLTE'
-       WHEN SessionCTE.Technology LIKE '%UMTS%' OR SessionCTE.Technology LIKE '%GSM%' THEN 'CS'
-       ELSE NULL END AS Technology,
-  CASE WHEN vResultsKPI.ErrorCode = 0 THEN 1 ELSE 0 END AS Callconnected,
-  CASE WHEN SUM(CASE WHEN LQSilenceCTE.OptionalWB > 0 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END) > 0
-    THEN CASE WHEN 15 < (CONVERT(REAL, SUM(CASE WHEN LQSilenceCTE.OptionalWB < 2.2 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END)) * 100.0 /
-              CONVERT(REAL, SUM(CASE WHEN LQSilenceCTE.OptionalWB > 0 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END)))
-         THEN 1 ELSE 0 END
-    ELSE NULL END AS BadCall,
-  CASE WHEN SUM(CASE WHEN LQSilenceCTE.OptionalWB > 0 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END) > 0
-    THEN (CONVERT(REAL, SUM(CASE WHEN LQSilenceCTE.OptionalWB < 2.2 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END)) * 100.0 /
-          CONVERT(REAL, SUM(CASE WHEN LQSilenceCTE.OptionalWB > 0 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END)))
-    ELSE NULL END AS Percentage,
-  SUM(CASE WHEN LQSilenceCTE.OptionalWB < 2.2 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END) AS NumBadSample,
-  AVG(LQSilenceCTE.OptionalWB) * COUNT(LQSilenceCTE.OptionalWB) AS SumLQ,
-  COUNT(LQSilenceCTE.OptionalWB) AS NumLQ,
-  COUNT(CASE WHEN Testinfo.direction = 'B->A' THEN LQSilenceCTE.OptionalWB ELSE NULL END) AS NumLQDL,
-  COUNT(CASE WHEN Testinfo.direction = 'A->B' THEN LQSilenceCTE.OptionalWB ELSE NULL END) AS NumLQUL,
-  SUM(CASE WHEN LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END) AS NumSilenceSample
-FROM FileList
-  JOIN SessionCTE ON FileList.FileID = SessionCTE.FileID
-  JOIN Callsession ON SessionCTE.SessionID = Callsession.SessionID
-  LEFT JOIN Testinfo ON SessionCTE.SessionID = Testinfo.SessionID AND Testinfo.Valid = 1
-  LEFT JOIN LQSilenceCTE ON Testinfo.TestID = LQSilenceCTE.TestID
-  JOIN vResultsKPI ON SessionCTE.SessionID = vResultsKPI.SessionID
-WHERE CollectionName like '%%' AND vResultsKPI.KPIId IN (11012, 10108)
-GROUP BY
-  FileList.ASideFileName, FileList.TestDescription, FileList.CollectionName, FileList.CampaignName,
-  FileList.UserName, FileList.ASideLocation, FileList.ASideDevice, FileList.BSideDevice,
-  FileList.ASideNumber, FileList.BSideNumber, FileList.FileID, SessionCTE.SessionID,
-  Callsession.Callstatus, Callsession.Callcause, Callsession.Calltype, Callsession.Calldir,
-  Callsession.VoiceCalltype, SessionCTE.NetworkID, SessionCTE.Operator, SessionCTE.Technology,
-  vResultsKPI.ErrorCode`,
-  },
-  {
-    label: "LQ Statistic Data (GSM)",
-    category: "LQ Stats",
-    sql: `WITH SessionCTE AS (
-  SELECT
-    Filelist.FileID, Sessions.SessionID,
-    Networkinfo.NetworkID, Networkinfo.Operator, Networkinfo.Technology
-  FROM Networkinfo, Filelist
-    JOIN Sessions ON Filelist.FileID = Sessions.FileID
-    JOIN Callsession ON Sessions.SessionID = Callsession.SessionID
-  WHERE Sessions.Valid = 1
-    AND Callsession.Callstatus NOT IN ('system release')
-    AND Callsession.VoiceCallType IN ('Intrusive')
-    AND Networkinfo.NetworkId = (
-      SELECT MAX(nf.NetworkId) FROM Networkinfo nf
-      WHERE Filelist.FileId = nf.FileId AND Sessions.StartTime > nf.Msgtime)
-    AND ASideLocation LIKE '%GSM'
-  GROUP BY Filelist.FileID, Sessions.SessionID, Networkinfo.NetworkID, Networkinfo.Operator, Networkinfo.Technology
-),
-LQSilenceCTE AS (
-  SELECT SessionCTE.*, Testinfo.TestId, ResultsLQ08Avg.LQWB, ResultsLQ08Avg.OptionalWB,
-    ResultsLQ08Avg.qualityCode,
-    CASE WHEN SUBSTRING(REVERSE(ResultsLQ08Avg.QualityCode), 10, 1) LIKE '1' THEN 1 ELSE NULL END AS Silence
-  FROM SessionCTE
-    JOIN Testinfo ON SessionCTE.SessionId = Testinfo.SessionId
-    JOIN ResultsLQ08Avg ON Testinfo.TestID = ResultsLQ08Avg.TestID
-  WHERE ResultsLQ08Avg.Appl % 10 <> 0
-)
-SELECT
-  FileList.ASideFileName, FileList.TestDescription, FileList.CollectionName,
-  FileList.CampaignName, FileList.UserName, FileList.ASideLocation,
-  FileList.ASideDevice, FileList.BSideDevice, FileList.ASideNumber, FileList.BSideNumber,
-  FileList.FileID, SessionCTE.SessionID,
-  Callsession.Callstatus, Callsession.Callcause, Callsession.Calltype,
-  Callsession.Calldir, Callsession.VoiceCalltype,
-  SessionCTE.NetworkID, SessionCTE.Operator, SessionCTE.Technology,
-  CASE WHEN vResultsKPI.ErrorCode = 0 THEN 1 ELSE 0 END AS Callconnected,
-  CASE WHEN SUM(CASE WHEN LQSilenceCTE.OptionalWB > 0 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END) > 0
-    THEN CASE WHEN 15 < (CONVERT(REAL, SUM(CASE WHEN LQSilenceCTE.OptionalWB < 2.2 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END)) * 100.0 /
-              CONVERT(REAL, SUM(CASE WHEN LQSilenceCTE.OptionalWB > 0 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END)))
-         THEN 1 ELSE 0 END
-    ELSE NULL END AS BadCall,
-  CASE WHEN SUM(CASE WHEN LQSilenceCTE.OptionalWB > 0 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END) > 0
-    THEN (CONVERT(REAL, SUM(CASE WHEN LQSilenceCTE.OptionalWB < 2.2 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END)) * 100.0 /
-          CONVERT(REAL, SUM(CASE WHEN LQSilenceCTE.OptionalWB > 0 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END)))
-    ELSE NULL END AS Percentage,
-  SUM(CASE WHEN LQSilenceCTE.OptionalWB < 2.2 OR LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END) AS NumBadSample,
-  AVG(LQSilenceCTE.OptionalWB) * COUNT(LQSilenceCTE.OptionalWB) AS SumLQ,
-  COUNT(LQSilenceCTE.OptionalWB) AS NumLQ,
-  COUNT(CASE WHEN Testinfo.direction = 'B->A' THEN LQSilenceCTE.OptionalWB ELSE NULL END) AS NumLQDL,
-  COUNT(CASE WHEN Testinfo.direction = 'A->B' THEN LQSilenceCTE.OptionalWB ELSE NULL END) AS NumLQUL,
-  SUM(CASE WHEN LQSilenceCTE.Silence > 0 THEN 1 ELSE 0 END) AS NumSilenceSample
-FROM FileList
-  JOIN SessionCTE ON FileList.FileID = SessionCTE.FileID
-  JOIN Callsession ON SessionCTE.SessionID = Callsession.SessionID
-  LEFT JOIN Testinfo ON SessionCTE.SessionID = Testinfo.SessionID AND Testinfo.Valid = 1
-  LEFT JOIN LQSilenceCTE ON Testinfo.TestID = LQSilenceCTE.TestID
-  LEFT JOIN vResultsKPI ON SessionCTE.SessionID = vResultsKPI.SessionID AND vResultsKPI.KPIID = 10100
-WHERE CollectionName like '%%' AND Callsession.Callstatus NOT IN ('system release')
-GROUP BY
-  FileList.ASideFileName, FileList.TestDescription, FileList.CollectionName, FileList.CampaignName,
-  FileList.UserName, FileList.ASideLocation, FileList.ASideDevice, FileList.BSideDevice,
-  FileList.ASideNumber, FileList.BSideNumber, FileList.FileID, SessionCTE.SessionID,
-  Callsession.Callstatus, Callsession.Callcause, Callsession.Calltype, Callsession.Calldir,
-  Callsession.VoiceCalltype, SessionCTE.NetworkID, SessionCTE.Operator, SessionCTE.Technology,
-  vResultsKPI.ErrorCode`,
-  },
+ 
   {
     label: "Low MOS Sessions (1/3)",
     category: "LQ Stats",
@@ -1016,193 +868,193 @@ WHERE CollectionName like '%%' AND
   dbo.Sessions.sessionType = 'CALL' AND
   dbo.Sessions.valid = '0'`,
   },
-  // ── Cell ID ──
-  {
-    label: "Cell ID — Cosmote Free A",
-    category: "Cell ID",
-    sql: `SELECT
-  NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
-  NetworkInfo.CGI, NetworkInfo.CGI2, NetworkInfo.CGI3, NetworkInfo.Technology,
-  NetworkInfo.BCCH as NI_BCCH, NetworkInfo.SC1 as NI_SC1, NetworkInfo.SC2 as NI_SC2, NetworkInfo.SC3 as NI_SC3,
-  vBTSList.BTSName, vBTSList.CellName as BTSCellName, vBTSList.Direction as BTSDirection,
-  vBTSList.BCCH as BTSBCCH, vBTSList.BSIC as BTSBSIC,
-  Position.Latitude, Position.Longitude, Position.PosId, Position.Level as FloorPlanLevel,
-  dbo.GetFloorPlanId(FileList.FileId, Position.FloorPlanId) as FloorPlanId,
-  Position.Direction + 90 - 360 * FLOOR(((Position.Direction + 90) / 360)) as PositionDirection,
-  Sessions.FileId, Sessions.SessionId, FileList.CallingModule, FileList.ASideDevice,
-  FileList.ASideLocation, FileList.Zone, FileList.CollectionName,
-  SubString(FileList.ASideFileName, 1, 41) as Logname,
-  NULL as IndoorMap, NetworkInfo.NetworkId, NetworkInfo.MsgTime
-FROM Sessions as Sessions, Position, FileList,
-  NetworkIdRelation nr1, NetworkIdRelation nr2,
-  NetworkInfo
-  LEFT JOIN vBTSList ON vBTSList.CGI = NetworkInfo.CGI
-  LEFT JOIN vBTSList as bts2 ON bts2.CGI = NetworkInfo.CGI2
-  LEFT JOIN vBTSList as bts3 ON bts3.CGI = NetworkInfo.CGI3
-WHERE CollectionName like '%%' AND
-  Sessions.FileId = FileList.FileId AND Sessions.Valid = 1 AND
-  Sessions.SessionId = Position.SessionId AND FileList.FileId = NetworkInfo.FileId AND
-  NetworkInfo.FileId = Position.FileId AND
-  (NetworkInfo.NetworkId = nr1.NetworkId and Position.PosId > nr1.PosId) AND
-  (NetworkInfo.NetworkId + 1 = nr2.NetworkId and Position.PosId <= nr2.PosId) AND
-  nr2.type = 'NetworkId' AND nr1.type = 'NetworkId' AND NetworkInfo.CId > 0 AND
-  ASideLocation = 'Cosmote Free A'`,
-  },
-  {
-    label: "Cell ID — Cosmote GSM",
-    category: "Cell ID",
-    sql: `SELECT
-  NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
-  NetworkInfo.CGI, NetworkInfo.CGI2, NetworkInfo.CGI3, NetworkInfo.Technology,
-  NetworkInfo.BCCH as NI_BCCH, NetworkInfo.SC1 as NI_SC1, NetworkInfo.SC2 as NI_SC2, NetworkInfo.SC3 as NI_SC3,
-  vBTSList.BTSName, vBTSList.CellName as BTSCellName, vBTSList.Direction as BTSDirection,
-  vBTSList.BCCH as BTSBCCH, vBTSList.BSIC as BTSBSIC,
-  Position.Latitude, Position.Longitude, Position.PosId, Position.Level as FloorPlanLevel,
-  dbo.GetFloorPlanId(FileList.FileId, Position.FloorPlanId) as FloorPlanId,
-  Position.Direction + 90 - 360 * FLOOR(((Position.Direction + 90) / 360)) as PositionDirection,
-  Sessions.FileId, Sessions.SessionId, FileList.CallingModule, FileList.ASideDevice,
-  FileList.ASideLocation, FileList.Zone, FileList.CollectionName,
-  SubString(FileList.ASideFileName, 1, 41) as Logname,
-  NULL as IndoorMap, NetworkInfo.NetworkId, NetworkInfo.MsgTime
-FROM Sessions as Sessions, Position, FileList,
-  NetworkIdRelation nr1, NetworkIdRelation nr2,
-  NetworkInfo
-  LEFT JOIN vBTSList ON vBTSList.CGI = NetworkInfo.CGI
-  LEFT JOIN vBTSList as bts2 ON bts2.CGI = NetworkInfo.CGI2
-  LEFT JOIN vBTSList as bts3 ON bts3.CGI = NetworkInfo.CGI3
-WHERE CollectionName like '%%' AND
-  Sessions.FileId = FileList.FileId AND Sessions.Valid = 1 AND
-  Sessions.SessionId = Position.SessionId AND FileList.FileId = NetworkInfo.FileId AND
-  NetworkInfo.FileId = Position.FileId AND
-  (NetworkInfo.NetworkId = nr1.NetworkId and Position.PosId > nr1.PosId) AND
-  (NetworkInfo.NetworkId + 1 = nr2.NetworkId and Position.PosId <= nr2.PosId) AND
-  nr2.type = 'NetworkId' AND nr1.type = 'NetworkId' AND NetworkInfo.CId > 0 AND
-  ASideLocation = 'Cosmote GSM'`,
-  },
-  {
-    label: "Cell ID — Vodafone Free A",
-    category: "Cell ID",
-    sql: `SELECT
-  NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
-  NetworkInfo.CGI, NetworkInfo.CGI2, NetworkInfo.CGI3, NetworkInfo.Technology,
-  NetworkInfo.BCCH as NI_BCCH, NetworkInfo.SC1 as NI_SC1, NetworkInfo.SC2 as NI_SC2, NetworkInfo.SC3 as NI_SC3,
-  vBTSList.BTSName, vBTSList.CellName as BTSCellName, vBTSList.Direction as BTSDirection,
-  vBTSList.BCCH as BTSBCCH, vBTSList.BSIC as BTSBSIC,
-  Position.Latitude, Position.Longitude, Position.PosId, Position.Level as FloorPlanLevel,
-  dbo.GetFloorPlanId(FileList.FileId, Position.FloorPlanId) as FloorPlanId,
-  Position.Direction + 90 - 360 * FLOOR(((Position.Direction + 90) / 360)) as PositionDirection,
-  Sessions.FileId, Sessions.SessionId, FileList.CallingModule, FileList.ASideDevice,
-  FileList.ASideLocation, FileList.Zone, FileList.CollectionName,
-  SubString(FileList.ASideFileName, 1, 41) as Logname,
-  NULL as IndoorMap, NetworkInfo.NetworkId, NetworkInfo.MsgTime
-FROM Sessions as Sessions, Position, FileList,
-  NetworkIdRelation nr1, NetworkIdRelation nr2,
-  NetworkInfo
-  LEFT JOIN vBTSList ON vBTSList.CGI = NetworkInfo.CGI
-  LEFT JOIN vBTSList as bts2 ON bts2.CGI = NetworkInfo.CGI2
-  LEFT JOIN vBTSList as bts3 ON bts3.CGI = NetworkInfo.CGI3
-WHERE CollectionName like '%%' AND
-  Sessions.FileId = FileList.FileId AND Sessions.Valid = 1 AND
-  Sessions.SessionId = Position.SessionId AND FileList.FileId = NetworkInfo.FileId AND
-  NetworkInfo.FileId = Position.FileId AND
-  (NetworkInfo.NetworkId = nr1.NetworkId and Position.PosId > nr1.PosId) AND
-  (NetworkInfo.NetworkId + 1 = nr2.NetworkId and Position.PosId <= nr2.PosId) AND
-  nr2.type = 'NetworkId' AND nr1.type = 'NetworkId' AND NetworkInfo.CId > 0 AND
-  ASideLocation = 'Vodafone Free A'`,
-  },
-  {
-    label: "Cell ID — Vodafone GSM",
-    category: "Cell ID",
-    sql: `SELECT
-  NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
-  NetworkInfo.CGI, NetworkInfo.CGI2, NetworkInfo.CGI3, NetworkInfo.Technology,
-  NetworkInfo.BCCH as NI_BCCH, NetworkInfo.SC1 as NI_SC1, NetworkInfo.SC2 as NI_SC2, NetworkInfo.SC3 as NI_SC3,
-  vBTSList.BTSName, vBTSList.CellName as BTSCellName, vBTSList.Direction as BTSDirection,
-  vBTSList.BCCH as BTSBCCH, vBTSList.BSIC as BTSBSIC,
-  Position.Latitude, Position.Longitude, Position.PosId, Position.Level as FloorPlanLevel,
-  dbo.GetFloorPlanId(FileList.FileId, Position.FloorPlanId) as FloorPlanId,
-  Position.Direction + 90 - 360 * FLOOR(((Position.Direction + 90) / 360)) as PositionDirection,
-  Sessions.FileId, Sessions.SessionId, FileList.CallingModule, FileList.ASideDevice,
-  FileList.ASideLocation, FileList.Zone, FileList.CollectionName,
-  SubString(FileList.ASideFileName, 1, 41) as Logname,
-  NULL as IndoorMap, NetworkInfo.NetworkId, NetworkInfo.MsgTime
-FROM Sessions as Sessions, Position, FileList,
-  NetworkIdRelation nr1, NetworkIdRelation nr2,
-  NetworkInfo
-  LEFT JOIN vBTSList ON vBTSList.CGI = NetworkInfo.CGI
-  LEFT JOIN vBTSList as bts2 ON bts2.CGI = NetworkInfo.CGI2
-  LEFT JOIN vBTSList as bts3 ON bts3.CGI = NetworkInfo.CGI3
-WHERE CollectionName like '%%' AND
-  Sessions.FileId = FileList.FileId AND Sessions.Valid = 1 AND
-  Sessions.SessionId = Position.SessionId AND FileList.FileId = NetworkInfo.FileId AND
-  NetworkInfo.FileId = Position.FileId AND
-  (NetworkInfo.NetworkId = nr1.NetworkId and Position.PosId > nr1.PosId) AND
-  (NetworkInfo.NetworkId + 1 = nr2.NetworkId and Position.PosId <= nr2.PosId) AND
-  nr2.type = 'NetworkId' AND nr1.type = 'NetworkId' AND NetworkInfo.CId > 0 AND
-  ASideLocation = 'Vodafone GSM'`,
-  },
-  {
-    label: "Cell ID — Nova Free A",
-    category: "Cell ID",
-    sql: `SELECT
-  NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
-  NetworkInfo.CGI, NetworkInfo.CGI2, NetworkInfo.CGI3, NetworkInfo.Technology,
-  NetworkInfo.BCCH as NI_BCCH, NetworkInfo.SC1 as NI_SC1, NetworkInfo.SC2 as NI_SC2, NetworkInfo.SC3 as NI_SC3,
-  vBTSList.BTSName, vBTSList.CellName as BTSCellName, vBTSList.Direction as BTSDirection,
-  vBTSList.BCCH as BTSBCCH, vBTSList.BSIC as BTSBSIC,
-  Position.Latitude, Position.Longitude, Position.PosId, Position.Level as FloorPlanLevel,
-  dbo.GetFloorPlanId(FileList.FileId, Position.FloorPlanId) as FloorPlanId,
-  Position.Direction + 90 - 360 * FLOOR(((Position.Direction + 90) / 360)) as PositionDirection,
-  Sessions.FileId, Sessions.SessionId, FileList.CallingModule, FileList.ASideDevice,
-  FileList.ASideLocation, FileList.Zone, FileList.CollectionName,
-  SubString(FileList.ASideFileName, 1, 41) as Logname,
-  NULL as IndoorMap, NetworkInfo.NetworkId, NetworkInfo.MsgTime
-FROM Sessions as Sessions, Position, FileList,
-  NetworkIdRelation nr1, NetworkIdRelation nr2,
-  NetworkInfo
-  LEFT JOIN vBTSList ON vBTSList.CGI = NetworkInfo.CGI
-  LEFT JOIN vBTSList as bts2 ON bts2.CGI = NetworkInfo.CGI2
-  LEFT JOIN vBTSList as bts3 ON bts3.CGI = NetworkInfo.CGI3
-WHERE CollectionName like '%%' AND
-  Sessions.FileId = FileList.FileId AND Sessions.Valid = 1 AND
-  Sessions.SessionId = Position.SessionId AND FileList.FileId = NetworkInfo.FileId AND
-  NetworkInfo.FileId = Position.FileId AND
-  (NetworkInfo.NetworkId = nr1.NetworkId and Position.PosId > nr1.PosId) AND
-  (NetworkInfo.NetworkId + 1 = nr2.NetworkId and Position.PosId <= nr2.PosId) AND
-  nr2.type = 'NetworkId' AND nr1.type = 'NetworkId' AND NetworkInfo.CId > 0 AND
-  ASideLocation = 'Nova Free A'`,
-  },
-  {
-    label: "Cell ID — Nova GSM",
-    category: "Cell ID",
-    sql: `SELECT
-  NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
-  NetworkInfo.CGI, NetworkInfo.CGI2, NetworkInfo.CGI3, NetworkInfo.Technology,
-  NetworkInfo.BCCH as NI_BCCH, NetworkInfo.SC1 as NI_SC1, NetworkInfo.SC2 as NI_SC2, NetworkInfo.SC3 as NI_SC3,
-  vBTSList.BTSName, vBTSList.CellName as BTSCellName, vBTSList.Direction as BTSDirection,
-  vBTSList.BCCH as BTSBCCH, vBTSList.BSIC as BTSBSIC,
-  Position.Latitude, Position.Longitude, Position.PosId, Position.Level as FloorPlanLevel,
-  dbo.GetFloorPlanId(FileList.FileId, Position.FloorPlanId) as FloorPlanId,
-  Position.Direction + 90 - 360 * FLOOR(((Position.Direction + 90) / 360)) as PositionDirection,
-  Sessions.FileId, Sessions.SessionId, FileList.CallingModule, FileList.ASideDevice,
-  FileList.ASideLocation, FileList.Zone, FileList.CollectionName,
-  SubString(FileList.ASideFileName, 1, 41) as Logname,
-  NULL as IndoorMap, NetworkInfo.NetworkId, NetworkInfo.MsgTime
-FROM Sessions as Sessions, Position, FileList,
-  NetworkIdRelation nr1, NetworkIdRelation nr2,
-  NetworkInfo
-  LEFT JOIN vBTSList ON vBTSList.CGI = NetworkInfo.CGI
-  LEFT JOIN vBTSList as bts2 ON bts2.CGI = NetworkInfo.CGI2
-  LEFT JOIN vBTSList as bts3 ON bts3.CGI = NetworkInfo.CGI3
-WHERE CollectionName like '%%' AND
-  Sessions.FileId = FileList.FileId AND Sessions.Valid = 1 AND
-  Sessions.SessionId = Position.SessionId AND FileList.FileId = NetworkInfo.FileId AND
-  NetworkInfo.FileId = Position.FileId AND
-  (NetworkInfo.NetworkId = nr1.NetworkId and Position.PosId > nr1.PosId) AND
-  (NetworkInfo.NetworkId + 1 = nr2.NetworkId and Position.PosId <= nr2.PosId) AND
-  nr2.type = 'NetworkId' AND nr1.type = 'NetworkId' AND NetworkInfo.CId > 0 AND
-  ASideLocation = 'Nova GSM'`,
-  },
+//   // ── Cell ID ──
+//   {
+//     label: "Cell ID — Cosmote Free A",
+//     category: "Cell ID",
+//     sql: `SELECT
+//   NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
+//   NetworkInfo.CGI, NetworkInfo.CGI2, NetworkInfo.CGI3, NetworkInfo.Technology,
+//   NetworkInfo.BCCH as NI_BCCH, NetworkInfo.SC1 as NI_SC1, NetworkInfo.SC2 as NI_SC2, NetworkInfo.SC3 as NI_SC3,
+//   vBTSList.BTSName, vBTSList.CellName as BTSCellName, vBTSList.Direction as BTSDirection,
+//   vBTSList.BCCH as BTSBCCH, vBTSList.BSIC as BTSBSIC,
+//   Position.Latitude, Position.Longitude, Position.PosId, Position.Level as FloorPlanLevel,
+//   dbo.GetFloorPlanId(FileList.FileId, Position.FloorPlanId) as FloorPlanId,
+//   Position.Direction + 90 - 360 * FLOOR(((Position.Direction + 90) / 360)) as PositionDirection,
+//   Sessions.FileId, Sessions.SessionId, FileList.CallingModule, FileList.ASideDevice,
+//   FileList.ASideLocation, FileList.Zone, FileList.CollectionName,
+//   SubString(FileList.ASideFileName, 1, 41) as Logname,
+//   NULL as IndoorMap, NetworkInfo.NetworkId, NetworkInfo.MsgTime
+// FROM Sessions as Sessions, Position, FileList,
+//   NetworkIdRelation nr1, NetworkIdRelation nr2,
+//   NetworkInfo
+//   LEFT JOIN vBTSList ON vBTSList.CGI = NetworkInfo.CGI
+//   LEFT JOIN vBTSList as bts2 ON bts2.CGI = NetworkInfo.CGI2
+//   LEFT JOIN vBTSList as bts3 ON bts3.CGI = NetworkInfo.CGI3
+// WHERE CollectionName like '%%' AND
+//   Sessions.FileId = FileList.FileId AND Sessions.Valid = 1 AND
+//   Sessions.SessionId = Position.SessionId AND FileList.FileId = NetworkInfo.FileId AND
+//   NetworkInfo.FileId = Position.FileId AND
+//   (NetworkInfo.NetworkId = nr1.NetworkId and Position.PosId > nr1.PosId) AND
+//   (NetworkInfo.NetworkId + 1 = nr2.NetworkId and Position.PosId <= nr2.PosId) AND
+//   nr2.type = 'NetworkId' AND nr1.type = 'NetworkId' AND NetworkInfo.CId > 0 AND
+//   ASideLocation = 'Cosmote Free A'`,
+//   },
+//   {
+//     label: "Cell ID — Cosmote GSM",
+//     category: "Cell ID",
+//     sql: `SELECT
+//   NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
+//   NetworkInfo.CGI, NetworkInfo.CGI2, NetworkInfo.CGI3, NetworkInfo.Technology,
+//   NetworkInfo.BCCH as NI_BCCH, NetworkInfo.SC1 as NI_SC1, NetworkInfo.SC2 as NI_SC2, NetworkInfo.SC3 as NI_SC3,
+//   vBTSList.BTSName, vBTSList.CellName as BTSCellName, vBTSList.Direction as BTSDirection,
+//   vBTSList.BCCH as BTSBCCH, vBTSList.BSIC as BTSBSIC,
+//   Position.Latitude, Position.Longitude, Position.PosId, Position.Level as FloorPlanLevel,
+//   dbo.GetFloorPlanId(FileList.FileId, Position.FloorPlanId) as FloorPlanId,
+//   Position.Direction + 90 - 360 * FLOOR(((Position.Direction + 90) / 360)) as PositionDirection,
+//   Sessions.FileId, Sessions.SessionId, FileList.CallingModule, FileList.ASideDevice,
+//   FileList.ASideLocation, FileList.Zone, FileList.CollectionName,
+//   SubString(FileList.ASideFileName, 1, 41) as Logname,
+//   NULL as IndoorMap, NetworkInfo.NetworkId, NetworkInfo.MsgTime
+// FROM Sessions as Sessions, Position, FileList,
+//   NetworkIdRelation nr1, NetworkIdRelation nr2,
+//   NetworkInfo
+//   LEFT JOIN vBTSList ON vBTSList.CGI = NetworkInfo.CGI
+//   LEFT JOIN vBTSList as bts2 ON bts2.CGI = NetworkInfo.CGI2
+//   LEFT JOIN vBTSList as bts3 ON bts3.CGI = NetworkInfo.CGI3
+// WHERE CollectionName like '%%' AND
+//   Sessions.FileId = FileList.FileId AND Sessions.Valid = 1 AND
+//   Sessions.SessionId = Position.SessionId AND FileList.FileId = NetworkInfo.FileId AND
+//   NetworkInfo.FileId = Position.FileId AND
+//   (NetworkInfo.NetworkId = nr1.NetworkId and Position.PosId > nr1.PosId) AND
+//   (NetworkInfo.NetworkId + 1 = nr2.NetworkId and Position.PosId <= nr2.PosId) AND
+//   nr2.type = 'NetworkId' AND nr1.type = 'NetworkId' AND NetworkInfo.CId > 0 AND
+//   ASideLocation = 'Cosmote GSM'`,
+//   },
+//   {
+//     label: "Cell ID — Vodafone Free A",
+//     category: "Cell ID",
+//     sql: `SELECT
+//   NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
+//   NetworkInfo.CGI, NetworkInfo.CGI2, NetworkInfo.CGI3, NetworkInfo.Technology,
+//   NetworkInfo.BCCH as NI_BCCH, NetworkInfo.SC1 as NI_SC1, NetworkInfo.SC2 as NI_SC2, NetworkInfo.SC3 as NI_SC3,
+//   vBTSList.BTSName, vBTSList.CellName as BTSCellName, vBTSList.Direction as BTSDirection,
+//   vBTSList.BCCH as BTSBCCH, vBTSList.BSIC as BTSBSIC,
+//   Position.Latitude, Position.Longitude, Position.PosId, Position.Level as FloorPlanLevel,
+//   dbo.GetFloorPlanId(FileList.FileId, Position.FloorPlanId) as FloorPlanId,
+//   Position.Direction + 90 - 360 * FLOOR(((Position.Direction + 90) / 360)) as PositionDirection,
+//   Sessions.FileId, Sessions.SessionId, FileList.CallingModule, FileList.ASideDevice,
+//   FileList.ASideLocation, FileList.Zone, FileList.CollectionName,
+//   SubString(FileList.ASideFileName, 1, 41) as Logname,
+//   NULL as IndoorMap, NetworkInfo.NetworkId, NetworkInfo.MsgTime
+// FROM Sessions as Sessions, Position, FileList,
+//   NetworkIdRelation nr1, NetworkIdRelation nr2,
+//   NetworkInfo
+//   LEFT JOIN vBTSList ON vBTSList.CGI = NetworkInfo.CGI
+//   LEFT JOIN vBTSList as bts2 ON bts2.CGI = NetworkInfo.CGI2
+//   LEFT JOIN vBTSList as bts3 ON bts3.CGI = NetworkInfo.CGI3
+// WHERE CollectionName like '%%' AND
+//   Sessions.FileId = FileList.FileId AND Sessions.Valid = 1 AND
+//   Sessions.SessionId = Position.SessionId AND FileList.FileId = NetworkInfo.FileId AND
+//   NetworkInfo.FileId = Position.FileId AND
+//   (NetworkInfo.NetworkId = nr1.NetworkId and Position.PosId > nr1.PosId) AND
+//   (NetworkInfo.NetworkId + 1 = nr2.NetworkId and Position.PosId <= nr2.PosId) AND
+//   nr2.type = 'NetworkId' AND nr1.type = 'NetworkId' AND NetworkInfo.CId > 0 AND
+//   ASideLocation = 'Vodafone Free A'`,
+//   },
+//   {
+//     label: "Cell ID — Vodafone GSM",
+//     category: "Cell ID",
+//     sql: `SELECT
+//   NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
+//   NetworkInfo.CGI, NetworkInfo.CGI2, NetworkInfo.CGI3, NetworkInfo.Technology,
+//   NetworkInfo.BCCH as NI_BCCH, NetworkInfo.SC1 as NI_SC1, NetworkInfo.SC2 as NI_SC2, NetworkInfo.SC3 as NI_SC3,
+//   vBTSList.BTSName, vBTSList.CellName as BTSCellName, vBTSList.Direction as BTSDirection,
+//   vBTSList.BCCH as BTSBCCH, vBTSList.BSIC as BTSBSIC,
+//   Position.Latitude, Position.Longitude, Position.PosId, Position.Level as FloorPlanLevel,
+//   dbo.GetFloorPlanId(FileList.FileId, Position.FloorPlanId) as FloorPlanId,
+//   Position.Direction + 90 - 360 * FLOOR(((Position.Direction + 90) / 360)) as PositionDirection,
+//   Sessions.FileId, Sessions.SessionId, FileList.CallingModule, FileList.ASideDevice,
+//   FileList.ASideLocation, FileList.Zone, FileList.CollectionName,
+//   SubString(FileList.ASideFileName, 1, 41) as Logname,
+//   NULL as IndoorMap, NetworkInfo.NetworkId, NetworkInfo.MsgTime
+// FROM Sessions as Sessions, Position, FileList,
+//   NetworkIdRelation nr1, NetworkIdRelation nr2,
+//   NetworkInfo
+//   LEFT JOIN vBTSList ON vBTSList.CGI = NetworkInfo.CGI
+//   LEFT JOIN vBTSList as bts2 ON bts2.CGI = NetworkInfo.CGI2
+//   LEFT JOIN vBTSList as bts3 ON bts3.CGI = NetworkInfo.CGI3
+// WHERE CollectionName like '%%' AND
+//   Sessions.FileId = FileList.FileId AND Sessions.Valid = 1 AND
+//   Sessions.SessionId = Position.SessionId AND FileList.FileId = NetworkInfo.FileId AND
+//   NetworkInfo.FileId = Position.FileId AND
+//   (NetworkInfo.NetworkId = nr1.NetworkId and Position.PosId > nr1.PosId) AND
+//   (NetworkInfo.NetworkId + 1 = nr2.NetworkId and Position.PosId <= nr2.PosId) AND
+//   nr2.type = 'NetworkId' AND nr1.type = 'NetworkId' AND NetworkInfo.CId > 0 AND
+//   ASideLocation = 'Vodafone GSM'`,
+//   },
+//   {
+//     label: "Cell ID — Nova Free A",
+//     category: "Cell ID",
+//     sql: `SELECT
+//   NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
+//   NetworkInfo.CGI, NetworkInfo.CGI2, NetworkInfo.CGI3, NetworkInfo.Technology,
+//   NetworkInfo.BCCH as NI_BCCH, NetworkInfo.SC1 as NI_SC1, NetworkInfo.SC2 as NI_SC2, NetworkInfo.SC3 as NI_SC3,
+//   vBTSList.BTSName, vBTSList.CellName as BTSCellName, vBTSList.Direction as BTSDirection,
+//   vBTSList.BCCH as BTSBCCH, vBTSList.BSIC as BTSBSIC,
+//   Position.Latitude, Position.Longitude, Position.PosId, Position.Level as FloorPlanLevel,
+//   dbo.GetFloorPlanId(FileList.FileId, Position.FloorPlanId) as FloorPlanId,
+//   Position.Direction + 90 - 360 * FLOOR(((Position.Direction + 90) / 360)) as PositionDirection,
+//   Sessions.FileId, Sessions.SessionId, FileList.CallingModule, FileList.ASideDevice,
+//   FileList.ASideLocation, FileList.Zone, FileList.CollectionName,
+//   SubString(FileList.ASideFileName, 1, 41) as Logname,
+//   NULL as IndoorMap, NetworkInfo.NetworkId, NetworkInfo.MsgTime
+// FROM Sessions as Sessions, Position, FileList,
+//   NetworkIdRelation nr1, NetworkIdRelation nr2,
+//   NetworkInfo
+//   LEFT JOIN vBTSList ON vBTSList.CGI = NetworkInfo.CGI
+//   LEFT JOIN vBTSList as bts2 ON bts2.CGI = NetworkInfo.CGI2
+//   LEFT JOIN vBTSList as bts3 ON bts3.CGI = NetworkInfo.CGI3
+// WHERE CollectionName like '%%' AND
+//   Sessions.FileId = FileList.FileId AND Sessions.Valid = 1 AND
+//   Sessions.SessionId = Position.SessionId AND FileList.FileId = NetworkInfo.FileId AND
+//   NetworkInfo.FileId = Position.FileId AND
+//   (NetworkInfo.NetworkId = nr1.NetworkId and Position.PosId > nr1.PosId) AND
+//   (NetworkInfo.NetworkId + 1 = nr2.NetworkId and Position.PosId <= nr2.PosId) AND
+//   nr2.type = 'NetworkId' AND nr1.type = 'NetworkId' AND NetworkInfo.CId > 0 AND
+//   ASideLocation = 'Nova Free A'`,
+//   },
+//   {
+//     label: "Cell ID — Nova GSM",
+//     category: "Cell ID",
+//     sql: `SELECT
+//   NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
+//   NetworkInfo.CGI, NetworkInfo.CGI2, NetworkInfo.CGI3, NetworkInfo.Technology,
+//   NetworkInfo.BCCH as NI_BCCH, NetworkInfo.SC1 as NI_SC1, NetworkInfo.SC2 as NI_SC2, NetworkInfo.SC3 as NI_SC3,
+//   vBTSList.BTSName, vBTSList.CellName as BTSCellName, vBTSList.Direction as BTSDirection,
+//   vBTSList.BCCH as BTSBCCH, vBTSList.BSIC as BTSBSIC,
+//   Position.Latitude, Position.Longitude, Position.PosId, Position.Level as FloorPlanLevel,
+//   dbo.GetFloorPlanId(FileList.FileId, Position.FloorPlanId) as FloorPlanId,
+//   Position.Direction + 90 - 360 * FLOOR(((Position.Direction + 90) / 360)) as PositionDirection,
+//   Sessions.FileId, Sessions.SessionId, FileList.CallingModule, FileList.ASideDevice,
+//   FileList.ASideLocation, FileList.Zone, FileList.CollectionName,
+//   SubString(FileList.ASideFileName, 1, 41) as Logname,
+//   NULL as IndoorMap, NetworkInfo.NetworkId, NetworkInfo.MsgTime
+// FROM Sessions as Sessions, Position, FileList,
+//   NetworkIdRelation nr1, NetworkIdRelation nr2,
+//   NetworkInfo
+//   LEFT JOIN vBTSList ON vBTSList.CGI = NetworkInfo.CGI
+//   LEFT JOIN vBTSList as bts2 ON bts2.CGI = NetworkInfo.CGI2
+//   LEFT JOIN vBTSList as bts3 ON bts3.CGI = NetworkInfo.CGI3
+// WHERE CollectionName like '%%' AND
+//   Sessions.FileId = FileList.FileId AND Sessions.Valid = 1 AND
+//   Sessions.SessionId = Position.SessionId AND FileList.FileId = NetworkInfo.FileId AND
+//   NetworkInfo.FileId = Position.FileId AND
+//   (NetworkInfo.NetworkId = nr1.NetworkId and Position.PosId > nr1.PosId) AND
+//   (NetworkInfo.NetworkId + 1 = nr2.NetworkId and Position.PosId <= nr2.PosId) AND
+//   nr2.type = 'NetworkId' AND nr1.type = 'NetworkId' AND NetworkInfo.CId > 0 AND
+//   ASideLocation = 'Nova GSM'`,
+//   },
   // ── Data Tests ──
   {
     label: "Capacity RAW",
@@ -1392,7 +1244,7 @@ FROM Sessions
 WHERE CollectionName like '%%' AND Sessions.Valid = 1`,
   },
   {
-    label: "OOKLA Speed Test RAW",
+    label: "OOKLA Speed Test DL",
     category: "Data Tests",
     sql: `WITH SessionsCTE AS (
   SELECT SessionId, FileId, info FROM Sessions WHERE valid = 1
@@ -1451,40 +1303,71 @@ FROM SessionsCTE s
   LEFT JOIN Technology t ON t.PrevTechnology IS NOT NULL AND (
     (t.TestId = aaf.TestId AND aaf.MsgTime BETWEEN DATEADD(ms, -1 * t.Duration, t.MsgTime) AND t.MsgTime) OR
     (t.TestId = aa.TestId  AND aa.MsgTime  BETWEEN DATEADD(ms, -1 * t.Duration, t.MsgTime) AND t.MsgTime))
-WHERE CollectionName like '%%' AND s.SessionId IS NOT NULL
+WHERE CollectionName like '%%' AND s.SessionId IS NOT NULL AND aaf.dir = 'DL'
 ORDER BY ti.TestId, ISNULL(aa.ActionId, aaf.ActionId)`,
   },
   {
-    label: "OOKLA Speed Test DL/UL Split",
+    label: "OOKLA Speed Test UL",
     category: "Data Tests",
-    sql: `SELECT
-    Location,
-    dir,
-    COUNT(*)                                              AS total_tests,
-    SUM(CASE WHEN ErrorCode = 0 THEN 1 ELSE 0 END)       AS success_count,
-    AVG(CASE WHEN ErrorCode = 0 THEN thp END)             AS mean_mbps,
-    AVG(CASE WHEN ErrorCode = 0 THEN ping_s END)          AS mean_ping_s
-FROM (
-    SELECT fl.ASideLocation AS Location, 'DL' AS dir, raap.ErrorCode,
-           CAST(raap.DLThroughput AS FLOAT) * 8.0 / 1000000.0      AS thp,
-           CAST(ISNULL(raap.Ping, raap.Latency) AS FLOAT) / 1000.0 AS ping_s
+    sql: `WITH SessionsCTE AS (
+  SELECT SessionId, FileId, info FROM Sessions WHERE valid = 1
+  GROUP BY SessionId, FileId, info
+)
+SELECT
+  ti.SessionId,
+  ti.TestId,
+  fl.CollectionName,
+  fl.ASideDevice,
+  fl.ASideFileName,
+  fl.ASideNumber,
+  s.info AS Session_Info,
+  ti.TestName,
+  ti.TypeOfTest,
+  fl.ASideLocation,
+  ni.HomeOperator,
+  ni.Technology,
+  t.PrevTechnology as 'Data_Technology',
+  aaf.dir AS Direction,
+  CONVERT(VARCHAR, COALESCE(aa.MsgTime, aaf.MsgTime), 121) AS EndTime,
+  atp.ServiceProvider AS App,
+  atp.ServiceProfileName AS ProfileName,
+  COALESCE(aa.ActionId, aaf.ActionId) AS ActionId,
+  COALESCE(aa.Duration, aaf.Duration) AS 'Duration[ms]',
+  CASE aaf.thp WHEN 0 THEN NULL ELSE aaf.thp END AS 'Throughput[Mbps]',
+  CASE COALESCE(aa.ErrorCode, aaf.ErrorCode) WHEN 0 THEN 'Success' ELSE 'Failed' END AS ActionStatus,
+  aaf.Latency AS 'Latency[ms]',
+  aaf.PacketLossPercent AS 'PacketLoss[%]',
+  ni.CGI,
+  DATEADD(MS, -1 * COALESCE(aa.Duration, aaf.Duration),
+    COALESCE(aa.MsgTime, aaf.MsgTime)) AS StartTime
+FROM SessionsCTE s
+  INNER JOIN FileList fl ON fl.FileId = s.FileId
+  INNER JOIN TestInfo ti ON s.SessionId = ti.SessionId AND ti.Valid = 1
+  INNER JOIN ResultsAppTestParameters atp ON ti.TestId = atp.TestId
+  LEFT JOIN ResultsAppAction aa ON ti.TestId = aa.TestId AND aa.LastBlock = 1
+  LEFT JOIN (
+    SELECT 'DL' AS dir, raap.TestId, raap.ActionId, raap.MsgTime, raap.ErrorCode, raap.NetworkId,
+           CAST(raap.DLThroughput AS FLOAT) * 8.0 / 1000000.0              AS thp,
+           CAST(ISNULL(raap.Ping, raap.Latency) AS FLOAT) / 1000.0         AS ping_s,
+           1000 * CAST(raap.DLSize AS REAL) / NULLIF(raap.DLThroughput, 0) AS Duration,
+           ISNULL(raap.Ping, raap.Latency)                                  AS Latency,
+           raap.PacketLossPercent
     FROM ResultsAppActionPerformance raap
-    INNER JOIN TestInfo ti ON raap.TestId  = ti.TestId  AND ti.Valid = 1
-    INNER JOIN Sessions  s  ON ti.SessionId = s.SessionId AND s.Valid  = 1
-    INNER JOIN FileList  fl ON s.FileId     = fl.FileId
-    WHERE fl.CollectionName LIKE '%%' AND fl.ASideLocation LIKE '%%'
     UNION ALL
-    SELECT fl.ASideLocation, 'UL', raap.ErrorCode,
+    SELECT 'UL', raap.TestId, raap.ActionId, raap.MsgTime, raap.ErrorCode, raap.NetworkId,
            CAST(raap.ULThroughput AS FLOAT) * 8.0 / 1000000.0,
-           CAST(ISNULL(raap.Ping, raap.Latency) AS FLOAT) / 1000.0
+           CAST(ISNULL(raap.Ping, raap.Latency) AS FLOAT) / 1000.0,
+           1000 * CAST(raap.ULSize AS REAL) / NULLIF(raap.ULThroughput, 0),
+           ISNULL(raap.Ping, raap.Latency),
+           raap.PacketLossPercent
     FROM ResultsAppActionPerformance raap
-    INNER JOIN TestInfo ti ON raap.TestId  = ti.TestId  AND ti.Valid = 1
-    INNER JOIN Sessions  s  ON ti.SessionId = s.SessionId AND s.Valid  = 1
-    INNER JOIN FileList  fl ON s.FileId     = fl.FileId
-    WHERE fl.CollectionName LIKE '%%' AND fl.ASideLocation LIKE '%%'
-) combined
-GROUP BY Location, dir
-ORDER BY Location, dir DESC`,
+  ) aaf ON ti.TestId = aaf.TestId
+  INNER JOIN NetworkInfo ni ON ni.NetworkId = ISNULL(ISNULL(aa.NetworkId, aaf.NetworkId), ti.NetworkId)
+  LEFT JOIN Technology t ON t.PrevTechnology IS NOT NULL AND (
+    (t.TestId = aaf.TestId AND aaf.MsgTime BETWEEN DATEADD(ms, -1 * t.Duration, t.MsgTime) AND t.MsgTime) OR
+    (t.TestId = aa.TestId  AND aa.MsgTime  BETWEEN DATEADD(ms, -1 * t.Duration, t.MsgTime) AND t.MsgTime))
+WHERE CollectionName like '%%' AND s.SessionId IS NOT NULL AND aaf.dir = 'UL'
+ORDER BY ti.TestId, ISNULL(aa.ActionId, aaf.ActionId)`,
   },
   // ── Browsing ──
   {
@@ -1612,7 +1495,6 @@ GROUP BY TestInfo.testname, FileList.ASideLocation, NetworkInfo.Operator, KPISta
 SELECT
   FileList.CollectionName as 'Collection Name',
   FileList.ASideLocation as 'A Side Location',
-  DataSession.JobName as 'Job Name',
   TestInfo.TestName as 'Test Name',
   SessionsCTE.SessionId as 'Session ID',
   TestInfo.TestId as 'Test ID',
@@ -1620,7 +1502,6 @@ SELECT
   CONVERT(VARCHAR, TestInfo.StartTime, 108) AS 'Time',
   NetworkInfo.Operator,
   NetworkInfo.Technology,
-  ResultsVideoStream.Player,
   ResultsVideoStream.VideoResolution as 'Video Resolution',
   vResultsVideoStreamAvg.SessionQuality as 'Session Quality',
   vResultsVideoStreamAvg.TestQualityAvg as 'Avg Visual Quality',
@@ -1636,8 +1517,6 @@ SELECT
     ELSE ResultsVideoStreamTCPData.TimeToFirstPicturePlayer * 0.001
   END AS 'Time To First Picture',
   ResultsVQ08StreamAvg.Jerkiness,
-  ResultsVQ08StreamAvg.Blurring,
-  ResultsVQ08StreamAvg.Tiling
 FROM SessionsCTE
   JOIN FileList ON SessionsCTE.FileID = FileList.FileID
   JOIN TestInfo ON SessionsCTE.TestId = TestInfo.TestId
@@ -1655,13 +1534,10 @@ WHERE CollectionName like '%%' AND SessionsCTE.SessionId IS NOT NULL
     category: "Multimedia",
     sql: `SELECT
   NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
-  NetworkInfo.CGI, NetworkInfo.Technology,
   Position.Latitude, Position.Longitude, Position.PosId,
-  dbo.GetFloorPlanId(FileList.FileId, Position.FloorPlanId) as FloorPlanId,
   Sessions.FileId, Sessions.SessionId,
   FileList.ASideDevice, FileList.ASideLocation, FileList.CollectionName,
   TestInfo.TestName,
-  SubString(FileList.ASideFileName, 1, 41) as Logname,
   FactIPThroughput.TestId,
   FactIPThroughput.FullDate as 'msgTime',
   FactIPThroughput.ThroughputKbps AS Throughput,
@@ -1683,6 +1559,7 @@ WHERE CollectionName like '%%' AND
   // ── 5G ──
   {
     label: "5G Phone – SS-RSRP / RSRQ / SINR (avg ανά θέση)",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["SS-RSRP", "SS-RSRQ", "SS-SINR"], aggFn: "avg", aggEnabled: true },
     category: "5G",
     sql: `SELECT
   nr.NRARFCN,
@@ -1799,9 +1676,9 @@ function exportCsv(columns: string[], data: Record<string, unknown>[], filename:
 // ──────────────────────────────────────────────
 // Sub-components
 // ──────────────────────────────────────────────
-function ResultGrid({ result }: { result: QueryResult }) {
+function ResultGrid({ result, defaultChart }: { result: QueryResult; defaultChart?: DefaultChart }) {
+  const [showChart, setShowChart] = useState(!!defaultChart);
   const [page, setPage] = useState(0);
-  const [showChart, setShowChart] = useState(false);
   const pageSize = 50;
   const totalPages = Math.ceil(result.data.length / pageSize);
   const pageData = result.data.slice(page * pageSize, (page + 1) * pageSize);
@@ -1824,96 +1701,105 @@ function ResultGrid({ result }: { result: QueryResult }) {
   }
 
   return (
-    <div className="space-y-2">
-      {/* View toggle */}
-      <div className="flex items-center gap-1">
+    <div className="rounded-lg border border-border overflow-hidden">
+      {/* Tab strip */}
+      <div className="flex items-center border-b border-border bg-muted/20">
+        {([
+          { active: !showChart, label: "Table", icon: <Table2 className="h-3.5 w-3.5" />, onClick: () => setShowChart(false) },
+          { active: showChart,  label: "Chart", icon: <BarChart2 className="h-3.5 w-3.5" />, onClick: () => setShowChart(true) },
+        ] as const).map(({ active, label, icon, onClick }) => (
+          <button
+            key={label}
+            onClick={onClick}
+            className={[
+              "flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium border-b-2 transition-all",
+              active
+                ? "border-primary text-foreground bg-background"
+                : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30",
+            ].join(" ")}
+          >
+            {icon}
+            {label}
+          </button>
+        ))}
         <button
-          onClick={() => setShowChart(false)}
-          className={`flex items-center gap-1 px-2 py-1 rounded border text-[10px] transition-colors ${
-            !showChart
-              ? "bg-primary/20 border-primary/50 text-primary font-semibold"
-              : "bg-muted/40 border-border text-muted-foreground hover:text-foreground"
-          }`}
+          onClick={() => exportCsv(result.columns, result.data, `${result.label.replace(/\s+/g, "_")}.csv`)}
+          className="ml-auto flex items-center gap-1.5 px-3 py-2.5 text-[10px] text-muted-foreground hover:text-foreground hover:bg-muted/30 transition-colors border-l border-border"
         >
-          <Table2 className="h-3 w-3" /> Table
-        </button>
-        <button
-          onClick={() => setShowChart(true)}
-          className={`flex items-center gap-1 px-2 py-1 rounded border text-[10px] transition-colors ${
-            showChart
-              ? "bg-primary/20 border-primary/50 text-primary font-semibold"
-              : "bg-muted/40 border-border text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <BarChart2 className="h-3 w-3" /> Chart
+          <Download className="h-3 w-3" /> Export CSV
         </button>
       </div>
 
-      {/* Chart view */}
-      {showChart && (
-        <ResultCharts columns={result.columns} data={result.data} />
-      )}
-
-      {/* Table view */}
-      {!showChart && (
-        <div className="space-y-1.5">
-          <div className="overflow-x-auto rounded-md border border-border">
-            <table className="w-full text-xs">
-              <thead>
-                <tr className="border-b border-border bg-muted/50 text-left text-muted-foreground uppercase tracking-wider">
-                  {result.columns.map((col) => (
-                    <th key={col} className="px-3 py-1.5 font-semibold whitespace-nowrap">
-                      {col}
-                    </th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {pageData.map((row, i) => (
-                  <tr
-                    key={i}
-                    className="border-b border-border/50 transition-colors hover:bg-muted/20"
-                  >
+      {/* Content */}
+      <div className="p-3">
+        {showChart ? (
+          <ResultCharts
+            key={result.executionTime}
+            columns={result.columns}
+            data={result.data}
+            defaultChartType={defaultChart?.type}
+            defaultXCol={defaultChart?.xCol}
+            defaultYCols={defaultChart?.yCols}
+            defaultAggFn={defaultChart?.aggFn}
+            defaultAggEnabled={defaultChart?.aggEnabled}
+          />
+        ) : (
+          <div className="space-y-1.5">
+            <div className="overflow-x-auto rounded-md border border-border">
+              <table className="w-full text-xs">
+                <thead>
+                  <tr className="border-b border-border bg-muted/50 text-left text-muted-foreground uppercase tracking-wider">
                     {result.columns.map((col) => (
-                      <td key={col} className="px-3 py-1.5 font-mono text-foreground whitespace-nowrap">
-                        {row[col] === null || row[col] === undefined ? (
-                          <span className="text-muted-foreground italic">NULL</span>
-                        ) : (
-                          String(row[col])
-                        )}
-                      </td>
+                      <th key={col} className="px-3 py-1.5 font-semibold whitespace-nowrap">
+                        {col}
+                      </th>
                     ))}
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {/* pagination */}
-          {totalPages > 1 && (
-            <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
-              <button
-                disabled={page === 0}
-                onClick={() => setPage((p) => p - 1)}
-                className="px-2 py-0.5 rounded border border-border bg-muted disabled:opacity-40 hover:bg-muted/70"
-              >
-                ‹ Prev
-              </button>
-              <span>
-                Page {page + 1} / {totalPages}
-              </span>
-              <button
-                disabled={page >= totalPages - 1}
-                onClick={() => setPage((p) => p + 1)}
-                className="px-2 py-0.5 rounded border border-border bg-muted disabled:opacity-40 hover:bg-muted/70"
-              >
-                Next ›
-              </button>
-              <span className="ml-auto">{result.data.length} total rows</span>
+                </thead>
+                <tbody>
+                  {pageData.map((row, i) => (
+                    <tr
+                      key={i}
+                      className="border-b border-border/50 transition-colors hover:bg-muted/20"
+                    >
+                      {result.columns.map((col) => (
+                        <td key={col} className="px-3 py-1.5 font-mono text-foreground whitespace-nowrap">
+                          {row[col] === null || row[col] === undefined ? (
+                            <span className="text-muted-foreground italic">NULL</span>
+                          ) : (
+                            String(row[col])
+                          )}
+                        </td>
+                      ))}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          )}
-        </div>
-      )}
+
+            {totalPages > 1 && (
+              <div className="flex items-center gap-2 text-[10px] text-muted-foreground">
+                <button
+                  disabled={page === 0}
+                  onClick={() => setPage((p) => p - 1)}
+                  className="px-2 py-0.5 rounded border border-border bg-muted disabled:opacity-40 hover:bg-muted/70"
+                >
+                  ‹ Prev
+                </button>
+                <span>Page {page + 1} / {totalPages}</span>
+                <button
+                  disabled={page >= totalPages - 1}
+                  onClick={() => setPage((p) => p + 1)}
+                  className="px-2 py-0.5 rounded border border-border bg-muted disabled:opacity-40 hover:bg-muted/70"
+                >
+                  Next ›
+                </button>
+                <span className="ml-auto">{result.data.length} total rows</span>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -1933,6 +1819,7 @@ const QueryEditor = ({
   const [activeTabId, setActiveTabId] = useState(tabs[0].id);
   const [showTemplates, setShowTemplates] = useState(false);
   const [showBuilder, setShowBuilder] = useState(false);
+  const [builderKey, setBuilderKey]   = useState(0);
   const [showSql,     setShowSql]     = useState(false);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const templatesRef = useRef<HTMLDivElement>(null);
@@ -1974,8 +1861,10 @@ const QueryEditor = ({
     setTabs((prev) => prev.map((t) => (t.id === id ? { ...t, sql } : t)));
   };
 
-  const applyTemplate = (sql: string) => {
-    updateSql(activeTabId, sql);
+  const applyTemplate = (sql: string, defaultChart?: DefaultChart) => {
+    setTabs((prev) =>
+      prev.map((t) => (t.id === activeTabId ? { ...t, sql, defaultChart } : t)),
+    );
     setShowTemplates(false);
     textareaRef.current?.focus();
   };
@@ -2011,7 +1900,10 @@ const QueryEditor = ({
           <Button
             variant={showBuilder ? "secondary" : "outline"}
             size="sm"
-            onClick={() => setShowBuilder((v) => !v)}
+            onClick={() => {
+              if (!showBuilder) setBuilderKey((k) => k + 1);
+              setShowBuilder((v) => !v);
+            }}
             className="text-xs gap-1"
           >
             <SlidersHorizontal className="h-3.5 w-3.5" />
@@ -2060,11 +1952,14 @@ const QueryEditor = ({
                             {items.map(tpl => (
                               <button
                                 key={tpl.label}
-                                onClick={() => applyTemplate(tpl.sql)}
+                                onClick={() => applyTemplate(tpl.sql, tpl.defaultChart)}
                                 className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs hover:bg-muted/60 border-b border-border/50 last:border-0 transition-colors"
                               >
                                 <ChevronRight className="h-3 w-3 text-primary shrink-0" />
                                 {tpl.label}
+                                {tpl.defaultChart && (
+                                  <BarChart2 className="h-3 w-3 text-primary/60 ml-auto shrink-0" />
+                                )}
                               </button>
                             ))}
                           </div>
@@ -2120,19 +2015,18 @@ const QueryEditor = ({
       </div>
 
       {/* ── Query Builder ── */}
-      <AnimatePresence>
-        {showBuilder && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.2 }}
-            className="overflow-hidden"
-          >
-            <QueryBuilder onApply={(sql) => { updateSql(activeTabId, sql); setShowBuilder(false); }} />
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <motion.div
+        initial={false}
+        animate={{ height: showBuilder ? "auto" : 0, opacity: showBuilder ? 1 : 0 }}
+        transition={{ duration: 0.2, ease: "easeInOut" }}
+        className="overflow-hidden"
+      >
+        <QueryBuilder
+          key={builderKey}
+          initialSql={activeTab.sql}
+          onApply={(sql) => { updateSql(activeTabId, sql); setShowBuilder(false); }}
+        />
+      </motion.div>
 
       {/* ── Tab strip ── */}
       <div className="flex items-center gap-1 border-b border-border overflow-x-auto pb-px">
@@ -2263,19 +2157,9 @@ const QueryEditor = ({
                       {res.label}
                     </Badge>
 
-                    {!res.error && res.data.length > 0 && (
-                      <button
-                        onClick={() =>
-                          exportCsv(res.columns, res.data, `${res.label.replace(/\s+/g, "_")}.csv`)
-                        }
-                        className="ml-auto flex items-center gap-1 px-2 py-0.5 rounded border border-border bg-muted hover:bg-muted/70 transition-colors"
-                      >
-                        <Download className="h-3 w-3" /> Export CSV
-                      </button>
-                    )}
                   </div>
 
-                  <ResultGrid result={res} />
+                  <ResultGrid result={res} defaultChart={tab.defaultChart} />
                 </motion.div>
               )}
             </AnimatePresence>

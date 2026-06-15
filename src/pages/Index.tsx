@@ -13,6 +13,7 @@ import DataSessionsList from "@/components/DataSessionsList";
 import CallsMap from "@/components/CallsMap";
 import AntennasMap from "@/components/AntennasMap";
 import QueryMap from "@/components/QueryMap";
+import ValidationTab from "@/components/ValidationTab";
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import type { CallRecord } from "@/lib/callData";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -197,6 +198,7 @@ const Index = () => {
   const [statusFilters, setStatusFilters] = useState<StatusFilterKey[]>([]);
   const [lastClickedRowId, setLastClickedRowId] = useState<string | null>(null);
   const [showFilterPanel, setShowFilterPanel] = useState(false);
+  const [locationTableFilter, setLocationTableFilter] = useState<string[]>([]);
 
   useEffect(() => {
     if (activeTab === "calls" && lastClickedRowId) {
@@ -250,12 +252,28 @@ const Index = () => {
     );
   };
 
+  const toggleLocationTableFilter = (loc: string) => {
+    setLocationTableFilter((prev) =>
+      prev.includes(loc) ? prev.filter((l) => l !== loc) : [...prev, loc],
+    );
+  };
+
+  const toggleLocationGroup = (groupLocs: string[]) => {
+    const allActive = groupLocs.every((l) => locationTableFilter.includes(l));
+    if (allActive) {
+      setLocationTableFilter((prev) => prev.filter((l) => !groupLocs.includes(l)));
+    } else {
+      setLocationTableFilter((prev) => [...new Set([...prev, ...groupLocs])]);
+    }
+  };
+
   const clearCallsFilters = () => {
     setSelectedDatabase("");
     setSelectedCallsCollections([]);
     setSelectedLocations([]);
     setSessionValidFilter("all");
     setStatusFilters([]);
+    setLocationTableFilter([]);
   };
 
   const handleDatabaseChange = (newDb: string) => {
@@ -264,6 +282,7 @@ const Index = () => {
     setSelectedLocations([]);
     setSessionValidFilter("all");
     setStatusFilters([]);
+    setLocationTableFilter([]);
     setLocations([]);
     setAllCallsRows([]);
     setCallRecords([]);
@@ -500,6 +519,24 @@ const Index = () => {
     }));
   }, [dataCallsRows]);
 
+  const filteredGroupedDataSessions = useMemo(() => {
+    if (locationTableFilter.length === 0) return groupedDataSessions;
+    return groupedDataSessions.filter((item) => {
+      const loc = item.first?.Location ?? "";
+      return locationTableFilter.includes(loc);
+    });
+  }, [groupedDataSessions, locationTableFilter]);
+
+  const locationGroups = useMemo(() => {
+    const lower = (s: string) => s.toLowerCase();
+    const dataLocs = locations.filter((l) => lower(l).includes("data"));
+    const freeGsmLocs = locations.filter((l) => lower(l).includes("free") || lower(l).includes("gsm"));
+    const groups: { group: string; locs: string[] }[] = [];
+    if (dataLocs.length > 0) groups.push({ group: "Data", locs: dataLocs });
+    if (freeGsmLocs.length > 0) groups.push({ group: "Free + GSM", locs: freeGsmLocs });
+    return groups;
+  }, [locations]);
+
   const selectedDataSessionTests = useMemo(() => {
     if (!selectedDataSessionId) return [];
     return dataCallsRows.filter(r => String(r.SessionId) === selectedDataSessionId);
@@ -635,6 +672,42 @@ const Index = () => {
                 </div>
               </div>
 
+              {/* Location table filter — grouped */}
+              {locations.length > 0 && (
+                <div>
+                  <label className="text-xs font-medium text-foreground block mb-1">Location</label>
+                  <div className="flex flex-wrap gap-1.5">
+                    <button
+                      type="button"
+                      onClick={() => setLocationTableFilter([])}
+                      className={`text-[10px] px-2 py-1 rounded border ${locationTableFilter.length === 0 ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
+                    >
+                      All
+                    </button>
+                    {locationGroups.map(({ group, locs }) => {
+                      const allActive = locs.every((l) => locationTableFilter.includes(l));
+                      const someActive = !allActive && locs.some((l) => locationTableFilter.includes(l));
+                      return (
+                        <button
+                          key={group}
+                          type="button"
+                          onClick={() => toggleLocationGroup(locs)}
+                          className={`text-[10px] px-2 py-1 rounded border ${
+                            allActive
+                              ? "bg-primary text-primary-foreground border-primary"
+                              : someActive
+                              ? "bg-primary/30 text-primary border-primary/60"
+                              : "border-border bg-muted hover:bg-muted/70"
+                          }`}
+                        >
+                          {group}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
+
               {/* Active filter badges */}
               <div className="pt-2 border-t border-border">
                 <p className="text-[10px] text-muted-foreground mb-1.5">Active filters</p>
@@ -642,6 +715,7 @@ const Index = () => {
                   <Badge variant="secondary" className="text-[10px]">DB: {selectedDatabase || "—"}</Badge>
                   <Badge variant="secondary" className="text-[10px]">Collections: {selectedCallsCollections.length === 0 ? "None" : selectedCallsCollections.length}</Badge>
                   <Badge variant="secondary" className="text-[10px]">Locations: {selectedLocations.length === 0 ? "All" : selectedLocations.length}</Badge>
+                  {locationTableFilter.length > 0 && <Badge variant="secondary" className="text-[10px]">Loc filter: {locationTableFilter.join(", ")}</Badge>}
                   {sessionValidFilter !== "all" && <Badge variant="secondary" className="text-[10px]">Session: {sessionValidFilter === "1" ? "Valid" : "Invalid"}</Badge>}
                   {statusFilters.length > 0 && <Badge variant="secondary" className="text-[10px]">Status: {statusFilters.join(", ")}</Badge>}
                 </div>
@@ -673,7 +747,7 @@ const Index = () => {
             </div>
           </div>
 
-          {!["queries", "query-map", "map2"].includes(activeTab) && (
+          {!["queries", "query-map", "map2", "validation"].includes(activeTab) && (
             <div className="flex items-center gap-2">
               {/* Edit Filters button */}
               <button
@@ -702,7 +776,7 @@ const Index = () => {
           )}
 
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            {!["queries", "query-map", "map2"].includes(activeTab) && (
+            {!["queries", "query-map", "map2", "validation"].includes(activeTab) && (
               <button
                 type="button"
                 onClick={clearCallsFilters}
@@ -727,7 +801,7 @@ const Index = () => {
                 </motion.button>
               )}
             </AnimatePresence>
-            {!["queries", "query-map", "map2"].includes(activeTab) && (
+            {!["queries", "query-map", "map2", "validation"].includes(activeTab) && (
               <span>{filteredCallRecords.length} calls recorded</span>
             )}
           </div>
@@ -759,6 +833,9 @@ const Index = () => {
               </TabsTrigger>
               <TabsTrigger value="map2" className="gap-1.5 text-xs">
                 <MapPin className="h-3.5 w-3.5 text-cyan-400" /> Antennas
+              </TabsTrigger>
+              <TabsTrigger value="validation" className="gap-1.5 text-xs">
+                <Activity className="h-3.5 w-3.5 text-orange-400" /> Validation
               </TabsTrigger>
             </TabsList>
           </div>
@@ -806,28 +883,28 @@ const Index = () => {
 
           <TabsContent value="calls" className="space-y-4">
             <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4 items-start">
-              <aside className="space-y-3 lg:sticky lg:top-24">
-                <div className="bg-card border border-border rounded-lg p-3">
-                  <div className="mb-2 flex items-center justify-between">
+              <aside className="space-y-2 lg:sticky lg:top-24">
+                <div className="bg-card border border-border rounded-lg p-2">
+                  <div className="mb-1.5 flex items-center justify-between">
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                       Filters
                     </h3>
                     <button
                       type="button"
                       onClick={clearCallsFilters}
-                      className="text-[10px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70"
+                      className="text-[10px] px-2 py-0.5 rounded border border-border bg-muted hover:bg-muted/70"
                     >
                       Clear filters
                     </button>
                   </div>
 
-                  <div className="space-y-3">
+                  <div className="space-y-2">
                     <div>
-                      <label className="text-xs font-medium">Database (Global)</label>
+                      <label className="text-[11px] font-medium text-muted-foreground">Database</label>
                       <select
                         value={selectedDatabase}
                         onChange={(e) => handleDatabaseChange(e.target.value)}
-                        className="mt-1 w-full bg-muted border border-border rounded-md px-3 py-2 text-sm"
+                        className="mt-0.5 w-full bg-muted border border-border rounded-md px-2 py-1 text-xs"
                       >
                         <option value="">Select database</option>
                         {databases.map((db) => (
@@ -840,18 +917,18 @@ const Index = () => {
 
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-medium">Collections</label>
+                        <label className="text-[11px] font-medium text-muted-foreground">Collections</label>
                         <span className="text-[10px] text-muted-foreground">
                           {formatLocationSelectionLabel(selectedCallsCollections.length, collectionNames.length)}
                         </span>
                       </div>
 
-                      <div className="flex gap-1.5 mb-2">
+                      <div className="flex gap-1 mb-1">
                         <button
                           type="button"
                           onClick={selectAllCollections}
                           disabled={collectionNames.length === 0 || collectionsLoading}
-                          className="text-[10px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70 disabled:opacity-50"
+                          className="text-[10px] px-2 py-0.5 rounded border border-border bg-muted hover:bg-muted/70 disabled:opacity-50"
                         >
                           Select all
                         </button>
@@ -859,29 +936,29 @@ const Index = () => {
                           type="button"
                           onClick={clearCollectionSelection}
                           disabled={collectionNames.length === 0 || collectionsLoading}
-                          className="text-[10px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70 disabled:opacity-50"
+                          className="text-[10px] px-2 py-0.5 rounded border border-border bg-muted hover:bg-muted/70 disabled:opacity-50"
                         >
                           Clear
                         </button>
                       </div>
 
-                      <div className="w-full bg-muted/30 border border-border rounded-md p-2 text-sm h-32 overflow-y-auto space-y-1">
+                      <div className="w-full bg-muted/30 border border-border rounded-md p-1.5 text-sm h-20 overflow-y-auto space-y-0.5">
                         {!selectedDatabase && (
                           <p className="text-[11px] text-muted-foreground">Select database first.</p>
                         )}
                         {selectedDatabase && collectionsLoading && (
-                          <p className="text-[11px] text-muted-foreground">Loading collections...</p>
+                          <p className="text-[11px] text-muted-foreground">Loading...</p>
                         )}
                         {selectedDatabase && !collectionsLoading && collectionNames.length === 0 && (
                           <p className="text-[11px] text-muted-foreground">No collections found.</p>
                         )}
                         {selectedDatabase && !collectionsLoading && collectionNames.map((name) => (
-                          <label key={name} className="flex items-center gap-2 text-xs text-foreground cursor-pointer hover:bg-muted/50 p-1 rounded-sm">
+                          <label key={name} className="flex items-center gap-2 text-xs text-foreground cursor-pointer hover:bg-muted/50 px-1 py-0.5 rounded-sm">
                             <input
                               type="checkbox"
                               checked={selectedCallsCollections.includes(name)}
                               onChange={() => toggleCollection(name)}
-                              className="h-3.5 w-3.5 rounded-sm border-primary text-primary focus:ring-primary"
+                              className="h-3 w-3 rounded-sm border-primary text-primary focus:ring-primary"
                             />
                             <span className="truncate">{name}</span>
                           </label>
@@ -891,18 +968,18 @@ const Index = () => {
 
                     <div>
                       <div className="flex items-center justify-between">
-                        <label className="text-xs font-medium">Locations</label>
+                        <label className="text-[11px] font-medium text-muted-foreground">Locations</label>
                         <span className="text-[10px] text-muted-foreground">
                           {formatLocationSelectionLabel(selectedLocations.length, locations.length)}
                         </span>
                       </div>
 
-                      <div className="mt-1 flex gap-1.5">
+                      <div className="mt-1 flex gap-1">
                         <button
                           type="button"
                           onClick={selectAllLocations}
                           disabled={selectedCallsCollections.length === 0 || locations.length === 0 || locationsLoading}
-                          className="text-[10px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70 disabled:opacity-50"
+                          className="text-[10px] px-2 py-0.5 rounded border border-border bg-muted hover:bg-muted/70 disabled:opacity-50"
                         >
                           Select all
                         </button>
@@ -910,18 +987,18 @@ const Index = () => {
                           type="button"
                           onClick={clearLocationSelection}
                           disabled={selectedCallsCollections.length === 0 || locations.length === 0 || locationsLoading}
-                          className="text-[10px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70 disabled:opacity-50"
+                          className="text-[10px] px-2 py-0.5 rounded border border-border bg-muted hover:bg-muted/70 disabled:opacity-50"
                         >
                           All rows
                         </button>
                       </div>
 
-                      <div className="mt-2 max-h-56 overflow-auto rounded-md border border-border bg-muted/30 p-2 space-y-1">
+                      <div className="mt-1 max-h-24 overflow-auto rounded-md border border-border bg-muted/30 p-1.5 space-y-0.5">
                         {selectedCallsCollections.length === 0 && (
                           <p className="text-[11px] text-muted-foreground">Select collection first.</p>
                         )}
                         {selectedCallsCollections.length > 0 && locationsLoading && (
-                          <p className="text-[11px] text-muted-foreground">Loading locations...</p>
+                          <p className="text-[11px] text-muted-foreground">Loading...</p>
                         )}
                         {selectedCallsCollections.length > 0 && !locationsLoading && locations.length === 0 && (
                           <p className="text-[11px] text-muted-foreground">No locations found.</p>
@@ -932,100 +1009,86 @@ const Index = () => {
                               type="checkbox"
                               checked={selectedLocations.includes(name)}
                               onChange={() => toggleLocation(name)}
-                              className="h-3.5 w-3.5"
+                              className="h-3 w-3"
                             />
                             <span>{name}</span>
                           </label>
                         ))}
                       </div>
-
-                      <p className="mt-1 text-[11px] text-muted-foreground">
-                        If no location is selected, all locations are included.
-                      </p>
                     </div>
 
                     <div>
                       <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-medium">Session Valid</label>
+                        <label className="text-[11px] font-medium text-muted-foreground">Session Valid</label>
                       </div>
-                      <div className="flex gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setSessionValidFilter("all")}
-                          className={`text-[10px] px-2 py-1 rounded border ${sessionValidFilter === "all" ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
-                        >
-                          All
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setSessionValidFilter("1")}
-                          className={`text-[10px] px-2 py-1 rounded border ${sessionValidFilter === "1" ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
-                        >
-                          Valid
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setSessionValidFilter("0")}
-                          className={`text-[10px] px-2 py-1 rounded border ${sessionValidFilter === "0" ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
-                        >
-                          Invalid
-                        </button>
+                      <div className="flex gap-1">
+                        <button type="button" onClick={() => setSessionValidFilter("all")} className={`text-[10px] px-2 py-0.5 rounded border ${sessionValidFilter === "all" ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}>All</button>
+                        <button type="button" onClick={() => setSessionValidFilter("1")} className={`text-[10px] px-2 py-0.5 rounded border ${sessionValidFilter === "1" ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}>Valid</button>
+                        <button type="button" onClick={() => setSessionValidFilter("0")} className={`text-[10px] px-2 py-0.5 rounded border ${sessionValidFilter === "0" ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}>Invalid</button>
                       </div>
                     </div>
 
                     <div>
-                      <div className="flex items-center justify-between mb-1">
-                        <label className="text-xs font-medium">Status</label>
-                      </div>
-                      <div className="flex flex-wrap gap-1.5">
-                        <button
-                          type="button"
-                          onClick={() => setStatusFilters([])}
-                          className={`text-[10px] px-2 py-1 rounded border ${statusFilters.length === 0 ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
-                        >
-                          All
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => toggleStatusFilter("completed")}
-                          className={`text-[10px] px-2 py-1 rounded border ${statusFilters.includes("completed") ? "bg-success/50 text-success-foreground border-success" : "border-border bg-muted hover:bg-muted/70"}`}
-                        >
-                          Completed
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => toggleStatusFilter("dropped")}
-                          className={`text-[10px] px-2 py-1 rounded border ${statusFilters.includes("dropped") ? "bg-destructive/50 text-destructive-foreground border-destructive" : "border-border bg-muted hover:bg-muted/70"}`}
-                        >
-                          Drop
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => toggleStatusFilter("failed")}
-                          className={`text-[10px] px-2 py-1 rounded border ${statusFilters.includes("failed") ? "bg-warning/50 text-warning-foreground border-warning" : "border-border bg-muted hover:bg-muted/70"}`}
-                        >
-                          Fail
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => toggleStatusFilter("system release")}
-                          className={`text-[10px] px-2 py-1 rounded border ${statusFilters.includes("system release") ? "bg-violet-500/50 text-violet-100 border-violet-500" : "border-border bg-muted hover:bg-muted/70"}`}
-                        >
-                          System Release
-                        </button>
+                      <label className="text-[11px] font-medium text-muted-foreground block mb-1">Status</label>
+                      <div className="flex flex-wrap gap-1">
+                        <button type="button" onClick={() => setStatusFilters([])} className={`text-[10px] px-2 py-0.5 rounded border ${statusFilters.length === 0 ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}>All</button>
+                        <button type="button" onClick={() => toggleStatusFilter("completed")} className={`text-[10px] px-2 py-0.5 rounded border ${statusFilters.includes("completed") ? "bg-success/50 text-success-foreground border-success" : "border-border bg-muted hover:bg-muted/70"}`}>Completed</button>
+                        <button type="button" onClick={() => toggleStatusFilter("dropped")} className={`text-[10px] px-2 py-0.5 rounded border ${statusFilters.includes("dropped") ? "bg-destructive/50 text-destructive-foreground border-destructive" : "border-border bg-muted hover:bg-muted/70"}`}>Drop</button>
+                        <button type="button" onClick={() => toggleStatusFilter("failed")} className={`text-[10px] px-2 py-0.5 rounded border ${statusFilters.includes("failed") ? "bg-warning/50 text-warning-foreground border-warning" : "border-border bg-muted hover:bg-muted/70"}`}>Fail</button>
+                        <button type="button" onClick={() => toggleStatusFilter("system release")} className={`text-[10px] px-2 py-0.5 rounded border ${statusFilters.includes("system release") ? "bg-violet-500/50 text-violet-100 border-violet-500" : "border-border bg-muted hover:bg-muted/70"}`}>Sys Release</button>
                       </div>
                     </div>
+
+                    {locations.length > 0 && (
+                      <div>
+                        <label className="text-[11px] font-medium text-muted-foreground block mb-1">Location</label>
+                        <div className="flex flex-wrap gap-1">
+                          <button
+                            type="button"
+                            onClick={() => setLocationTableFilter([])}
+                            className={`text-[10px] px-2 py-0.5 rounded border ${locationTableFilter.length === 0 ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
+                          >
+                            All
+                          </button>
+                          {locationGroups.map(({ group, locs }) => {
+                            const allActive = locs.every((l) => locationTableFilter.includes(l));
+                            const someActive = !allActive && locs.some((l) => locationTableFilter.includes(l));
+                            return (
+                              <button
+                                key={group}
+                                type="button"
+                                onClick={() => toggleLocationGroup(locs)}
+                                className={`text-[10px] px-2 py-0.5 rounded border ${
+                                  allActive
+                                    ? "bg-primary text-primary-foreground border-primary"
+                                    : someActive
+                                    ? "bg-primary/30 text-primary border-primary/60"
+                                    : "border-border bg-muted hover:bg-muted/70"
+                                }`}
+                              >
+                                {group}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
-                <div className="bg-card border border-border rounded-lg p-3">
-                  <p className="text-[11px] text-muted-foreground mb-1">Active filters</p>
-                  <div className="flex flex-wrap gap-1.5">
+                <div className="bg-card border border-border rounded-lg p-2">
+                  <p className="text-[10px] text-muted-foreground mb-1">Active filters</p>
+                  <div className="flex flex-wrap gap-1">
                     <Badge variant="secondary" className="text-[10px]">DB: {selectedDatabase || "-"}</Badge>
-                    <Badge variant="secondary" className="text-[10px]">Collections: {selectedCallsCollections.length === 0 ? "None" : selectedCallsCollections.length}</Badge>
+                    <Badge variant="secondary" className="text-[10px]">Col: {selectedCallsCollections.length === 0 ? "None" : selectedCallsCollections.length}</Badge>
                     <Badge variant="secondary" className="text-[10px]">
                       Locations: {selectedLocations.length === 0 ? "All" : selectedLocations.length}
                     </Badge>
+                    {locationTableFilter.length > 0 && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        Loc filter: {locationTableFilter.join(", ")}
+                      </Badge>
+                    )}
                     {sessionValidFilter !== "all" && (
                       <Badge variant="secondary" className="text-[10px]">
                         Session: {sessionValidFilter === "1" ? "Valid" : "Invalid"}
@@ -1213,16 +1276,24 @@ const Index = () => {
                 <div className="px-4 py-3 border-b border-border">
                   <h2 className="text-sm font-semibold text-foreground">Data Calls (Mobile)</h2>
                   <p className="text-xs text-muted-foreground">
-                    {dataCallsLoading ? "Loading..." : `${groupedDataSessions.length} sessions`}
+                    {dataCallsLoading
+                      ? "Loading..."
+                      : locationTableFilter.length > 0
+                        ? `${filteredGroupedDataSessions.length} / ${groupedDataSessions.length} sessions`
+                        : `${groupedDataSessions.length} sessions`}
                   </p>
                 </div>
                 {!dataCallsLoading && groupedDataSessions.length === 0 ? (
                   <p className="px-4 py-6 text-center text-xs text-muted-foreground">
                     Select a collection to load data calls.
                   </p>
+                ) : !dataCallsLoading && filteredGroupedDataSessions.length === 0 ? (
+                  <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+                    No data sessions match the selected location filter.
+                  </p>
                 ) : (
                   <DataSessionsList
-                    sessions={groupedDataSessions}
+                    sessions={filteredGroupedDataSessions}
                     selectedSessionId={selectedDataSessionId}
                     onSelectSession={(id) => {
                       setSelectedDataSessionId(id);
@@ -1285,6 +1356,16 @@ const Index = () => {
             <QueryMap
               databases={databases}
               defaultDatabase={selectedDatabase}
+            />
+          </TabsContent>
+
+          <TabsContent value="validation">
+            <ValidationTab
+              databases={databases}
+              defaultDatabase={selectedDatabase}
+              collectionNames={collectionNames}
+              collectionsLoading={collectionsLoading}
+              onDatabaseChange={handleDatabaseChange}
             />
           </TabsContent>
         </Tabs>

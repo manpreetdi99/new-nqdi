@@ -196,7 +196,7 @@ const COLOR_SCHEMES: Record<string, ColorScheme> = {
   },
   technology_data: {
     type: "category",
-    label: "Technology – DATA (LTE/5G)",
+    label: "DATA Technology – (LTE/5G)",
     suggestCol: "technology_data",
     categories: [
       { value: "LTE-5G NR", color: "#800080" },
@@ -224,10 +224,10 @@ const COLOR_SCHEMES: Record<string, ColorScheme> = {
     label: "OOKLA UL Throughput (Mbps)",
     suggestCol: "ookla_ul",
     buckets: [
-      { min: 50,  max: 10000, color: "#3F007D", label: "≥ 50 Mbps" },
-      { min: 20,  max: 50,    color: "#7A0A00", label: "20–50 Mbps" },
-      { min: 10,  max: 20,    color: "#FF0000", label: "10–20 Mbps" },
-      { min: 5,   max: 10,    color: "#FF8A00", label: "5–10 Mbps" },
+      { min: 100,  max: 10000, color: "#3F007D", label: "≥ 100 Mbps" },
+      { min: 50,  max: 100,    color: "#7A0A00", label: "20–50 Mbps" },
+      { min: 20,  max: 50,    color: "#FF0000", label: "10–20 Mbps" },
+      { min: 5,   max: 20,    color: "#FF8A00", label: "5–10 Mbps" },
       { min: 1,   max: 5,     color: "#0076FF", label: "1–5 Mbps" },
       { min: 0,   max: 1,     color: "#00EEFF", label: "0–1 Mbps" },
     ],
@@ -258,6 +258,35 @@ const COLOR_SCHEMES: Record<string, ColorScheme> = {
       { min: -100, max: -90,  color: "#ffff00", label: "-100 to -90" },
       { min: -110, max: -100, color: "#ff9900", label: "-110 to -100" },
       { min: -156, max: -110, color: "#ff0000", label: "-156 to -110" },
+    ],
+  },
+  lte_rsrq: {
+    type: "range",
+    label: "LTE Scanner RSRQ (dB)",
+    suggestCol: "RSRQ",
+    buckets: [
+      { min: -3,  max: 0,   color: "#3E0480", label: "-3 to 0 (εξαιρετικό)" },
+      { min: -6,  max: -3,  color: "#035E03", label: "-6 to -3" },
+      { min: -10, max: -6,  color: "#00ff00", label: "-10 to -6" },
+      { min: -13, max: -10, color: "#ffff00", label: "-13 to -10" },
+      { min: -16, max: -13, color: "#ff9900", label: "-16 to -13" },
+      { min: -20, max: -16, color: "#ff0000", label: "-20 to -16" },
+      { min: -40, max: -20, color: "#800000", label: "< -20 (πολύ χαμηλό)" },
+    ],
+  },
+  rxlev_scanner_gsm: {
+    type: "range",
+    label: "GSM Scanner RxLev (dBm)",
+    suggestCol: "RxLev",
+    buckets: [
+      { min: -50, max: 0,    color: "#3E0480", label: "≥ -50 (εξαιρετικό)" },
+      { min: -60, max: -50,  color: "#035E03", label: "-50 to -60" },
+      { min: -70, max: -60,  color: "#00ff00", label: "-60 to -70" },
+      { min: -80, max: -70,  color: "#99ff00", label: "-70 to -80" },
+      { min: -90, max: -80,  color: "#ffff00", label: "-80 to -90" },
+      { min: -100, max: -90, color: "#ff9900", label: "-90 to -100" },
+      { min: -110, max: -100, color: "#ff0000", label: "-100 to -110" },
+      { min: -200, max: -110, color: "#800000", label: "< -110 (πολύ χαμηλό)" },
     ],
   },
   nr5g_sssinr: {
@@ -314,11 +343,17 @@ function MapBounds({ points }: { points: Array<{ lat: number; lng: number }> }) 
   const map = useMap();
   useEffect(() => {
     if (points.length === 0) return;
-    const lats = points.map((p) => p.lat);
-    const lngs = points.map((p) => p.lng);
+    let minLat = points[0].lat, maxLat = points[0].lat;
+    let minLng = points[0].lng, maxLng = points[0].lng;
+    for (let i = 1; i < points.length; i++) {
+      if (points[i].lat < minLat) minLat = points[i].lat;
+      if (points[i].lat > maxLat) maxLat = points[i].lat;
+      if (points[i].lng < minLng) minLng = points[i].lng;
+      if (points[i].lng > maxLng) maxLng = points[i].lng;
+    }
     const b: [[number, number], [number, number]] = [
-      [Math.min(...lats), Math.min(...lngs)],
-      [Math.max(...lats), Math.max(...lngs)],
+      [minLat, minLng],
+      [maxLat, maxLng],
     ];
     if (b[0][0] === b[1][0] && b[0][1] === b[1][1]) {
       map.setView([b[0][0], b[0][1]], 12);
@@ -332,13 +367,13 @@ function MapBounds({ points }: { points: Array<{ lat: number; lng: number }> }) 
 // ── 3-Operator Sync ───────────────────────────────────────────────────────────
 // Token-based: split on _/-./ then match known abbreviations
 const OPERATOR_GROUPS: Array<{ name: string; tokens: string[] }> = [
-  { name: "Cosmote", tokens: ["cosmote", "cosm", "cos"] },
-  { name: "Vodafone", tokens: ["vodafone", "voda", "vod"] },
-  { name: "Nova",     tokens: ["nova", "wind", "nov"] },
+  { name: "Cosmote", tokens: ["cosmote"] },
+  { name: "Vodafone", tokens: ["vodafone"] },
+  { name: "Nova",     tokens: ["nova", "wind"] },
 ];
 
 function tokenize(s: string): string[] {
-  return s.toLowerCase().replace(/[_\-\.\s]+/g, " ").split(" ").filter(Boolean);
+  return s.toLowerCase().replace(/[-_.\s]+/g, " ").split(" ").filter(Boolean);
 }
 
 function detectOperator(collection: string): string | null {
@@ -399,6 +434,173 @@ interface QueryTemplate {
 }
 
 const TEMPLATES: QueryTemplate[] = [
+  {
+    label: "R24 LTE Radio - RSRP",
+    category: "SmartAnalytics R24",
+    mode: "points",
+    valueCol: "rsrp",
+    colorScheme: "rsrp_data",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  CAST(POS.Latitude  AS FLOAT) AS latitude,
+  CAST(POS.Longitude AS FLOAT) AS longitude,
+  LR.RSRP AS rsrp,
+  LR.RSRQ,
+  LR.SINR,
+  LR.EARFCN,
+  LR.PhyCellId AS PCI,
+  DF.Location,
+  DF.CollectionName
+FROM FactLTERadio LR
+LEFT JOIN DmnPosition POS ON POS.DmnId = LR.DmnIdPosition
+LEFT JOIN DmnFile DF ON DF.DmnId = LR.DmnIdFile
+WHERE POS.Latitude IS NOT NULL
+  AND POS.Longitude IS NOT NULL
+  AND LR.RSRP IS NOT NULL
+  AND DF.CollectionName = '{collection}'
+  AND DF.Location = '{location}'
+ORDER BY LR.FullDate`,
+  },
+  {
+    label: "R24 Data Transfer - Throughput",
+    category: "SmartAnalytics R24",
+    mode: "points",
+    valueCol: "DLThrpt",
+    colorScheme: "dl_throughput",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  CAST(C.LAT AS FLOAT) AS latitude,
+  CAST(C.LON AS FLOAT) AS longitude,
+  ROUND(CAST(C.[Transfer Throughput (kbps)] AS FLOAT), 1) AS DLThrpt,
+  C.[Test Name] AS TestName,
+  C.[Transfer Status] AS TransferStatus,
+  C.Technology,
+  C.[Start Technology] AS StartTechnology,
+  DF.Location,
+  DF.CollectionName
+FROM FactCDRCombined C
+LEFT JOIN DmnFile DF ON DF.DmnId = C.DmnIdFile
+WHERE C.LAT IS NOT NULL
+  AND C.LON IS NOT NULL
+  AND C.[Transfer Throughput (kbps)] IS NOT NULL
+  AND DF.CollectionName = '{collection}'
+  AND DF.Location = '{location}'
+ORDER BY C.[Test Start TS]`,
+  },
+  {
+    label: "R24 Voice - MOS/SQ",
+    category: "SmartAnalytics R24",
+    mode: "points",
+    valueCol: "LQ",
+    colorScheme: "mos_lq",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  CAST(FCV.LatitudeA AS FLOAT) AS latitude,
+  CAST(FCV.LongitudeA AS FLOAT) AS longitude,
+  FCV.AvgSQ AS LQ,
+  FCV.CallStatus,
+  FCV.CallSetupTime_s,
+  FCV.CallDuration_s,
+  FCV.CallTechnologyA,
+  DF.Location,
+  DF.CollectionName
+FROM FactCDRVoice FCV
+LEFT JOIN DmnFile DF ON DF.DmnId = FCV.DmnIdFile
+WHERE FCV.LatitudeA IS NOT NULL
+  AND FCV.LongitudeA IS NOT NULL
+  AND FCV.AvgSQ IS NOT NULL
+  AND DF.CollectionName = '{collection}'
+  AND DF.Location = '{location}'
+ORDER BY FCV.CallSessionStartTS`,
+  },
+  {
+    label: "R24 GSM Radio - RxLevSub",
+    category: "SmartAnalytics R24",
+    mode: "points",
+    valueCol: "RxLevSub",
+    colorScheme: "rxlevsub_gsm",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  CAST(POS.Latitude  AS FLOAT) AS latitude,
+  CAST(POS.Longitude AS FLOAT) AS longitude,
+  GR.RxLevSub,
+  GR.RxQualSub,
+  GR.BCCH,
+  GR.BSIC,
+  DF.Location,
+  DF.CollectionName
+FROM FactGSMRadio GR
+LEFT JOIN DmnPosition POS ON POS.DmnId = GR.DmnIdPosition
+LEFT JOIN DmnFile DF ON DF.DmnId = GR.DmnIdFile
+WHERE POS.Latitude IS NOT NULL
+  AND POS.Longitude IS NOT NULL
+  AND GR.RxLevSub IS NOT NULL
+  AND DF.CollectionName = '{collection}'
+  AND DF.Location = '{location}'
+ORDER BY GR.FullDate`,
+  },
+  {
+    label: "R24 LTE Scanner - top RSRP",
+    category: "SmartAnalytics R24",
+    mode: "points",
+    valueCol: "RSRP",
+    colorScheme: "rsrp_data",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  CAST(POS.Latitude  AS FLOAT) AS latitude,
+  CAST(POS.Longitude AS FLOAT) AS longitude,
+  LS.RSRP,
+  LS.RSRQ,
+  LS.SINR,
+  LS.EARFCN,
+  LS.PCI,
+  LS.CGI,
+  DF.Location,
+  DF.CollectionName
+FROM FactLTEScanner LS
+LEFT JOIN DmnPosition POS ON POS.DmnId = LS.DmnIdPosition
+LEFT JOIN DmnFile DF ON DF.DmnId = LS.DmnIdFile
+WHERE LS.DmnIdTopN_RSRP = 1
+  AND POS.Latitude IS NOT NULL
+  AND POS.Longitude IS NOT NULL
+  AND DF.CollectionName = '{collection}'
+  AND DF.Location = '{location}'
+ORDER BY LS.FullDate`,
+  },
+  {
+    label: "R24 5G Phone - SS-RSRP",
+    category: "SmartAnalytics R24",
+    mode: "points",
+    valueCol: "SS-RSRP",
+    colorScheme: "nr5g_ssrsrp",
+    labelCol: "Location",
+    requiresFilters: true,
+    nrarfcnCol: "NRARFCN",
+    sql: `SELECT
+  CAST(POS.Latitude  AS FLOAT) AS latitude,
+  CAST(POS.Longitude AS FLOAT) AS longitude,
+  NR.RSRP AS [SS-RSRP],
+  NR.RSRQ AS [SS-RSRQ],
+  NR.SINR AS [SS-SINR],
+  NR.NRARFCN,
+  NR.PCI,
+  DF.Location,
+  DF.CollectionName
+FROM FactNR5GRadio NR
+LEFT JOIN DmnPosition POS ON POS.DmnId = NR.DmnIdPosition
+LEFT JOIN DmnFile DF ON DF.DmnId = NR.DmnIdFile
+WHERE POS.Latitude IS NOT NULL
+  AND POS.Longitude IS NOT NULL
+  AND NR.RSRP IS NOT NULL
+  AND DF.CollectionName = '{collection}'
+  AND DF.Location = '{location}'
+ORDER BY NR.FullDate`,
+  },
   // ── Individual GPS Points ───────────────────────────────────────────────
   {
     label: "RSRP σημεία μέτρησης (DATA panel)",
@@ -564,6 +766,56 @@ WHERE l1.formatid <> 'IDLE'
   AND f.CollectionName = '{collection}'
   AND f.ASideLocation  = '{location}'
 ORDER BY l1.msgTime`,
+  },
+  {
+    label: "GSM Scanner – RxLev",
+    category: "SCANNER",
+    mode: "points",
+    valueCol: "RxLev",
+    colorScheme: "rxlev_scanner_gsm",
+    labelCol: "Location",
+    sql: `SELECT
+  gs.RxLev,
+  gs.BCCH,
+  gs.BSIC,
+  gs.LAC,
+  gs.CId,
+  gs.CGI,
+  fl.ASideLocation    AS Location,
+  fl.CollectionName,
+  CAST(pos.Latitude  AS FLOAT) AS latitude,
+  CAST(pos.Longitude AS FLOAT) AS longitude
+FROM [dbo].[FactGSMScanner] gs
+LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = gs.[FileId]
+LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = gs.[PosId]
+WHERE gs.[DmnIdTopN_RxLev] = 1
+  AND fl.CollectionName = '{collection}'
+  AND fl.ASideLocation  = '{location}'
+ORDER BY latitude, longitude`,
+  },
+  {
+    label: "GSM Radio – RxQual",
+    category: "GSM",
+    mode: "points",
+    valueCol: "RxQual",
+    colorScheme: "rxqualsub_gsm",
+    labelCol: "Location",
+    sql: `SELECT
+  gr.RxQual,
+  gr.RxLev,
+  gr.BCCH,
+  gr.BSIC,
+  fl.ASideLocation    AS Location,
+  fl.CollectionName,
+  CAST(pos.Latitude  AS FLOAT) AS latitude,
+  CAST(pos.Longitude AS FLOAT) AS longitude
+FROM [dbo].[FactGSMRadio] gr
+LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = gr.[FileId]
+LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = gr.[PosId]
+WHERE gr.RxQual IS NOT NULL
+  AND fl.CollectionName = '{collection}'
+  AND fl.ASideLocation  = '{location}'
+ORDER BY gr.FullDate`,
   },
   {
     label: "MOS FREE/GSM",
@@ -950,6 +1202,117 @@ WHERE nr.[DmnIdTopN_SS_RSRP] = 1
 ORDER BY latitude, longitude`,
   },
   {
+    label: "LTE Scanner – RSRP",
+    category: "Scanner",
+    mode: "points",
+    valueCol: "RSRP",
+    colorScheme: "rsrp_data",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  ls.RSRP,
+  ls.RSRQ,
+  ls.SINR,
+  ls.RSSI,
+  ls.EARFCN,
+  ls.PCI,
+  ls.CGI,
+  fl.ASideLocation    AS Location,
+  fl.CollectionName,
+  CAST(pos.Latitude  AS FLOAT) AS latitude,
+  CAST(pos.Longitude AS FLOAT) AS longitude
+FROM [dbo].[FactLTEScanner] ls
+LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = ls.[FileId]
+LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = ls.[PosId]
+WHERE ls.[DmnIdTopN_RSRP] = 1
+  AND fl.CollectionName = '{collection}'
+  AND fl.ASideLocation  = '{location}'
+ORDER BY latitude, longitude`,
+  },
+  {
+    label: "LTE Scanner – SINR",
+    category: "Scanner",
+    mode: "points",
+    valueCol: "SINR",
+    colorScheme: "nr5g_sssinr",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  ls.SINR,
+  ls.RSRP,
+  ls.RSRQ,
+  ls.RSSI,
+  ls.EARFCN,
+  ls.PCI,
+  ls.CGI,
+  fl.ASideLocation    AS Location,
+  fl.CollectionName,
+  CAST(pos.Latitude  AS FLOAT) AS latitude,
+  CAST(pos.Longitude AS FLOAT) AS longitude
+FROM [dbo].[FactLTEScanner] ls
+LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = ls.[FileId]
+LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = ls.[PosId]
+WHERE ls.[DmnIdTopN_SINR] = 1
+  AND fl.CollectionName = '{collection}'
+  AND fl.ASideLocation  = '{location}'
+ORDER BY latitude, longitude`,
+  },
+  {
+    label: "LTE Scanner – RSRQ",
+    category: "Scanner",
+    mode: "points",
+    valueCol: "RSRQ",
+    colorScheme: "lte_rsrq",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  ls.RSRQ,
+  ls.RSRP,
+  ls.SINR,
+  ls.RSSI,
+  ls.EARFCN,
+  ls.PCI,
+  ls.CGI,
+  fl.ASideLocation    AS Location,
+  fl.CollectionName,
+  CAST(pos.Latitude  AS FLOAT) AS latitude,
+  CAST(pos.Longitude AS FLOAT) AS longitude
+FROM [dbo].[FactLTEScanner] ls
+LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = ls.[FileId]
+LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = ls.[PosId]
+WHERE ls.[DmnIdTopN_RSRQ] = 1
+  AND fl.CollectionName = '{collection}'
+  AND fl.ASideLocation  = '{location}'
+ORDER BY latitude, longitude`,
+  },
+  {
+    label: "GSM Scanner – RxLev (WMA)",
+    category: "Scanner",
+    mode: "points",
+    valueCol: "RxLev",
+    colorScheme: "rxlev_scanner_gsm",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  gs.RxLev,
+  gs.BCCH,
+  gs.BSIC,
+  gs.LAC,
+  gs.CId,
+  gs.CGI,
+  fl.ASideLocation    AS Location,
+  fl.CollectionName,
+  CAST(pos.Latitude  AS FLOAT) AS latitude,
+  CAST(pos.Longitude AS FLOAT) AS longitude
+FROM [dbo].[FactGSMScanner] gs
+LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = gs.[FileId]
+LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = gs.[PosId]
+WHERE gs.[DmnIdTopN_RxLev] = 1
+  AND fl.CollectionName = '{collection}'
+  AND fl.ASideLocation  = '{location}'
+ORDER BY latitude, longitude`,
+  },
+  {
     label: "— Custom SQL —",
     category: "Custom",
     mode: "points",
@@ -999,14 +1362,20 @@ function computeBucketCounters(
 }
 
 // ── Spatial decimation: keep at most maxPoints, one per adaptive grid cell ────
-const MAX_RENDER_POINTS = 4000;
+const MAX_RENDER_POINTS = 20000;
 
 function decimatePoints<T extends { lat: number; lng: number }>(pts: T[], max = MAX_RENDER_POINTS): T[] {
   if (pts.length <= max) return pts;
-  const lats = pts.map((p) => p.lat);
-  const lngs = pts.map((p) => p.lng);
-  const latRange = Math.max(...lats) - Math.min(...lats) || 0.1;
-  const lngRange = Math.max(...lngs) - Math.min(...lngs) || 0.1;
+  let minLat = pts[0].lat, maxLat = pts[0].lat;
+  let minLng = pts[0].lng, maxLng = pts[0].lng;
+  for (let i = 1; i < pts.length; i++) {
+    if (pts[i].lat < minLat) minLat = pts[i].lat;
+    if (pts[i].lat > maxLat) maxLat = pts[i].lat;
+    if (pts[i].lng < minLng) minLng = pts[i].lng;
+    if (pts[i].lng > maxLng) maxLng = pts[i].lng;
+  }
+  const latRange = maxLat - minLat || 0.1;
+  const lngRange = maxLng - minLng || 0.1;
   const cellSize = Math.sqrt((latRange * lngRange) / max);
   const seen = new Set<string>();
   return pts.filter((p) => {
@@ -1090,7 +1459,6 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
     setFilterCollection(syncTarget.collection);
     setRows([]); setColumns([]); setError(null); setExecutionTime(null);
     setFilterNRARFCN("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncTarget]);
 
   const currentScheme = COLOR_SCHEMES[colorSchemeKey];
@@ -1177,14 +1545,15 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
   useEffect(() => {
     if (!runTrigger) return;
     latestRunQuery.current();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runTrigger]);
 
   const bubblePoints = useMemo(() => {
     if (mode !== "bubble" || !effQtyCol || filteredRows.length === 0) return [];
     const vals = filteredRows.map((r) => Number(r[effQtyCol])).filter((v) => !isNaN(v));
     if (!vals.length) return [];
-    const minV = Math.min(...vals), maxV = Math.max(...vals), range = maxV - minV || 1;
+    let minV = vals[0], maxV = vals[0];
+    for (let i = 1; i < vals.length; i++) { if (vals[i] < minV) minV = vals[i]; if (vals[i] > maxV) maxV = vals[i]; }
+    const range = maxV - minV || 1;
     return filteredRows.flatMap((row) => {
       const qty = Number(row[effQtyCol]);
       if (isNaN(qty)) return [];

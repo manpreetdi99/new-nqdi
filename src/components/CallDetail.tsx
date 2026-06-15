@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchCallPagingInfo, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchGsmScannerRaw, fetchGsmContextSignal, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallPagingInfoResponse, type PagingTimelineEvent, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchCallPagingInfo, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchGsmScannerRaw, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallPagingInfoResponse, type PagingTimelineEvent, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE } from "@/lib/chartStyles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -125,7 +125,11 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
   const [matchedAntennaBSide, setMatchedAntennaBSide] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number; azimuth: number | null; freq: number | null; vendor: string | null; enbName: string | null; tech: string | null; height: number | null; downtilt: number | null; siteId: number | null; cellId: number | null } | null>(null);
 
   const [contextSignal, setContextSignal] = useState<any[]>([]);
+  const [contextSignalBSide, setContextSignalBSide] = useState<any[]>([]);
   const [gsmContextSignal, setGsmContextSignal] = useState<any[]>([]);
+  const [gsmContextSignalBSide, setGsmContextSignalBSide] = useState<any[]>([]);
+  const [selectedContextSide, setSelectedContextSide] = useState<"A" | "B">("A");
+  const [contextWindowSec, setContextWindowSec] = useState(30);
   const [contextTechnology, setContextTechnology] = useState<any[]>([]);
   const [pagingData, setPagingData] = useState<CallPagingInfoResponse | null>(null);
   const [deviceInfo, setDeviceInfo] = useState<CallDeviceInfo | null>(null);
@@ -181,7 +185,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
-        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, deviceRes, lteMeasCompRes, lteScannerCompRes, scannerRawRes, gsmScannerRes, gsmCtxSignalRes] = await Promise.allSettled([
+        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, deviceRes, lteMeasCompRes, lteScannerCompRes, scannerRawRes, gsmScannerRes, gsmCtxSignalRes, ctxSignalBSideRes, gsmCtxSignalBSideRes] = await Promise.allSettled([
           call.callMode !== "CS" ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
           fetchMosValues(database, call.callId),
@@ -192,15 +196,17 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValuesBSide(database, call.callId) : Promise.resolve({ gsmValuesBSide: [] }),
           call.callMode !== "CS" ? fetchCellInfo(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
           call.callMode !== "CS" ? fetchCellInfoBSide(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
-          fetchCallContextSignal(database, call.callId),
-          fetchCallContextTechnology(database, call.callId),
+          fetchCallContextSignal(database, call.callId, contextWindowSec),
+          fetchCallContextTechnology(database, call.callId, contextWindowSec),
           fetchCallPagingInfo(database, call.callId),
           fetchCallDeviceInfo(database, call.callId),
           call.callMode !== "CS" ? fetchLteMeasurementComparison(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
           call.callMode !== "CS" ? fetchLteScannerMeasurement(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
           call.callMode !== "CS" ? fetchLteScannerRaw(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
           call.callMode === "CS" ? fetchGsmScannerRaw(database, call.callId) : Promise.resolve([]),
-          call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignal(database, call.callId) : Promise.resolve({ signal: [] }),
+          call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+          call.callMode !== "CS" ? fetchCallContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+          call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
         ]);
 
         if (lteRes.status === "fulfilled") {
@@ -307,6 +313,18 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         } else {
           setGsmContextSignal([]);
         }
+
+        if (ctxSignalBSideRes.status === "fulfilled") {
+          setContextSignalBSide((ctxSignalBSideRes.value as any).signal || []);
+        } else {
+          setContextSignalBSide([]);
+        }
+
+        if (gsmCtxSignalBSideRes.status === "fulfilled") {
+          setGsmContextSignalBSide((gsmCtxSignalBSideRes.value as any).signal || []);
+        } else {
+          setGsmContextSignalBSide([]);
+        }
       } catch (err) {
         console.error("Failed to load metrics", err);
       } finally {
@@ -322,9 +340,31 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       setScannerRawB([]);
       setGsmScannerRaw([]);
       setGsmContextSignal([]);
+      setContextSignalBSide([]);
+      setGsmContextSignalBSide([]);
+      setSelectedContextSide("A");
       loadRadio();
     }
   }, [database, call.callId, call.callMode]);
+
+  useEffect(() => {
+    if (!call.callId || !database) return;
+    async function reloadContext() {
+      const [ctxRes, ctxTechRes, gsmCtxRes, ctxBRes, gsmCtxBRes] = await Promise.allSettled([
+        call.callMode !== "CS" ? fetchCallContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+        fetchCallContextTechnology(database, call.callId, contextWindowSec),
+        call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+        call.callMode !== "CS" ? fetchCallContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+        call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+      ]);
+      if (ctxRes.status === "fulfilled") setContextSignal((ctxRes.value as any).signal || []);
+      if (ctxTechRes.status === "fulfilled") setContextTechnology((ctxTechRes.value as any).technology || []);
+      if (gsmCtxRes.status === "fulfilled") setGsmContextSignal((gsmCtxRes.value as any).signal || []);
+      if (ctxBRes.status === "fulfilled") setContextSignalBSide((ctxBRes.value as any).signal || []);
+      if (gsmCtxBRes.status === "fulfilled") setGsmContextSignalBSide((gsmCtxBRes.value as any).signal || []);
+    }
+    reloadContext();
+  }, [contextWindowSec, call.callId, database, call.callMode]);
 
   useEffect(() => {
     const isCosmoteFree = call.region?.toLowerCase().includes("cosmote free");
@@ -535,15 +575,23 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     return pts;
   }, [mapActivePts, mapActiveAntenna]);
 
+  const activeContextSignal = selectedContextSide === "B" && contextSignalBSide.length > 0
+    ? contextSignalBSide
+    : contextSignal;
+
+  const activeGsmContextSignal = selectedContextSide === "B" && gsmContextSignalBSide.length > 0
+    ? gsmContextSignalBSide
+    : gsmContextSignal;
+
   const contextChartData = useMemo(() =>
-    contextSignal.map((v, idx) => ({
+    activeContextSignal.map((v, idx) => ({
       idx,
       time: new Date(v.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
       RSRP: v.RSRP != null ? Number(v.RSRP) : undefined,
       RSRQ: v.RSRQ != null ? Number(v.RSRQ) : undefined,
       phase: v.phase as "before" | "during" | "after",
     }))
-  , [contextSignal]);
+  , [activeContextSignal]);
 
   const duringZone = useMemo(() => {
     const firstIdx = contextChartData.findIndex(d => d.phase === "during");
@@ -557,9 +605,9 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
 
   const gsmChartData = useMemo(() => {
     if (!isGSMMode) return [];
-    // Use the context signal (has real before/during/after) when available
-    if (gsmContextSignal.length > 0) {
-      return gsmContextSignal.map((v: any, idx: number) => ({
+    // Use the active context signal (A or B side, has real before/during/after) when available
+    if (activeGsmContextSignal.length > 0) {
+      return activeGsmContextSignal.map((v: any, idx: number) => ({
         idx,
         time: new Date(v.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
         RxLevSub: v.RxLevSub != null ? Number(v.RxLevSub) : undefined,
@@ -575,7 +623,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       RxQualSub: val.RxQualSub != null ? Number(val.RxQualSub) : undefined,
       phase: "during" as const,
     }));
-  }, [isGSMMode, gsmContextSignal, activeRadioValues]);
+  }, [isGSMMode, activeGsmContextSignal, activeRadioValues]);
 
   const gsmDuringZone = useMemo(() => {
     const firstIdx = gsmChartData.findIndex(d => d.phase === "during");
@@ -1313,9 +1361,46 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       {/* ── Συμπεριφορά δικτύου πριν / κατά / μετά κλήση ── */}
       {(contextChartData.length > 0 || contextTechnology.length > 0 || (isGSMMode && gsmChartData.length > 0)) && (
         <div className="bg-card border border-border rounded-lg p-3 space-y-3">
-          <h3 className="text-sm font-semibold text-foreground">
-            Συμπεριφορά δικτύου ±10 δευτ. πριν / μετά κλήση
-          </h3>
+          <div className="flex items-center justify-between gap-2 flex-wrap">
+            <h3 className="text-sm font-semibold text-foreground">
+              Συμπεριφορά δικτύου ±{contextWindowSec}δευτ. πριν / μετά κλήση
+            </h3>
+            <div className="flex items-center gap-2">
+              <div className="inline-flex rounded-md border border-border overflow-hidden">
+                {[10, 30, 60, 120].map(s => (
+                  <button
+                    key={s}
+                    type="button"
+                    onClick={() => setContextWindowSec(s)}
+                    className={`px-2 py-1 text-xs border-r last:border-r-0 border-border ${contextWindowSec === s ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
+                  >
+                    {s}s
+                  </button>
+                ))}
+              </div>
+              {!isGSMMode && (() => {
+                const hasBSide = contextSignalBSide.length > 0;
+                return (
+                  <div className={`inline-flex rounded-md border border-border overflow-hidden ${!hasBSide && isLoadingRadio ? "opacity-40 pointer-events-none" : ""}`}>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedContextSide("A")}
+                      className={`px-2 py-1 text-xs ${selectedContextSide === "A" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
+                    >
+                      A-side
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => hasBSide ? setSelectedContextSide("B") : undefined}
+                      className={`px-2 py-1 text-xs border-l border-border ${selectedContextSide === "B" ? "bg-primary text-primary-foreground" : hasBSide ? "bg-muted text-foreground hover:bg-muted/80" : "bg-muted text-muted-foreground/40 cursor-not-allowed"}`}
+                    >
+                      B-side
+                    </button>
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
 
           {/* GSM chart — RxLev / RxQual */}
           {isGSMMode && gsmChartData.length > 0 && (
