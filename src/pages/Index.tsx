@@ -14,6 +14,7 @@ import CallsMap from "@/components/CallsMap";
 import AntennasMap from "@/components/AntennasMap";
 import QueryMap from "@/components/QueryMap";
 import ValidationTab from "@/components/ValidationTab";
+import SummaryTab from "@/components/SummaryTab";
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import type { CallRecord } from "@/lib/callData";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -165,6 +166,29 @@ const getFileDateTime = (filename: string | null | undefined): string | null => 
   return match ? match[1] : null;
 };
 
+// Αρχεία (FileList) που ξεκινούν μέσα σε αυτό το διάστημα θεωρούνται το ίδιο "run" (π.χ. Cosmote Free + Vodafone Free + Data)
+const FILE_GROUP_GAP_MS = 5 * 60 * 1000;
+
+const formatGroupTimeRange = (startMs: number, endMs: number): string => {
+  const fmt = (ms: number) => {
+    const d = new Date(ms);
+    const day = String(d.getDate()).padStart(2, "0");
+    const month = String(d.getMonth() + 1).padStart(2, "0");
+    const year = d.getFullYear();
+    const h = String(d.getHours()).padStart(2, "0");
+    const m = String(d.getMinutes()).padStart(2, "0");
+    return `${day}/${month}/${year} ${h}:${m}`;
+  };
+  return startMs === endMs ? fmt(startMs) : `${fmt(startMs)} – ${fmt(endMs)}`;
+};
+
+const formatGroupDeviceCount = (callDeviceCount: number, dataDeviceCount: number): string => {
+  const parts: string[] = [];
+  if (callDeviceCount > 0) parts.push(`${callDeviceCount} free&gsm`);
+  if (dataDeviceCount > 0) parts.push(`${dataDeviceCount} data`);
+  return parts.join(" + ");
+};
+
 const Index = () => {
   const [databases, setDatabases] = useState<string[]>([]);
   const [selectedDatabase, setSelectedDatabase] = useLocalStorage<string>("perf-insights-selected-db", "");
@@ -199,6 +223,7 @@ const Index = () => {
   const [lastClickedRowId, setLastClickedRowId] = useState<string | null>(null);
   const [showFilterPanel, setShowFilterPanel] = useState(false);
   const [locationTableFilter, setLocationTableFilter] = useState<string[]>([]);
+  const [selectedFileGroupIds, setSelectedFileGroupIds] = useState<string[]>([]);
 
   useEffect(() => {
     if (activeTab === "calls" && lastClickedRowId) {
@@ -267,6 +292,12 @@ const Index = () => {
     }
   };
 
+  const toggleFileGroup = (groupId: string) => {
+    setSelectedFileGroupIds((prev) =>
+      prev.includes(groupId) ? prev.filter((id) => id !== groupId) : [...prev, groupId],
+    );
+  };
+
   const clearCallsFilters = () => {
     setSelectedDatabase("");
     setSelectedCallsCollections([]);
@@ -274,6 +305,7 @@ const Index = () => {
     setSessionValidFilter("all");
     setStatusFilters([]);
     setLocationTableFilter([]);
+    setSelectedFileGroupIds([]);
   };
 
   const handleDatabaseChange = (newDb: string) => {
@@ -283,6 +315,7 @@ const Index = () => {
     setSessionValidFilter("all");
     setStatusFilters([]);
     setLocationTableFilter([]);
+    setSelectedFileGroupIds([]);
     setLocations([]);
     setAllCallsRows([]);
     setCallRecords([]);
@@ -442,6 +475,85 @@ const Index = () => {
       setIsRunning(false);
     }
   };
+  // Ομαδοποιεί voice calls + data sessions σε "runs" με βάση το διάστημα [start, end] τους:
+  // τα data session files συνήθως ξεκινούν λίγο αργότερα από τα voice calls της ίδιας τοποθεσίας,
+  // αλλά τελειώνουν περίπου την ίδια στιγμή — γι' αυτό συγκρίνουμε με το end (όχι μόνο το start)
+  // του cluster, ώστε ένα αρχείο που ξεκινά ενώ το cluster είναι ακόμα "ενεργό" να μπαίνει στο ίδιο group.
+  const fileGroups = useMemo(() => {
+    type Interval = { kind: "voice" | "data"; sessionId: string; location: string; start: number; end: number };
+    const intervals: Interval[] = [];
+
+    for (const row of allCallsRows) {
+      if (!row.callStartTimeStamp) continue;
+      const start = new Date(row.callStartTimeStamp).getTime();
+      if (Number.isNaN(start)) continue;
+      const durationMs = row.callDuration != null && !Number.isNaN(Number(row.callDuration))
+        ? Number(row.callDuration) * 1000
+        : 0;
+      intervals.push({ kind: "voice", sessionId: row.SessionId, location: row.Location || "Unknown", start, end: start + durationMs });
+    }
+
+    // Ένα data session αποτελείται από πολλά test rows (ping/throughput/youtube κλπ) με διαδοχικά
+    // timestamps — το πραγματικό διάστημα του αρχείου είναι από το πρώτο μέχρι το τελευταίο test.
+    const dataSessionRanges = new Map<string, { location: string; start: number; end: number }>();
+    for (const row of dataCallsRows) {
+      if (!row.callStartTimeStamp) continue;
+      const t = new Date(row.callStartTimeStamp).getTime();
+      if (Number.isNaN(t)) continue;
+      // SessionId έρχεται ως number από το backend (BIGINT) — το κάνουμε String() ώστε να ταιριάζει
+      // με τα keys του groupedDataSessions (που κάνει String(row.SessionId)) αλλιώς το Set.has() αποτυγχάνει πάντα.
+      const sessionKey = String(row.SessionId);
+      const existing = dataSessionRanges.get(sessionKey);
+      if (!existing) {
+        dataSessionRanges.set(sessionKey, { location: row.Location || "Unknown", start: t, end: t });
+      } else {
+        existing.start = Math.min(existing.start, t);
+        existing.end = Math.max(existing.end, t);
+      }
+    }
+    for (const [sessionId, range] of dataSessionRanges) {
+      intervals.push({ kind: "data", sessionId, location: range.location, start: range.start, end: range.end });
+    }
+
+    intervals.sort((a, b) => a.start - b.start);
+
+    const clusters: Interval[][] = [];
+    let clusterEnd = -Infinity;
+    for (const interval of intervals) {
+      const lastCluster = clusters[clusters.length - 1];
+      if (lastCluster && interval.start - clusterEnd <= FILE_GROUP_GAP_MS) {
+        lastCluster.push(interval);
+        clusterEnd = Math.max(clusterEnd, interval.end);
+      } else {
+        clusters.push([interval]);
+        clusterEnd = interval.end;
+      }
+    }
+
+    return clusters.map((cluster, index) => ({
+      id: `group-${index + 1}`,
+      start: Math.min(...cluster.map((i) => i.start)),
+      end: Math.max(...cluster.map((i) => i.end)),
+      locations: [...new Set(cluster.map((i) => i.location))].sort(),
+      callDeviceCount: new Set(cluster.filter((i) => i.kind === "voice").map((i) => i.location)).size,
+      dataDeviceCount: new Set(cluster.filter((i) => i.kind === "data").map((i) => i.location)).size,
+      voiceSessionIds: new Set(cluster.filter((i) => i.kind === "voice").map((i) => i.sessionId)),
+      dataSessionIds: new Set(cluster.filter((i) => i.kind === "data").map((i) => i.sessionId)),
+    }));
+  }, [allCallsRows, dataCallsRows]);
+
+  const selectedFileGroupSessionIds = useMemo(() => {
+    if (selectedFileGroupIds.length === 0) return null;
+    const voiceIds = new Set<string>();
+    const dataIds = new Set<string>();
+    for (const group of fileGroups) {
+      if (!selectedFileGroupIds.includes(group.id)) continue;
+      group.voiceSessionIds.forEach((id) => voiceIds.add(id));
+      group.dataSessionIds.forEach((id) => dataIds.add(id));
+    }
+    return { voiceIds, dataIds };
+  }, [fileGroups, selectedFileGroupIds]);
+
   const filteredAllCallsRows = useMemo(() => {
     return allCallsRows.filter((row) => {
       // Filter by session valid
@@ -456,15 +568,18 @@ const Index = () => {
         if (!hasMatchingStatus) return false;
       }
 
+      // Filter by file group (time-clustered run)
+      if (selectedFileGroupSessionIds && !selectedFileGroupSessionIds.voiceIds.has(row.SessionId)) return false;
+
       return true;
     });
-  }, [allCallsRows, sessionValidFilter, statusFilters]);
+  }, [allCallsRows, sessionValidFilter, statusFilters, selectedFileGroupSessionIds]);
 
   const filteredCallRecords = useMemo(() => {
-    if (sessionValidFilter === "all" && statusFilters.length === 0) return callRecords;
+    if (sessionValidFilter === "all" && statusFilters.length === 0 && selectedFileGroupIds.length === 0) return callRecords;
     const validIds = new Set(filteredAllCallsRows.map((r) => r.SessionId));
     return callRecords.filter((c) => validIds.has(c.callId));
-  }, [callRecords, filteredAllCallsRows, sessionValidFilter, statusFilters]);
+  }, [callRecords, filteredAllCallsRows, sessionValidFilter, statusFilters, selectedFileGroupIds]);
 
   const locationSummary = useMemo(() => {
     const map = new Map<string, { complete: number; drop: number; fail: number; sysRelease: number; total: number }>();
@@ -519,13 +634,42 @@ const Index = () => {
     }));
   }, [dataCallsRows]);
 
+  const dataLocationSummary = useMemo(() => {
+    const map = new Map<string, { sessions: number; pass: number; fail: number }>();
+    for (const item of groupedDataSessions) {
+      const loc = item.first?.Location ?? "Unknown";
+      if (!map.has(loc)) map.set(loc, { sessions: 0, pass: 0, fail: 0 });
+      const entry = map.get(loc)!;
+      entry.sessions++;
+      entry.pass += item.passCount;
+      entry.fail += item.failCount;
+    }
+    return Array.from(map.entries())
+      .map(([location, counts]) => ({ location, ...counts }))
+      .sort((a, b) => a.location.localeCompare(b.location));
+  }, [groupedDataSessions]);
+
+  const dataLocationSummaryTotals = useMemo(() => {
+    return dataLocationSummary.reduce(
+      (acc, r) => ({
+        sessions: acc.sessions + r.sessions,
+        pass: acc.pass + r.pass,
+        fail: acc.fail + r.fail,
+      }),
+      { sessions: 0, pass: 0, fail: 0 }
+    );
+  }, [dataLocationSummary]);
+
   const filteredGroupedDataSessions = useMemo(() => {
-    if (locationTableFilter.length === 0) return groupedDataSessions;
     return groupedDataSessions.filter((item) => {
-      const loc = item.first?.Location ?? "";
-      return locationTableFilter.includes(loc);
+      if (locationTableFilter.length > 0) {
+        const loc = item.first?.Location ?? "";
+        if (!locationTableFilter.includes(loc)) return false;
+      }
+      if (selectedFileGroupSessionIds && !selectedFileGroupSessionIds.dataIds.has(item.sessionId)) return false;
+      return true;
     });
-  }, [groupedDataSessions, locationTableFilter]);
+  }, [groupedDataSessions, locationTableFilter, selectedFileGroupSessionIds]);
 
   const locationGroups = useMemo(() => {
     const lower = (s: string) => s.toLowerCase();
@@ -708,6 +852,38 @@ const Index = () => {
                 </div>
               )}
 
+              {/* File group filter — clusters voice + data files within 5 minutes of each other */}
+              {fileGroups.length > 0 && (
+                <div>
+                  <label className="text-xs font-medium text-foreground block mb-1">File Group (±5min)</label>
+                  <div className="max-h-48 overflow-auto rounded-md border border-border bg-muted/30 p-2">
+                    <div className="flex flex-wrap gap-1.5">
+                      <button
+                        type="button"
+                        onClick={() => setSelectedFileGroupIds([])}
+                        className={`text-[10px] px-2 py-1 rounded border ${selectedFileGroupIds.length === 0 ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
+                      >
+                        All
+                      </button>
+                      {fileGroups.map((group) => {
+                        const active = selectedFileGroupIds.includes(group.id);
+                        return (
+                          <button
+                            key={group.id}
+                            type="button"
+                            onClick={() => toggleFileGroup(group.id)}
+                            title={group.locations.join(", ")}
+                            className={`text-[10px] px-2 py-1 rounded border ${active ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
+                          >
+                            {formatGroupTimeRange(group.start, group.end)} ({formatGroupDeviceCount(group.callDeviceCount, group.dataDeviceCount)})
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Active filter badges */}
               <div className="pt-2 border-t border-border">
                 <p className="text-[10px] text-muted-foreground mb-1.5">Active filters</p>
@@ -718,6 +894,7 @@ const Index = () => {
                   {locationTableFilter.length > 0 && <Badge variant="secondary" className="text-[10px]">Loc filter: {locationTableFilter.join(", ")}</Badge>}
                   {sessionValidFilter !== "all" && <Badge variant="secondary" className="text-[10px]">Session: {sessionValidFilter === "1" ? "Valid" : "Invalid"}</Badge>}
                   {statusFilters.length > 0 && <Badge variant="secondary" className="text-[10px]">Status: {statusFilters.join(", ")}</Badge>}
+                  {selectedFileGroupIds.length > 0 && <Badge variant="secondary" className="text-[10px]">File groups: {selectedFileGroupIds.length}</Badge>}
                 </div>
               </div>
             </div>
@@ -757,9 +934,9 @@ const Index = () => {
               >
                 <SlidersHorizontal className="h-3.5 w-3.5 text-primary" />
                 Edit Filters
-                {(selectedCallsCollections.length > 0 || sessionValidFilter !== "all" || statusFilters.length > 0) && (
+                {(selectedCallsCollections.length > 0 || sessionValidFilter !== "all" || statusFilters.length > 0 || selectedFileGroupIds.length > 0) && (
                   <span className="ml-1 h-4 w-4 rounded-full bg-primary text-primary-foreground text-[9px] flex items-center justify-center font-bold">
-                    {selectedCallsCollections.length + (sessionValidFilter !== "all" ? 1 : 0) + statusFilters.length}
+                    {selectedCallsCollections.length + (sessionValidFilter !== "all" ? 1 : 0) + statusFilters.length + selectedFileGroupIds.length}
                   </span>
                 )}
               </button>
@@ -812,6 +989,9 @@ const Index = () => {
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
           <div className="flex items-center justify-between mb-2">
             <TabsList className="bg-muted border border-border">
+              <TabsTrigger value="Summary" className="gap-1.5 text-xs">
+                <Activity className="h-3.5 w-3.5 " /> Summary
+              </TabsTrigger>
               <TabsTrigger value="queries" className="gap-1.5 text-xs">
                 <Database className="h-3.5 w-3.5" /> Queries
               </TabsTrigger>
@@ -839,6 +1019,15 @@ const Index = () => {
               </TabsTrigger>
             </TabsList>
           </div>
+
+          <TabsContent value="Summary">
+            <SummaryTab
+              locationSummary={locationSummary}
+              locationSummaryTotals={locationSummaryTotals}
+              dataLocationSummary={dataLocationSummary}
+              dataLocationSummaryTotals={dataLocationSummaryTotals}
+            />
+          </TabsContent>
 
           <TabsContent value="queries" className="space-y-6">
             <section className="bg-card border border-border rounded-lg p-4 space-y-4">
@@ -1073,6 +1262,37 @@ const Index = () => {
                         </div>
                       </div>
                     )}
+
+                    {fileGroups.length > 0 && (
+                      <div>
+                        <label className="text-[11px] font-medium text-muted-foreground block mb-1">File Group (±5min)</label>
+                        <div className="mt-1 max-h-32 overflow-auto rounded-md border border-border bg-muted/30 p-1.5">
+                          <div className="flex flex-wrap gap-1">
+                            <button
+                              type="button"
+                              onClick={() => setSelectedFileGroupIds([])}
+                              className={`text-[10px] px-2 py-0.5 rounded border ${selectedFileGroupIds.length === 0 ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
+                            >
+                              All
+                            </button>
+                            {fileGroups.map((group) => {
+                              const active = selectedFileGroupIds.includes(group.id);
+                              return (
+                                <button
+                                  key={group.id}
+                                  type="button"
+                                  onClick={() => toggleFileGroup(group.id)}
+                                  title={group.locations.join(", ")}
+                                  className={`text-[10px] px-2 py-0.5 rounded border ${active ? "bg-primary text-primary-foreground border-primary" : "border-border bg-muted hover:bg-muted/70"}`}
+                                >
+                                  {formatGroupTimeRange(group.start, group.end)} ({formatGroupDeviceCount(group.callDeviceCount, group.dataDeviceCount)})
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1097,6 +1317,11 @@ const Index = () => {
                     {statusFilters.length > 0 && (
                       <Badge variant="secondary" className="text-[10px]">
                         Status: {statusFilters.join(", ")}
+                      </Badge>
+                    )}
+                    {selectedFileGroupIds.length > 0 && (
+                      <Badge variant="secondary" className="text-[10px]">
+                        File groups: {selectedFileGroupIds.length}
                       </Badge>
                     )}
                   </div>

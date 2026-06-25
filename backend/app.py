@@ -2338,9 +2338,8 @@ def run_map(req: RunMapRequest):
     import io
     import contextlib
 
-    # Add the folder that contains main_mt.py to the Python path if needed.
-    # Adjust this path to wherever main_mt.py lives on this machine.
-    MAP_SCRIPTS_DIR = r"C:\Users\Mechanical Engineer\Documents\VALIDATION_MAPS"
+    # Folder that contains main_mt.py / panel_*.py, bundled inside this repo.
+    MAP_SCRIPTS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "validation_maps")
     if MAP_SCRIPTS_DIR not in sys.path:
         sys.path.insert(0, MAP_SCRIPTS_DIR)
 

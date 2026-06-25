@@ -4,12 +4,50 @@ import {
   LineChart, Line, RadarChart, PolarGrid, PolarAngleAxis, PolarRadiusAxis, Radar,
   Legend, AreaChart, Area,
 } from "recharts";
-import type { BenchmarkResult } from "@/types/benchmark";
+import type { BenchmarkResult, CellValue } from "@/types/benchmark";
 import { CHART_PALETTE, LEGEND_WRAPPER_STYLE, DEFAULTS, AXIS_STYLE, GRID_STYLE } from "@/lib/chartStyles";
 
 interface BenchmarkChartsProps {
   results: BenchmarkResult[];
 }
+
+const COUNT_COL_PATTERN = /^(count|total|calls|cnt|num|n_|rows)/i;
+const AVG_COL_PATTERN = /^(avg|mean|mos|rate|pct|percent|ratio|score)/i;
+
+const pickGroupedValueCol = (numCols: string[]) =>
+  numCols.find((c) => AVG_COL_PATTERN.test(c)) ??
+  numCols.find((c) => !COUNT_COL_PATTERN.test(c)) ??
+  numCols[0];
+
+// Pivot rows shaped like (collection, location, value) into one row per
+// collection with one column per location, so collection becomes the
+// primary grouping and location the side-by-side bars within it.
+const buildGroupedData = (
+  data: Record<string, CellValue>[],
+  primaryCol: string,
+  secondaryCol: string,
+  valueCol: string
+) => {
+  const primaryOrder: string[] = [];
+  const secondaryOrder: string[] = [];
+  const rows = new Map<string, Record<string, CellValue>>();
+
+  data.forEach((row) => {
+    const primary = String(row[primaryCol] ?? "");
+    const secondary = String(row[secondaryCol] ?? "");
+    if (!rows.has(primary)) {
+      rows.set(primary, { [primaryCol]: primary });
+      primaryOrder.push(primary);
+    }
+    if (!secondaryOrder.includes(secondary)) secondaryOrder.push(secondary);
+    rows.get(primary)![secondary] = row[valueCol];
+  });
+
+  return {
+    data: primaryOrder.map((p) => rows.get(p)!),
+    series: secondaryOrder,
+  };
+};
 
 const CustomTooltip = ({ active, payload, label }: any) => {
   if (!active || !payload) return null;
@@ -33,10 +71,13 @@ const BenchmarkCharts = ({ results }: BenchmarkChartsProps) => {
       result.data.some((row) => typeof row[col] === "number")
     );
 
-  const categoryColumn = (result: BenchmarkResult) =>
-    result.columns.find((col) =>
+  const categoricalColumns = (result: BenchmarkResult) =>
+    result.columns.filter((col) =>
       result.data.some((row) => typeof row[col] === "string")
-    ) || result.columns[0];
+    );
+
+  const categoryColumn = (result: BenchmarkResult) =>
+    categoricalColumns(result)[0] || result.columns[0];
 
   return (
     <div className="space-y-6">
@@ -45,7 +86,14 @@ const BenchmarkCharts = ({ results }: BenchmarkChartsProps) => {
         const catCol = categoryColumn(result);
         if (numCols.length === 0) return null;
 
-        const chartType = numCols.length >= 3 ? "radar" : result.data.length > 8 ? "area" : "bar";
+        const catCols = categoricalColumns(result);
+        const isGrouped = catCols.length >= 2;
+        const groupedValueCol = isGrouped ? pickGroupedValueCol(numCols) : undefined;
+        const grouped = isGrouped && groupedValueCol
+          ? buildGroupedData(result.data, catCols[0], catCols[1], groupedValueCol)
+          : null;
+
+        const chartType = grouped ? "grouped-bar" : numCols.length >= 3 ? "radar" : result.data.length > 8 ? "area" : "bar";
 
         return (
           <motion.div
@@ -64,9 +112,38 @@ const BenchmarkCharts = ({ results }: BenchmarkChartsProps) => {
               </span>
             </div>
 
-            <div className="h-72">
+            <div className={grouped ? "" : "h-96"} style={grouped ? { height: Math.max(384, grouped.data.length * 96) } : undefined}>
               <ResponsiveContainer width="100%" height="100%">
-                {chartType === "radar" ? (
+                {chartType === "grouped-bar" && grouped ? (
+                  <BarChart
+                    data={grouped.data}
+                    layout="vertical"
+                    margin={{ left: 8, right: 12, top: 4, bottom: 4 }}
+                    barCategoryGap="35%"
+                    barGap={14}
+                  >
+                    <CartesianGrid {...GRID_STYLE} />
+                    <XAxis
+                      type="number"
+                      domain={groupedValueCol?.toLowerCase().includes("mos") ? [0, 5] : undefined}
+                      {...AXIS_STYLE}
+                    />
+                    <YAxis type="category" dataKey={catCols[0]} {...AXIS_STYLE} width={200} />
+                    {grouped.series.map((s, i) => (
+                      <Bar
+                        key={s}
+                        dataKey={s}
+                        name={s}
+                        barSize={36}
+                        fill={CHART_PALETTE[i % CHART_PALETTE.length]}
+                        radius={[0, 4, 4, 0]}
+                        fillOpacity={DEFAULTS.barFillOpacity}
+                      />
+                    ))}
+                    <Legend wrapperStyle={LEGEND_WRAPPER_STYLE} />
+                    <Tooltip content={<CustomTooltip />} cursor={{ fill: "hsl(220, 14%, 14%)" }} />
+                  </BarChart>
+                ) : chartType === "radar" ? (
                   <RadarChart data={result.data}>
                       <PolarGrid stroke={GRID_STYLE.stroke} strokeDasharray={GRID_STYLE.strokeDasharray} />
                       <PolarAngleAxis dataKey={catCol} {...AXIS_STYLE} />

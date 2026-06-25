@@ -32,6 +32,7 @@ interface DefaultChart {
   yCols: string[];
   aggFn?: "count" | "sum" | "avg" | "min" | "max";
   aggEnabled?: boolean;
+  groupCol?: string;
 }
 
 interface QueryTab {
@@ -295,7 +296,7 @@ ORDER BY total DESC`,
 FROM FileList
 ORDER BY CollectionName`,
   },
- 
+
   
   // ── KPI ──
   {
@@ -364,7 +365,7 @@ ORDER BY CA.callType, avg_setup_ms`,
   {
     label: "MOS ανά operator & collection",
     category: "MOS",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_mos"], aggFn: "avg", aggEnabled: false },
+    defaultChart: { type: "bar", xCol: "CollectionName", yCols: ["avg_mos"], groupCol: "Location", aggFn: "avg", aggEnabled: false },
     sql: `SELECT
   FL.CollectionName,
   FL.ASideLocation  AS Location,
@@ -1742,6 +1743,7 @@ function ResultGrid({ result, defaultChart }: { result: QueryResult; defaultChar
             defaultYCols={defaultChart?.yCols}
             defaultAggFn={defaultChart?.aggFn}
             defaultAggEnabled={defaultChart?.aggEnabled}
+            defaultGroupCol={defaultChart?.groupCol}
           />
         ) : (
           <div className="space-y-1.5">

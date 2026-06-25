@@ -69,6 +69,7 @@ interface ResultChartsProps {
   defaultYCols?: string[];
   defaultAggFn?: AggFn;
   defaultAggEnabled?: boolean;
+  defaultGroupCol?: string;
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -326,7 +327,7 @@ function ChartEmpty({ message }: { message: string }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ResultCharts({ columns, data, defaultChartType, defaultXCol, defaultYCols, defaultAggFn, defaultAggEnabled }: ResultChartsProps) {
+export default function ResultCharts({ columns, data, defaultChartType, defaultXCol, defaultYCols, defaultAggFn, defaultAggEnabled, defaultGroupCol }: ResultChartsProps) {
   // ── Derived from props ──────────────────────────────────────────────────
 
   const slice  = useMemo(
@@ -365,6 +366,7 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
   const [chartType, setChartType] = useState<ChartType>(defaultChartType ?? "bar");
   const [xCol,      setXCol]      = useState(() => defaultXCol ?? pickDefaultXCol(columns, sample));
   const [xCol2,     setXCol2]     = useState("");
+  const [groupCol,  setGroupCol]  = useState(defaultGroupCol ?? "");
   const [addYCol,   setAddYCol]   = useState("");
   const [pieLabel,  setPieLabel]  = useState(columns[0] ?? "");
   const [pieValue,  setPieValue]  = useState(() => pickDefaultPieValue(numericCols));
@@ -544,6 +546,53 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
       return out;
     });
   }, [aggEnabled, xIsNumeric, yIsCategorical, ySeries, filteredSlice, xCol, xCol2, aggFn]);
+
+  // ── Double bar (grouped) mode ───────────────────────────────────────────
+  // When groupCol is set on a categorical-X bar chart, pivot so each unique
+  // X value becomes one row, and each unique groupCol value becomes its own
+  // bar/series within that row (e.g. collection on Y, location as bars).
+
+  const groupedBarData = useMemo((): { data: Record<string, unknown>[]; groups: string[] } | null => {
+    if (!groupCol || xIsNumeric || ySeries.length === 0) return null;
+    const valueCol = ySeries[0].col;
+    const order: string[] = [];
+    const seen = new Set<string>();
+    const groupSeen = new Set<string>();
+    const sums:   Record<string, Record<string, number>> = {};
+    const counts: Record<string, Record<string, number>> = {};
+    const mins:   Record<string, Record<string, number>> = {};
+    const maxs:   Record<string, Record<string, number>> = {};
+
+    for (const row of filteredSlice) {
+      const x = String(row[xCol] ?? "(blank)");
+      const g = String(row[groupCol] ?? "(blank)");
+      if (!seen.has(x)) { seen.add(x); order.push(x); sums[x] = {}; counts[x] = {}; mins[x] = {}; maxs[x] = {}; }
+      groupSeen.add(g);
+      const y = toNum(row[valueCol]);
+      if (y !== null) {
+        sums[x][g]   = (sums[x][g]   ?? 0) + y;
+        counts[x][g] = (counts[x][g] ?? 0) + 1;
+        if (mins[x][g] === undefined || y < mins[x][g]) mins[x][g] = y;
+        if (maxs[x][g] === undefined || y > maxs[x][g]) maxs[x][g] = y;
+      }
+    }
+
+    const groups = [...groupSeen];
+    const data = order.map((x) => {
+      const out: Record<string, unknown> = { __x: x };
+      for (const g of groups) {
+        const c = counts[x][g] ?? 0;
+        if (c === 0) { out[g] = null; continue; }
+        if      (aggFn === "count") out[g] = c;
+        else if (aggFn === "sum"  ) out[g] = sums[x][g];
+        else if (aggFn === "avg"  ) out[g] = +(sums[x][g] / c).toFixed(4);
+        else if (aggFn === "min"  ) out[g] = mins[x][g];
+        else if (aggFn === "max"  ) out[g] = maxs[x][g];
+      }
+      return out;
+    });
+    return { data, groups };
+  }, [groupCol, xIsNumeric, ySeries, filteredSlice, xCol, aggFn]);
 
   // All categorical Y series (non-numeric columns)
   const categoricalYSeries = useMemo(
@@ -765,6 +814,31 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
       );
     }
 
+    /* ── Double bar (grouped, horizontal) ── */
+    if (chartType === "bar" && groupedBarData) {
+      if (groupedBarData.data.length === 0)
+        return <ChartEmpty message="Επίλεξε X column και ομαδοποίηση με δεδομένα." />;
+      const Hg = Math.max(H, groupedBarData.data.length * 80);
+      return (
+        <ResponsiveContainer width="100%" height={Hg}>
+          <ComposedChart data={groupedBarData.data} layout="vertical" margin={{ top: 8, right: 24, left: 8, bottom: 8 }}>
+            <CartesianGrid {...GRID_STYLE} />
+            <XAxis type="number" {...AXIS_STYLE} />
+            <YAxis type="category" dataKey="__x" {...AXIS_STYLE} width={200}
+              tickFormatter={(v) => String(v ?? "").slice(0, 30)}
+            />
+            <Tooltip content={<CustomTooltip />} />
+            <Legend formatter={fmtLegend} wrapperStyle={{ paddingTop: 8 }} />
+            {groupedBarData.groups.map((g, i) => (
+              <Bar key={g} dataKey={g} fill={CHART_PALETTE[i % CHART_PALETTE.length]}
+                name={g} radius={[0, 3, 3, 0]} maxBarSize={28} fillOpacity={DEFAULTS.barFillOpacity}
+              />
+            ))}
+          </ComposedChart>
+        </ResponsiveContainer>
+      );
+    }
+
     /* ── Categorical pivot (non-numeric Y) ── */
     if (yIsCategorical) {
       if (pivotData.length === 0)
@@ -832,7 +906,7 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
         </ComposedChart>
       </ResponsiveContainer>
     );
-  }, [chartType, pieValue, pieData, ySeries, xCol, scatterData, chartData, hasRight, leftLabel, rightLabel, renderSeries, yIsCategorical, pivotData, pivotSeries]);
+  }, [chartType, pieValue, pieData, ySeries, xCol, scatterData, chartData, hasRight, leftLabel, rightLabel, renderSeries, yIsCategorical, pivotData, pivotSeries, groupedBarData]);
 
   // ─────────────────────────────────────────────────────────────────────────
 
@@ -897,6 +971,12 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
                     {!xIsNumeric && (
                       <FieldSelect value={xCol2} onChange={setXCol2}>
                         <option value="">— + συνδυασμός column —</option>
+                        {columns.filter((c) => c !== xCol).map((c) => <option key={c} value={c}>{c}</option>)}
+                      </FieldSelect>
+                    )}
+                    {!xIsNumeric && chartType === "bar" && (
+                      <FieldSelect value={groupCol} onChange={setGroupCol}>
+                        <option value="">— διπλό bar: καμία ομαδοποίηση —</option>
                         {columns.filter((c) => c !== xCol).map((c) => <option key={c} value={c}>{c}</option>)}
                       </FieldSelect>
                     )}

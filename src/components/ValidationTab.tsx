@@ -40,14 +40,35 @@ export default function ValidationTab({
   ]);
   const [outputPath, setOutputPath] = useState<string | null>(null);
   const [mapHtml, setMapHtml] = useState<string | null>(null);
+  const [mapViewHeight, setMapViewHeight] = useState<number | null>(null);
 
   const terminalRef = useRef<HTMLDivElement>(null);
+  const mapViewRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (terminalRef.current) {
       terminalRef.current.scrollTop = terminalRef.current.scrollHeight;
     }
   }, [logs]);
+
+  // Measure the real space left below the container instead of assuming a
+  // fixed header/tabs height — keeps the map from being cut off or
+  // scrolling on screens/zoom levels where that chrome isn't 110px tall.
+  useEffect(() => {
+    if (!mapHtml) return;
+
+    const BOTTOM_MARGIN = 16;
+
+    const recalc = () => {
+      if (!mapViewRef.current) return;
+      const top = mapViewRef.current.getBoundingClientRect().top;
+      setMapViewHeight(Math.max(window.innerHeight - top - BOTTOM_MARGIN, 240));
+    };
+
+    recalc();
+    window.addEventListener("resize", recalc);
+    return () => window.removeEventListener("resize", recalc);
+  }, [mapHtml]);
 
   useEffect(() => {
     setSelectedDb(defaultDatabase);
@@ -139,7 +160,11 @@ export default function ValidationTab({
   // ── Full-screen map view ──────────────────────────────────────────────────
   if (mapHtml && !running) {
     return (
-      <div className="flex flex-col" style={{ height: "calc(100vh - 110px)" }}>
+      <div
+        ref={mapViewRef}
+        className="flex flex-col"
+        style={{ height: mapViewHeight ? `${mapViewHeight}px` : "calc(100vh - 110px)" }}
+      >
         {/* Thin top bar */}
         <div className="flex items-center gap-3 px-3 py-1.5 bg-card border border-border rounded-t-lg shrink-0">
           <button
