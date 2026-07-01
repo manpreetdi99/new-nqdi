@@ -1,0 +1,135 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="1640" viewBox="0 0 1080 1640" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#475569"/>
+    </marker>
+  </defs>
+
+  <rect width="1080" height="1640" fill="#f8fafc"/>
+
+  <text x="540" y="42" text-anchor="middle" font-size="26" font-weight="700" fill="#0f172a">
+    GET /api/l3_messages — Πώς λειτουργεί το Call Detail
+  </text>
+  <text x="540" y="66" text-anchor="middle" font-size="14" fill="#64748b">
+    backend/app.py — function get_l3_messages()
+  </text>
+
+  <!-- Step 0: Request -->
+  <rect x="290" y="90" width="500" height="64" rx="10" fill="#1e293b"/>
+  <text x="540" y="116" text-anchor="middle" font-size="15" fill="#ffffff" font-weight="600">Αίτημα Frontend</text>
+  <text x="540" y="138" text-anchor="middle" font-size="12.5" fill="#cbd5e1">database, session_id, side (A/B), technology?, layer?, before_seconds, after_seconds</text>
+
+  <line x1="540" y1="154" x2="540" y2="184" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 1: resolve A/B -->
+  <rect x="190" y="186" width="700" height="120" rx="10" fill="#eef2ff" stroke="#6366f1" stroke-width="1.5"/>
+  <text x="540" y="210" text-anchor="middle" font-size="15" font-weight="700" fill="#3730a3">Βήμα 0 — Εντοπισμός SessionId A &amp; B (1 query, CTE)</text>
+  <text x="540" y="234" text-anchor="middle" font-size="12.5" fill="#334155">pair_root: βρίσκει το "ASessionId" (αν δόθηκε B-side, ανεβαίνει στο SessionIdA)</text>
+  <text x="540" y="254" text-anchor="middle" font-size="12.5" fill="#334155">b_side: βρίσκει το αντίστοιχο SessionId όπου Side='B' και SessionIdA = ASessionId</text>
+  <text x="540" y="278" text-anchor="middle" font-size="12.5" fill="#334155">Αν δεν βρεθεί κανένα ζευγάρι → επιστροφή κενού αποτελέσματος με μήνυμα</text>
+  <text x="540" y="298" text-anchor="middle" font-size="12" fill="#64748b" font-style="italic">Αποτέλεσμα: a_session_id, b_session_id</text>
+
+  <line x1="540" y1="306" x2="540" y2="336" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 2: decide side -->
+  <polygon points="540,338 660,388 540,438 420,388" fill="#fef9c3" stroke="#ca8a04" stroke-width="1.5"/>
+  <text x="540" y="382" text-anchor="middle" font-size="13" font-weight="700" fill="#854d0e">side = ?</text>
+  <text x="540" y="400" text-anchor="middle" font-size="11.5" fill="#854d0e">A ή B</text>
+
+  <text x="335" y="382" text-anchor="middle" font-size="12" fill="#475569">side = "A"</text>
+  <line x1="420" y1="388" x2="280" y2="388" stroke="#475569" stroke-width="2"/>
+  <line x1="280" y1="388" x2="280" y2="470" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <text x="800" y="382" text-anchor="middle" font-size="12" fill="#475569">side = "B"</text>
+  <line x1="660" y1="388" x2="800" y2="388" stroke="#475569" stroke-width="2"/>
+  <line x1="800" y1="388" x2="800" y2="470" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="150" y="472" width="260" height="60" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="280" y="496" text-anchor="middle" font-size="12.5" fill="#14532d" font-weight="600">resolved_session_id</text>
+  <text x="280" y="516" text-anchor="middle" font-size="12" fill="#14532d">= a_session_id</text>
+
+  <rect x="670" y="472" width="260" height="60" rx="8" fill="#fee2e2" stroke="#dc2626"/>
+  <text x="800" y="492" text-anchor="middle" font-size="12.5" fill="#7f1d1d" font-weight="600">resolved_session_id</text>
+  <text x="800" y="510" text-anchor="middle" font-size="11.5" fill="#7f1d1d">= b_session_id</text>
+  <text x="800" y="525" text-anchor="middle" font-size="11" fill="#7f1d1d" font-style="italic">(αν null → κενό + μήνυμα)</text>
+
+  <line x1="280" y1="532" x2="280" y2="556" stroke="#475569" stroke-width="2"/>
+  <line x1="800" y1="532" x2="800" y2="556" stroke="#475569" stroke-width="2"/>
+  <line x1="280" y1="556" x2="540" y2="556" stroke="#475569" stroke-width="2"/>
+  <line x1="800" y1="556" x2="540" y2="556" stroke="#475569" stroke-width="2"/>
+  <line x1="540" y1="556" x2="540" y2="580" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 3: call window -->
+  <rect x="190" y="582" width="700" height="100" rx="10" fill="#ecfeff" stroke="#0891b2" stroke-width="1.5"/>
+  <text x="540" y="606" text-anchor="middle" font-size="15" font-weight="700" fill="#155e75">Βήμα 1 — Φόρτωση Call Window (CallAnalysis)</text>
+  <text x="540" y="630" text-anchor="middle" font-size="12.5" fill="#334155">CallStart = callStartTimeStamp</text>
+  <text x="540" y="650" text-anchor="middle" font-size="12.5" fill="#334155">CallEnd = callEndTimeStamp ή CallStart + callDuration (ms)</text>
+  <text x="540" y="670" text-anchor="middle" font-size="12" fill="#64748b" font-style="italic">+ FileId, callStatus, technology, callDir → callWindow</text>
+
+  <line x1="540" y1="682" x2="540" y2="706" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 4: anchor -->
+  <rect x="140" y="708" width="800" height="150" rx="10" fill="#fff7ed" stroke="#ea580c" stroke-width="1.5"/>
+  <text x="540" y="732" text-anchor="middle" font-size="15" font-weight="700" fill="#9a3412">Βήμα 2α — Υπολογισμός "setup_anchor" (το FIX)</text>
+  <text x="540" y="756" text-anchor="middle" font-size="12.5" fill="#334155">Ψάχνει το ΠΡΩΤΟ μήνυμα στο ίδιο FileId, μέσα στο διάστημα [CallStart-30s, CallEnd], που είναι:</text>
+  <text x="540" y="778" text-anchor="middle" font-size="12" fill="#7c2d12">SIP INVITE • RRCConnectionRequest • RRCConnectionSetup • RRCSetup • Activate dedicated EPS bearer</text>
+  <text x="540" y="804" text-anchor="middle" font-size="12.5" fill="#334155">Σκοπός: το κλήσεως-setup σήμα συχνά ΠΡΟΗΓΕΙΤΑΙ του callStartTimeStamp — χωρίς αυτό το anchor</text>
+  <text x="540" y="824" text-anchor="middle" font-size="12.5" fill="#334155">τα πρώτα μηνύματα της εγκατάστασης κλήσης (INVITE, bearer setup) έκοβαν εκτός παραθύρου.</text>
+  <text x="540" y="846" text-anchor="middle" font-size="12" fill="#64748b" font-style="italic">AnchorTime = MIN(FullDate) ή, αν δεν βρεθεί τίποτα, fallback = CallStart</text>
+
+  <line x1="540" y1="858" x2="540" y2="882" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 5: bounds -->
+  <rect x="140" y="884" width="800" height="92" rx="10" fill="#f5f3ff" stroke="#7c3aed" stroke-width="1.5"/>
+  <text x="540" y="908" text-anchor="middle" font-size="15" font-weight="700" fill="#5b21b6">Βήμα 2β — Όρια χρονικού παραθύρου ("bounds")</text>
+  <text x="540" y="932" text-anchor="middle" font-size="12.5" fill="#334155">PreStart = AnchorTime − before_seconds &#160;&#160;|&#160;&#160; PostEnd = CallEnd + after_seconds</text>
+  <text x="540" y="954" text-anchor="middle" font-size="12" fill="#64748b" font-style="italic">προεπιλογή: before_seconds = 10, after_seconds = 10 (0–600 επιτρεπτό εύρος)</text>
+
+  <line x1="540" y1="976" x2="540" y2="1000" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 6: query FactL3Messages -->
+  <rect x="140" y="1002" width="800" height="130" rx="10" fill="#f0fdf4" stroke="#16a34a" stroke-width="1.5"/>
+  <text x="540" y="1026" text-anchor="middle" font-size="15" font-weight="700" fill="#14532d">Βήμα 3 — Ερώτημα στο FactL3Messages</text>
+  <text x="540" y="1050" text-anchor="middle" font-size="12.5" fill="#334155">WHERE FileId = bounds.FileId AND FullDate BETWEEN PreStart AND PostEnd</text>
+  <text x="540" y="1072" text-anchor="middle" font-size="12.5" fill="#334155">+ προαιρετικά φίλτρα: Technology = ? &#160;&#160;|&#160;&#160; Layer = ?</text>
+  <text x="540" y="1094" text-anchor="middle" font-size="12.5" fill="#334155">ORDER BY FullDate, FactId</text>
+  <text x="540" y="1116" text-anchor="middle" font-size="12" fill="#64748b" font-style="italic">Επιστρέφει: ώρα, RAT, κατεύθυνση, layer, MsgName, SIPResponse, PCI, ARFCN, Message (1500 chars)...</text>
+
+  <line x1="540" y1="1132" x2="540" y2="1156" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 7: phase classification -->
+  <rect x="140" y="1158" width="800" height="110" rx="10" fill="#fdf2f8" stroke="#db2777" stroke-width="1.5"/>
+  <text x="540" y="1182" text-anchor="middle" font-size="15" font-weight="700" fill="#9d174d">Βήμα 4 — Χαρακτηρισμός κάθε μηνύματος σε "Phase"</text>
+
+  <rect x="180" y="1196" width="190" height="50" rx="8" fill="#fef9c3" stroke="#ca8a04"/>
+  <text x="275" y="1216" text-anchor="middle" font-size="12.5" font-weight="600" fill="#854d0e">before</text>
+  <text x="275" y="1234" text-anchor="middle" font-size="11" fill="#854d0e">FullDate &lt; CallStart</text>
+
+  <rect x="385" y="1196" width="190" height="50" rx="8" fill="#dcfce7" stroke="#16a34a"/>
+  <text x="480" y="1216" text-anchor="middle" font-size="12.5" font-weight="600" fill="#14532d">during</text>
+  <text x="480" y="1234" text-anchor="middle" font-size="11" fill="#14532d">CallStart ≤ FullDate ≤ CallEnd</text>
+
+  <rect x="590" y="1196" width="190" height="50" rx="8" fill="#e2e8f0" stroke="#475569"/>
+  <text x="685" y="1216" text-anchor="middle" font-size="12.5" font-weight="600" fill="#334155">after</text>
+  <text x="685" y="1234" text-anchor="middle" font-size="11" fill="#334155">FullDate &gt; CallEnd</text>
+
+  <line x1="540" y1="1268" x2="540" y2="1292" stroke="#475569" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <!-- Step 8: response -->
+  <rect x="190" y="1294" width="700" height="140" rx="10" fill="#1e293b"/>
+  <text x="540" y="1320" text-anchor="middle" font-size="15" font-weight="700" fill="#ffffff">Απάντηση JSON προς Frontend</text>
+  <text x="540" y="1346" text-anchor="middle" font-size="12.5" fill="#cbd5e1">callWindow: { SessionId, FileId, CallStart, CallEnd, callStatus, technology, callDir }</text>
+  <text x="540" y="1368" text-anchor="middle" font-size="12.5" fill="#cbd5e1">l3Messages: [ ...γραμμές με Phase, SecondsFromCallStart, MsgName, ... ]</text>
+  <text x="540" y="1390" text-anchor="middle" font-size="12.5" fill="#cbd5e1">summary: { total, byPhase: {before, during, after}, windowBeforeSec, windowAfterSec }</text>
+  <text x="540" y="1414" text-anchor="middle" font-size="11.5" fill="#94a3b8" font-style="italic">Σφάλμα DB/SQL → HTTPException 500 με το μήνυμα της εξαίρεσης</text>
+
+  <!-- Legend -->
+  <rect x="190" y="1456" width="700" height="160" rx="10" fill="#ffffff" stroke="#cbd5e1"/>
+  <text x="540" y="1480" text-anchor="middle" font-size="14" font-weight="700" fill="#0f172a">Γιατί έγινε έτσι (σχόλια στον κώδικα)</text>
+  <text x="220" y="1504" font-size="12" fill="#334155">• Το παράθυρο ΔΕΝ ξεκινά πια στο callStartTimeStamp — ξεκινούσε ΜΕΤΑ το πρώτο SIP INVITE</text>
+  <text x="232" y="1522" font-size="12" fill="#334155">και το dedicated-bearer setup, άρα έκοβε σήματα εγκατάστασης κλήσης.</text>
+  <text x="220" y="1546" font-size="12" fill="#334155">• A/B side: και τα δύο SessionId λύνονται μαζί, σε ΕΝΑ query, πριν διαλεχθεί ποιο</text>
+  <text x="232" y="1564" font-size="12" fill="#334155">θα χρησιμοποιηθεί για το call window / L3 log (βάσει ?side=A|B).</text>
+  <text x="220" y="1588" font-size="12" fill="#334155">• Προστέθηκαν MsgName, Category, Class, CombinedMsgNameSIPResponse + Direction</text>
+  <text x="232" y="1604" font-size="12" fill="#334155">δίπλα στο SIPResponse, ώστε το frontend να επαληθεύει π.χ. uplink INVITE = 'Request'.</text>
+</svg>

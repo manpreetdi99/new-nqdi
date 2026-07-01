@@ -76,7 +76,7 @@ const TEMPLATES: { label: string; category: string; sql: string; defaultChart?: 
     label: "R24 Voice calls",
     category: "SmartAnalytics R24",
     defaultChart: { type: "bar", xCol: "Location", yCols: ["CallStatus"], aggFn: "sum", aggEnabled: false },
-    sql: `SELECT TOP 1000
+    sql: `SELECT
   FCV.SessionIdA,
   FCV.SessionIdB,
   DF.CollectionName,
@@ -129,7 +129,7 @@ ORDER BY bad_call_pct DESC, total_calls DESC`,
     label: "R24 Data sessions",
     category: "SmartAnalytics R24",
     defaultChart: { type: "bar", xCol: "Location", yCols: ["TransferThroughputKbps"], aggFn: "avg", aggEnabled: true },
-    sql: `SELECT TOP 1000
+    sql: `SELECT
   C.SessionId,
   C.TestId,
   DF.CollectionName,
@@ -296,6 +296,24 @@ ORDER BY total DESC`,
 FROM FileList
 ORDER BY CollectionName`,
   },
+    {
+    label: "All Call with HO",
+    category: "General",
+    sql: `SELECT CA.SessionId,
+    CA.callStartTimeStamp,
+    CA.callStatus,
+    CA.technology,
+    CA.LastLTEHoType        AS LastHoType,      -- π.χ. 'Intra LTE', 'LTE to UMTS', 'LTE to GSM'
+    CA.LastHoCause          AS LastHoCause,
+    CA.LastLTEHoTimeStamp   AS LastHoTime,
+    DF.CollectionName,
+    DF.ASideLocation
+FROM CallAnalysis CA
+LEFT JOIN FileList DF ON DF.FileId = CA.FileId
+WHERE CA.LastLTEHoType IS NOT NULL
+  AND CA.LastLTEHoType <> ''
+ORDER BY CA.callStartTimeStamp`,
+  },
 
   
   // ── KPI ──
@@ -461,6 +479,46 @@ WHERE S.Valid IN (0, 1)
   AND LM.RSRP IS NOT NULL
 GROUP BY FL.ASideLocation
 ORDER BY avg_RSRP DESC`,
+  },
+  {
+    label: "RSRP + MOS ανά operator & collection",
+    category: "Signal",
+    defaultChart: { type: "bar", xCol: "CollectionName", yCols: ["avg_rsrp"], groupCol: "Location", aggFn: "avg", aggEnabled: false },
+    sql: `WITH RSRP_CTE AS (
+  SELECT
+    FL.CollectionName,
+    FL.ASideLocation AS Location,
+    ROUND(AVG(CAST(LM.RSRP AS FLOAT)), 2) AS avg_rsrp,
+    ROUND(MAX(CAST(LM.RSRP AS FLOAT)), 2) AS max_rsrp,
+    ROUND(MIN(CAST(LM.RSRP AS FLOAT)), 2) AS min_rsrp
+  FROM LTEMeasurementReport LM
+  LEFT JOIN Sessions S  ON S.SessionId = LM.SessionId
+  LEFT JOIN FileList FL ON FL.FileId   = S.FileId
+  WHERE S.Valid IN (0, 1)
+    AND LM.RSRP IS NOT NULL
+  GROUP BY FL.CollectionName, FL.ASideLocation
+),
+MOS_CTE AS (
+  SELECT
+    FL.CollectionName,
+    FL.ASideLocation AS Location,
+    ROUND(AVG(LQ.OptionalWB), 3) AS avg_mos
+  FROM ResultsLQ08Avg LQ
+  LEFT JOIN Sessions S  ON S.SessionId = LQ.SessionId
+  LEFT JOIN FileList FL ON FL.FileId   = S.FileId
+  WHERE LQ.OptionalWB IS NOT NULL
+  GROUP BY FL.CollectionName, FL.ASideLocation
+)
+SELECT
+  R.CollectionName,
+  R.Location,
+  R.avg_rsrp,
+  R.max_rsrp,
+  R.min_rsrp,
+  M.avg_mos
+FROM RSRP_CTE R
+LEFT JOIN MOS_CTE M ON M.CollectionName = R.CollectionName AND M.Location = R.Location
+ORDER BY R.CollectionName, R.avg_rsrp DESC`,
   },
   {
     label: "LTE μετρήσεις raw (για γράφημα)",
@@ -1678,7 +1736,8 @@ function exportCsv(columns: string[], data: Record<string, unknown>[], filename:
 // Sub-components
 // ──────────────────────────────────────────────
 function ResultGrid({ result, defaultChart }: { result: QueryResult; defaultChart?: DefaultChart }) {
-  const [showChart, setShowChart] = useState(!!defaultChart);
+  const canChart = result.columns.length > 1;
+  const [showChart, setShowChart] = useState(!!defaultChart && canChart);
   const [page, setPage] = useState(0);
   const pageSize = 50;
   const totalPages = Math.ceil(result.data.length / pageSize);
@@ -1706,17 +1765,20 @@ function ResultGrid({ result, defaultChart }: { result: QueryResult; defaultChar
       {/* Tab strip */}
       <div className="flex items-center border-b border-border bg-muted/20">
         {([
-          { active: !showChart, label: "Table", icon: <Table2 className="h-3.5 w-3.5" />, onClick: () => setShowChart(false) },
-          { active: showChart,  label: "Chart", icon: <BarChart2 className="h-3.5 w-3.5" />, onClick: () => setShowChart(true) },
-        ] as const).map(({ active, label, icon, onClick }) => (
+          { active: !showChart, label: "Table", icon: <Table2 className="h-3.5 w-3.5" />, onClick: () => setShowChart(false), disabled: false },
+          { active: showChart,  label: "Chart", icon: <BarChart2 className="h-3.5 w-3.5" />, onClick: () => setShowChart(true), disabled: !canChart },
+        ] as const).map(({ active, label, icon, onClick, disabled }) => (
           <button
             key={label}
             onClick={onClick}
+            disabled={disabled}
+            title={disabled ? "Το query επιστρέφει μόνο μία στήλη" : undefined}
             className={[
               "flex items-center gap-1.5 px-4 py-2.5 text-xs font-medium border-b-2 transition-all",
               active
                 ? "border-primary text-foreground bg-background"
                 : "border-transparent text-muted-foreground hover:text-foreground hover:bg-muted/30",
+              disabled ? "opacity-40 cursor-not-allowed hover:bg-transparent hover:text-muted-foreground" : "",
             ].join(" ")}
           >
             {icon}

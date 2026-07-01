@@ -1,0 +1,106 @@
+===========================================================
+1) CallDetail.tsx — ΠΑΛΙΟ (κλήση μέσα στο μεγάλο Promise.allSettled)
+===========================================================
+
+call.callMode === "CS" ? fetchGsmScannerRaw(database, call.callId) : Promise.resolve([]),
+
+...
+
+if (gsmScannerRes.status === "fulfilled") {
+  setGsmScannerRaw((gsmScannerRes.value as any) ?? []);
+} else {
+  setGsmScannerRaw([]);
+}
+
+
+===========================================================
+2) CallDetail.tsx — ΝΕΟ (ξεχωριστό useEffect, ένα fetch ανά
+   CGI segment επειδή το CGI αλλάζει πολλές φορές μέσα στην κλήση)
+===========================================================
+
+useEffect(() => {
+  if (call.callMode !== "CS" || gsmValues.length === 0 || !database) {
+    setGsmScannerRaw([]);
+    return;
+  }
+
+  // gsmValues is ordered by MsgTime — split it into contiguous runs of the
+  // same CGI (handover segments) and pull scanner data per segment, since
+  // the serving CGI can change several times within a single call.
+  type Segment = { cgi: string; start: string; end: string };
+  const segments: Segment[] = [];
+  for (const v of gsmValues) {
+    if (!v.CGI || !v.MsgTime) continue;
+    const last = segments[segments.length - 1];
+    if (last && last.cgi === v.CGI) {
+      last.end = v.MsgTime;
+    } else {
+      segments.push({ cgi: v.CGI, start: v.MsgTime, end: v.MsgTime });
+    }
+  }
+  if (segments.length === 0) { setGsmScannerRaw([]); return; }
+
+  let cancelled = false;
+  Promise.all(
+    segments.map(seg => fetchGsmScannerRaw(database, seg.cgi, seg.start, seg.end).catch(() => []))
+  ).then(results => {
+    if (!cancelled) setGsmScannerRaw(results.flat());
+  });
+  return () => { cancelled = true; };
+}, [database, call.callMode, gsmValues]);
+
+
+===========================================================
+3) Backend SQL — /api/gsm_scanner_raw — ΠΑΛΙΟ
+   Παράμετροι: database, session_id
+===========================================================
+
+;WITH call_time AS (
+    SELECT TOP 1
+        CA.callStartTimeStamp AS start_time,
+        COALESCE(
+            CA.callEndTimeStamp,
+            DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+        ) AS end_time
+    FROM CallAnalysis CA
+    WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+),
+scanner_ranked AS (
+    SELECT
+        fs.FullDate,
+        fs.BCCH,
+        fs.RFBand,
+        fs.BSIC,
+        fs.RxLev,
+        fs.CoverI,
+        fs.CGI,
+        fs.CId,
+        fs.LAC,
+        ROW_NUMBER() OVER (
+            PARTITION BY fs.BCCH, fs.RFBand
+            ORDER BY ABS(DATEDIFF(MILLISECOND, ct.start_time, fs.FullDate))
+        ) AS rn
+    FROM FactGSMScanner fs
+    CROSS JOIN call_time ct
+    WHERE fs.BCCH IS NOT NULL
+      AND fs.FullDate >= ct.start_time
+      AND fs.FullDate <= ct.end_time
+)
+SELECT FullDate, BCCH, RFBand, BSIC, RxLev, CoverI, CGI, CId, LAC
+FROM scanner_ranked
+WHERE rn = 1
+ORDER BY BCCH, RFBand
+
+
+===========================================================
+4) Backend SQL — /api/gsm_scanner_raw — ΝΕΟ
+   Παράμετροι: database, cgi, start, end
+   (καλείται μία φορά ανά CGI segment από το CallDetail.tsx)
+===========================================================
+
+SELECT FullDate, BCCH, RFBand, BSIC, RxLev, CoverI, CGI, CId, LAC
+FROM FactGSMScanner
+WHERE CGI = ?
+  AND FullDate >= ?
+  AND FullDate <= ?
+ORDER BY FullDate

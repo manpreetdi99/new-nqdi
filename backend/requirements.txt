@@ -8,3 +8,4 @@ pandas>=2.2,<3
 folium>=0.14.0
 branca>=0.6.0
 requests>=2.28.0
+pycrate>=0.8.1

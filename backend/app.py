@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from db import get_connection, get_available_databases
+from rrc_decode import decode_row_message
 import time
 import os
 import openpyxl
@@ -450,42 +451,60 @@ def get_lte_values(
     database: str = Query(..., min_length=1),
     session_id: str = Query(..., min_length=1)
 ):
+    """LTE serving-cell radio for the call, from FactLTERadio.
+
+    Changed from LTEMeasurementReport -> FactLTERadio. Key differences handled:
+      - timestamp column is FullDate (not MsgTime) -> aliased back to MsgTime
+      - SINR is a single column (not SINR0/SINR1)
+      - position joins via DmnIdPosition -> DmnPosition.DmnId (not PosId)
+    Extra FactLTERadio fields exposed: CarrierIndex/SCCIndex (carrier aggregation),
+    DL/UL bandwidth, DistanceToBTS, CGI, and per-antenna Rx0..Rx3 (RSRP/RSRQ/SINR).
+    """
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
 
         query = """
-            SELECT lmr.[MsgId]
-                  ,lmr.[SessionId]
-                  ,lmr.[MsgTime]
-                  ,lmr.[PosId]
-                  ,lmr.[NetworkId]
-                  ,lmr.[EARFCN]
-                  ,lmr.[PhyCellId]
-                  ,round(lmr.[RSRP], 2) AS [RSRP]
-                  ,round(lmr.[RSRQ], 2) AS [RSRQ]
-                  ,round(lmr.[SINR0], 2) AS [SINR0]
-                  ,round(lmr.[SINR1], 2) AS [SINR1]
-                  ,lmr.[LTEServingCellInfoId]
-                  ,p.Latitude
-                  ,p.Longitude
-              FROM [LTEMeasurementReport] lmr
-              LEFT JOIN Position p ON p.PosId = lmr.PosId
-              WHERE lmr.[SessionId] = ?
-              ORDER BY lmr.MsgTime
+            SELECT fr.[MsgId]
+                  ,fr.[SessionId]
+                  ,fr.[FullDate]           AS [MsgTime]
+                  ,fr.[PosId]
+                  ,fr.[NetworkId]
+                  ,fr.[CarrierIndex]
+                  ,fr.[SCCIndex]
+                  ,fr.[EARFCN]
+                  ,fr.[PhyCellId]
+                  ,ROUND(fr.[RSRP], 2)  AS [RSRP]
+                  ,ROUND(fr.[RSRQ], 2)  AS [RSRQ]
+                  ,ROUND(fr.[RSSI], 2)  AS [RSSI]
+                  ,ROUND(fr.[SINR], 2)  AS [SINR]
+                  -- per-antenna branches (MIMO diagnostics)
+                  ,ROUND(fr.[RSRP_Rx0], 2) AS [RSRP_Rx0]
+                  ,ROUND(fr.[RSRP_Rx1], 2) AS [RSRP_Rx1]
+                  ,ROUND(fr.[RSRP_Rx2], 2) AS [RSRP_Rx2]
+                  ,ROUND(fr.[RSRP_Rx3], 2) AS [RSRP_Rx3]
+                  ,ROUND(fr.[SINR_Rx0], 2) AS [SINR_Rx0]
+                  ,ROUND(fr.[SINR_Rx1], 2) AS [SINR_Rx1]
+                  -- carrier / cell context
+                  ,fr.[DLBandWidth]
+                  ,fr.[ULBandWidth]
+                  ,fr.[DistanceToBTS]
+                  ,fr.[CGI]
+                  ,fr.[LTEServingCellInfoId]
+                  ,dp.Latitude
+                  ,dp.Longitude
+              FROM [FactLTERadio] fr
+              LEFT JOIN DmnPosition dp ON dp.DmnId = fr.DmnIdPosition
+              WHERE fr.[SessionId] = TRY_CONVERT(BIGINT, ?)
+              ORDER BY fr.FullDate
         """
 
         cursor.execute(query, (session_id,))
-
         columns = [col[0] for col in cursor.description] if cursor.description else []
         rows = cursor.fetchall() if cursor.description else []
-
-        data = []
-        for row in rows:
-            data.append({columns[idx]: row[idx] for idx in range(len(columns))})
+        data = [{columns[i]: row[i] for i in range(len(columns))} for row in rows]
 
         conn.close()
-
         return {"lteValues": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -570,6 +589,9 @@ def get_lte_values_b_side(
     database: str = Query(..., min_length=1),
     session_id: str = Query(..., min_length=1)
 ):
+    """LTE serving-cell radio for the B-side of the call, from FactLTERadio.
+    Mirrors /api/lte_values (same FactLTERadio columns / MsgTime aliasing),
+    but resolves the B-side SessionId from CallAnalysis first."""
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
@@ -593,23 +615,39 @@ def get_lte_values_b_side(
                     ON CA.SessionIdA = PR.ASessionId
                 WHERE CA.Side = 'B'
             )
-            SELECT
-                L.SessionId,
-                L.MsgTime,
-                L.PosId,
-                L.EARFCN,
-                ROUND(L.RSRP, 2) AS RSRP,
-                ROUND(L.RSRQ, 2) AS RSRQ,
-                ROUND(L.SINR0, 2) AS SINR0,
-                ROUND(L.SINR1, 2) AS SINR1,
-                P.Latitude,
-                P.Longitude
-            FROM LTEMeasurementReport L
-            INNER JOIN b_side B
-                ON L.SessionId = B.BSessionId
-            LEFT JOIN Position P
-                ON P.PosId = L.PosId
-            ORDER BY L.MsgTime
+            SELECT fr.[MsgId]
+                  ,fr.[SessionId]
+                  ,fr.[FullDate]           AS [MsgTime]
+                  ,fr.[PosId]
+                  ,fr.[NetworkId]
+                  ,fr.[CarrierIndex]
+                  ,fr.[SCCIndex]
+                  ,fr.[EARFCN]
+                  ,fr.[PhyCellId]
+                  ,ROUND(fr.[RSRP], 2)  AS [RSRP]
+                  ,ROUND(fr.[RSRQ], 2)  AS [RSRQ]
+                  ,ROUND(fr.[RSSI], 2)  AS [RSSI]
+                  ,ROUND(fr.[SINR], 2)  AS [SINR]
+                  -- per-antenna branches (MIMO diagnostics)
+                  ,ROUND(fr.[RSRP_Rx0], 2) AS [RSRP_Rx0]
+                  ,ROUND(fr.[RSRP_Rx1], 2) AS [RSRP_Rx1]
+                  ,ROUND(fr.[RSRP_Rx2], 2) AS [RSRP_Rx2]
+                  ,ROUND(fr.[RSRP_Rx3], 2) AS [RSRP_Rx3]
+                  ,ROUND(fr.[SINR_Rx0], 2) AS [SINR_Rx0]
+                  ,ROUND(fr.[SINR_Rx1], 2) AS [SINR_Rx1]
+                  -- carrier / cell context
+                  ,fr.[DLBandWidth]
+                  ,fr.[ULBandWidth]
+                  ,fr.[DistanceToBTS]
+                  ,fr.[CGI]
+                  ,fr.[LTEServingCellInfoId]
+                  ,dp.Latitude
+                  ,dp.Longitude
+              FROM [FactLTERadio] fr
+              INNER JOIN b_side B
+                  ON fr.SessionId = B.BSessionId
+              LEFT JOIN DmnPosition dp ON dp.DmnId = fr.DmnIdPosition
+              ORDER BY fr.FullDate
         """
 
         cursor.execute(query, (session_id, session_id))
@@ -673,19 +711,21 @@ def get_gsm_values(
         cursor = conn.cursor()
 
         query = """
-            SELECT g.[MsgId]
-                  ,g.[SessionId]
-                  ,g.[MsgTime]
-                  ,g.[PosId]
-                  ,g.[NetworkId]
-                  ,COALESCE(g.[RxLevSub],  g.[RxLevFull])  AS RxLevSub
-                  ,COALESCE(g.[RxQualSub], g.[RxQualFull]) AS RxQualSub
+            SELECT fs.[FactId]               AS MsgId
+                  ,fs.[SessionId]
+                  ,fs.[FullDate]              AS MsgTime
+                  ,fs.[PosId]
+                  ,fs.[NetworkId]
+                  ,fs.band
+                  ,fs.[RxLevSub]
+                  ,fs.[RxQualSub]
+                  ,fs.[CGI]
                   ,p.Latitude
                   ,p.Longitude
-              FROM [GSMMeasReport] g
-              LEFT JOIN Position p ON p.PosId = g.PosId
-              WHERE g.[SessionId] = ?
-              ORDER BY g.MsgTime
+              FROM [FactGSMRadio] fs
+              LEFT JOIN DmnPosition p ON fs.DmnIdPosition = p.DmnId
+              WHERE fs.[SessionId] = ?
+              ORDER BY fs.FullDate
         """
 
         cursor.execute(query, (session_id,))
@@ -732,17 +772,22 @@ def get_gsm_values_b_side(
                 WHERE CA.Side = 'B'
             )
             SELECT
-                G.[MsgId],
-                G.[SessionId],
-                G.[MsgTime],
-                G.[PosId],
-                G.[NetworkId],
-                COALESCE(G.[RxLevSub],  G.[RxLevFull])  AS RxLevSub,
-                COALESCE(G.[RxQualSub], G.[RxQualFull]) AS RxQualSub
-            FROM [GSMMeasReport] G
+                fs.[FactId]    AS MsgId,
+                fs.[SessionId],
+                fs.[FullDate]  AS MsgTime,
+                fs.[PosId],
+                fs.[NetworkId],
+                fs.band,
+                fs.[RxLevSub],
+                fs.[RxQualSub],
+                fs.[CGI],
+                p.Latitude,
+                p.Longitude
+            FROM [FactGSMRadio] fs
             INNER JOIN b_side B
-                ON G.SessionId = B.BSessionId
-            ORDER BY G.MsgTime
+                ON fs.SessionId = B.BSessionId
+            LEFT JOIN DmnPosition p ON fs.DmnIdPosition = p.DmnId
+            ORDER BY fs.FullDate
         """
 
         cursor.execute(query, (session_id, session_id))
@@ -759,6 +804,62 @@ def get_gsm_values_b_side(
         return {"gsmValuesBSide": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+@app.get("/api/call_kpi_tile")
+def get_call_kpi_tile(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """Dashboard tile metrics for one call: download/upload, latency, avg MOS,
+    jitter, packet loss, setup time. Each metric lives in a different table,
+    so scalar subqueries are used instead of JOINs to avoid row fan-out."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            DECLARE @sid BIGINT = TRY_CONVERT(BIGINT, ?);
+
+            SELECT
+                (SELECT ROUND(MAX(CA.setupTime) / 1000.0, 2)
+                   FROM CallAnalysis CA
+                  WHERE CA.SessionId = @sid)                    AS SetupTime_s,
+
+                (SELECT ROUND(AVG(COALESCE(LQ.OptionalWB, LQ.OptionalNB)), 2)
+                   FROM ResultsLQ08Avg LQ
+                  WHERE LQ.SessionId = @sid)                    AS AvgMOS,
+
+                (SELECT ROUND(AVG(CAST(v.AvgJitter AS FLOAT)), 1)
+                   FROM FactVoLTE v
+                  WHERE v.SessionId = @sid)                     AS Jitter_ms,
+
+                (SELECT ROUND(AVG(v.PacketLossRate), 2)
+                   FROM FactVoLTE v
+                  WHERE v.SessionId = @sid)                     AS PacketLoss_pct,
+
+                (SELECT ROUND(AVG(ipt.ThroughputKbps_DL) / 1000.0, 2)
+                   FROM FactIPThroughput ipt
+                  WHERE ipt.SessionId = @sid)                   AS Download_Mbps,
+
+                (SELECT ROUND(AVG(ipt.ThroughputKbps_UL) / 1000.0, 2)
+                   FROM FactIPThroughput ipt
+                  WHERE ipt.SessionId = @sid)                   AS Upload_Mbps,
+
+                (SELECT ROUND(AVG(p.RTTAverage), 0)
+                   FROM FactPingSummary p
+                  WHERE p.SessionId = @sid)                     AS Latency_ms;
+        """, (session_id,))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        row = cursor.fetchone()
+        result = {columns[idx]: row[idx] for idx in range(len(columns))} if row else {}
+
+        conn.close()
+
+        return result
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
 
 @app.get("/api/mos_values")
 def get_mos_values(
@@ -1144,16 +1245,6 @@ def get_call_context_signal_b_side(
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
                    OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
             ),
-            call_info AS (
-                SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
-                    COALESCE(
-                        CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
-                    ) AS end_time
-                FROM CallAnalysis CA
-                INNER JOIN pair_root PR ON CA.SessionId = PR.ASessionId
-            ),
             b_side AS (
                 SELECT TOP (1)
                     CA.SessionId AS BSessionId,
@@ -1163,6 +1254,16 @@ def get_call_context_signal_b_side(
                 LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 INNER JOIN pair_root PR ON CA.SessionIdA = PR.ASessionId
                 WHERE CA.Side = 'B'
+            ),
+            call_info AS (
+                SELECT TOP 1
+                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                    ) AS end_time
+                FROM CallAnalysis CA
+                INNER JOIN b_side BS ON CA.SessionId = BS.BSessionId
             ),
             b_sessions AS (
                 SELECT S.SessionId AS SID
@@ -1244,13 +1345,6 @@ def get_gsm_context_signal_b_side(
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
                    OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
             ),
-            call_info AS (
-                SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
-                    DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp) AS end_time
-                FROM CallAnalysis CA
-                INNER JOIN pair_root PR ON CA.SessionId = PR.ASessionId
-            ),
             b_side AS (
                 SELECT TOP (1)
                     CA.SessionId AS BSessionId,
@@ -1260,6 +1354,13 @@ def get_gsm_context_signal_b_side(
                 LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 INNER JOIN pair_root PR ON CA.SessionIdA = PR.ASessionId
                 WHERE CA.Side = 'B'
+            ),
+            call_info AS (
+                SELECT TOP 1
+                    CA.callStartTimeStamp AS start_time,
+                    DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp) AS end_time
+                FROM CallAnalysis CA
+                INNER JOIN b_side BS ON CA.SessionId = BS.BSessionId
             ),
             b_sessions AS (
                 SELECT S.SessionId AS SID
@@ -1519,70 +1620,123 @@ def get_lte_neighbors(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/call_paging_info")
-def get_call_paging_info(
+@app.get("/api/l3_messages")
+def get_l3_messages(
     database: str = Query(..., min_length=1),
     session_id: str = Query(..., min_length=1),
-    before_seconds: int = Query(default=60, ge=0, le=600),
-    after_seconds: int = Query(default=60, ge=0, le=600),
+    side: str = Query(default="A"),  # "A" (default, uses session_id as-is) or "B" (resolves the paired B-side SessionId)
+    technology: str | None = Query(default=None),     # e.g. LTE, NR5G, GSM, WCDMA, VoIP
+    layer: str | None = Query(default=None),          # e.g. LTE-RRC, LTE-NAS, SIP, 5GNR-RRC
+    before_seconds: int = Query(default=10, ge=0, le=600),
+    after_seconds: int = Query(default=10, ge=0, le=600),
 ):
+    """
+    L3 / SIP / RRC / NAS messages for the call window.
+
+    Both SessionIds (A & B) are resolved together, up front, in one query
+    (pair_root -> ASessionId, b_side -> BSessionId), then ?side=A or ?side=B
+    simply picks which of the two already-resolved ids to use for the call
+    window / L3 log below — same pattern as the other *_b_side endpoints,
+    so the frontend only ever has to pass a single session_id.
+
+    The window anchors on the EARLIEST of: first SIP INVITE, first RRC
+    connection setup/reconfiguration, or callStartTimeStamp, then extends by
+    before_seconds/after_seconds, so call-setup signalling isn't cut off.
+    """
+
+    conn = None
+
     try:
+        side = (side or "A").upper().strip()
+
+        if side not in ("A", "B"):
+            raise HTTPException(status_code=400, detail="side must be A or B")
+
         conn = get_connection(database)
         cursor = conn.cursor()
 
-        def fetch_dicts():
-            columns = [col[0] for col in cursor.description] if cursor.description else []
-            return [
-                {columns[i]: row[i] for i in range(len(columns))}
-                for row in cursor.fetchall()
-            ]
-
-        # 1. Call window — uses CA columns directly (same pattern as call_context_signal)
+        # 0) Resolve BOTH SessionIds (A & B) for this call in one round trip.
         cursor.execute("""
-            ;WITH target_call AS (
+            ;WITH pair_root AS (
                 SELECT TOP (1)
-                    CA.SessionId AS SelectedSessionId,
-                    CA.SessionIdA,
-                    CA.Side,
-                    CA.FileId,
-                    CA.callStartTimeStamp AS CallStart,
-                    COALESCE(
-                        CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
-                    ) AS CallEnd,
-                    CA.callStatus,
-                    CA.code,
-                    CA.codeDescription,
-                    CA.technology,
-                    CA.callmode,
-                    CA.callType,
-                    CA.callDir
+                    CASE WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                         ELSE CA.SessionId END AS ASessionId
                 FROM CallAnalysis CA
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
                    OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
-                ORDER BY CA.callStartTimeStamp
+            ),
+            b_side AS (
+                SELECT TOP (1) CA.SessionId AS BSessionId
+                FROM CallAnalysis CA
+                INNER JOIN pair_root PR ON CA.SessionIdA = PR.ASessionId
+                WHERE CA.Side = 'B'
             )
-            SELECT
-                *,
-                DATEADD(second, -?, CallStart) AS PreStart,
-                DATEADD(second,  ?, CallEnd) AS PostEnd
-            FROM target_call
-        """, (session_id, session_id, before_seconds, after_seconds))
+            SELECT PR.ASessionId, BS.BSessionId
+            FROM pair_root PR
+            LEFT JOIN b_side BS ON 1 = 1
+        """, (session_id, session_id))
+        pair_row = cursor.fetchone()
+        if not pair_row or pair_row[0] is None:
+            return {"callWindow": None, "l3Messages": [], "message": "No call found for this session_id"}
+        a_session_id, b_session_id = pair_row[0], pair_row[1]
 
-        call_rows = fetch_dicts()
-        if not call_rows:
-            conn.close()
+        if side == "B":
+            if b_session_id is None:
+                return {"callWindow": None, "l3Messages": [], "message": "No B-side session found for this call"}
+            resolved_session_id = str(b_session_id)
+        else:
+            resolved_session_id = str(a_session_id)
+
+        # 1) Call window for the resolved session_id.
+        cursor.execute("""
+            SELECT TOP 1
+                CA.SessionId,
+                CA.FileId,
+                CA.callStartTimeStamp AS CallStart,
+                COALESCE(
+                    CA.callEndTimeStamp,
+                    DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                ) AS CallEnd,
+                CA.callStatus,
+                CA.technology,
+                CA.callDir,
+                CA.Side,
+                CA.SessionIdA
+            FROM CallAnalysis CA
+            WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+            ORDER BY CA.callStartTimeStamp
+        """, (resolved_session_id,))
+
+        cols = [c[0] for c in cursor.description] if cursor.description else []
+        wrow = cursor.fetchone()
+
+        if not wrow:
             return {
                 "callWindow": None,
-                "message": "No call found for this session_id"
+                "l3Messages": [],
+                "message": f"No call found for selected side={side}, session_id={resolved_session_id}",
             }
 
-        call_window = call_rows[0]
+        call_window = {cols[i]: wrow[i] for i in range(len(cols))}
 
-        # 2. LTE Paging / eDRX request table
-        cursor.execute("""
+        # Add useful frontend metadata
+        call_window["SelectedSide"] = side
+        call_window["ASessionId"] = a_session_id
+        call_window["BSessionId"] = b_session_id
+        call_window["ResolvedSessionId"] = resolved_session_id
+
+        # 2) Full L3 log based on the selected call window.
+        #    'during' is scoped strictly to this side's own SessionId (no
+        #    neighbouring SessionIds from the same FileId), so every one of
+        #    its rows belongs to this call and is reported as phase='during'
+        #    regardless of whether it lands a few seconds before the recorded
+        #    callStartTimeStamp (call-setup signalling commonly precedes it).
+        #    'before' / 'after' add surrounding context from the rest of the
+        #    FileId (other SessionIds) without touching the 'during' rowset
+        #    above — same source query, just UNIONed in.
+        cte = """
             ;WITH target_call AS (
-                SELECT TOP (1)
+                SELECT TOP 1
                     CA.FileId,
                     CA.callStartTimeStamp AS CallStart,
                     COALESCE(
@@ -1591,279 +1745,194 @@ def get_call_paging_info(
                     ) AS CallEnd
                 FROM CallAnalysis CA
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
-                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+                ORDER BY CA.callStartTimeStamp
+            ),
+            setup_anchor AS (
+                SELECT MIN(l.FullDate) AS AnchorTime
+                FROM FactL3Messages l
+                CROSS JOIN target_call tc
+                WHERE l.SessionId = TRY_CONVERT(BIGINT, ?)
+                  AND l.FullDate BETWEEN DATEADD(second, -30, tc.CallStart) AND tc.CallEnd
+                  AND (
+                        l.SimpleMsgName LIKE '%INVITE%'
+                     OR l.SimpleMsgName LIKE '%RRCConnectionRequest%'
+                     OR l.SimpleMsgName LIKE '%RRCConnectionSetup%'
+                     OR l.SimpleMsgName LIKE '%RRCSetup%'
+                     OR l.SimpleMsgName LIKE '%RRCConnectionReconfiguration%'
+                     OR l.SimpleMsgName LIKE '%RRCReconfiguration%'
+                     OR l.SimpleMsgName LIKE '%Activate dedicated EPS bearer%'
+                  )
             ),
             bounds AS (
                 SELECT
-                    FileId,
-                    CallStart,
-                    CallEnd,
-                    DATEADD(second, -?, CallStart) AS PreStart,
-                    DATEADD(second,  ?, CallEnd) AS PostEnd
-                FROM target_call
-            ),
-            sessions_in_window AS (
-                SELECT S.SessionId
-                FROM Sessions S
-                CROSS JOIN bounds B
-                WHERE S.FileId = B.FileId
+                    tc.FileId,
+                    tc.CallStart,
+                    tc.CallEnd,
 
-                UNION
+                    DATEADD(
+                        second,
+                        -?,
+                        CASE
+                            WHEN (SELECT AnchorTime FROM setup_anchor) IS NOT NULL
+                             AND (SELECT AnchorTime FROM setup_anchor) < tc.CallStart
+                            THEN (SELECT AnchorTime FROM setup_anchor)
+                            ELSE tc.CallStart
+                        END
+                    ) AS PreStart,
 
-                SELECT SB.SessionId
-                FROM SessionsB SB
-                CROSS JOIN bounds B
-                WHERE SB.FileId = B.FileId
+                    DATEADD(second, ?, tc.CallEnd) AS PostEnd
+                FROM target_call tc
             )
+        """
+
+        branches = """
             SELECT
-                CASE
-                    WHEN P.MsgTime < B.CallStart THEN 'before'
-                    WHEN P.MsgTime <= B.CallEnd THEN 'during'
-                    ELSE 'after'
-                END AS Phase,
-                DATEDIFF(ms, B.CallStart, P.MsgTime) / 1000.0 AS SecondsFromCallStart,
-                P.MsgId,
-                P.SessionId,
-                P.TestId,
-                P.MsgTime,
-                P.PosId,
-                P.NetworkId,
-                P.EARFCN,
-                P.PCI,
-                P.UEId,
-                P.PagingCycle,
-                CASE P.PagingCycle
-                    WHEN 0 THEN 320
-                    WHEN 1 THEN 640
-                    WHEN 2 THEN 1280
-                    WHEN 3 THEN 2560
-                    WHEN 4 THEN 5120
-                END AS PagingCycleDecoded,
-                P.Nb,
-                CASE P.Nb
-                    WHEN 0 THEN 'fourT'
-                    WHEN 1 THEN 'twoT'
-                    WHEN 2 THEN 'oneT'
-                    WHEN 3 THEN 'halfT'
-                    WHEN 4 THEN 'quarterT'
-                    WHEN 5 THEN 'oneEighthT'
-                    WHEN 6 THEN 'oneSixteenthT'
-                    WHEN 7 THEN 'oneThirtySecondT'
-                    WHEN 8 THEN 'oneSixtyFourthT'
-                    WHEN 9 THEN 'oneOneHundredTwentyEighthT'
-                    WHEN 10 THEN 'oneTwoHundredFiftySixthT'
-                    WHEN 11 THEN 'oneFiveHundredTwelfthT'
-                    WHEN 12 THEN 'oneTenTwentyFourthT'
-                END AS NbDecoded,
-                P.PagingSFNOffset,
-                P.PagingSubFNOffset,
-                P.CatM1PagingStartNB,
-                P.EDRXHyperFrameOffset,
-                P.EDRXPageStartOffset,
-                P.EDRXPageEndOffset,
-                P.EDRXCycleLength,
-                P.EDRXPTWLength
-            FROM LTEPagingEDRXRequest P
-            INNER JOIN sessions_in_window SI ON SI.SessionId = P.SessionId
+                'during' AS Phase,
+
+                DATEDIFF(ms, B.CallStart, l.FullDate) / 1000.0 AS SecondsFromCallStart,
+
+                l.FullDate AS MsgTime,
+                l.SessionId,
+                l.Technology,
+                l.Direction,
+                l.Layer,
+                l.MsgName,
+                l.SimpleMsgName,
+                l.Category,
+                l.Class,
+                l.SIPResponse,
+                l.CombinedMsgNameSIPResponse,
+                l.SIPCallId,
+                l.PCI,
+                l.ARFCN,
+                LEFT(l.Message, 1500) AS Message
+
+            FROM FactL3Messages l
             CROSS JOIN bounds B
-            WHERE P.MsgTime BETWEEN B.PreStart AND B.PostEnd
-            ORDER BY P.MsgTime
-        """, (session_id, session_id, before_seconds, after_seconds))
+            WHERE l.SessionId = TRY_CONVERT(BIGINT, ?)
+              AND l.FullDate BETWEEN B.PreStart AND B.PostEnd
 
-        lte_paging_edrx = fetch_dicts()
+            UNION ALL
 
-        # 3. LTE RRC messages that look like Paging
-        cursor.execute("""
-            ;WITH target_call AS (
-                SELECT TOP (1)
-                    CA.FileId,
-                    CA.callStartTimeStamp AS CallStart,
-                    COALESCE(
-                        CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
-                    ) AS CallEnd
-                FROM CallAnalysis CA
-                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
-                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
-            ),
-            bounds AS (
-                SELECT
-                    FileId,
-                    CallStart,
-                    CallEnd,
-                    DATEADD(second, -?, CallStart) AS PreStart,
-                    DATEADD(second,  ?, CallEnd) AS PostEnd
-                FROM target_call
-            ),
-            sessions_in_window AS (
-                SELECT S.SessionId
-                FROM Sessions S
-                CROSS JOIN bounds B
-                WHERE S.FileId = B.FileId
-
-                UNION
-
-                SELECT SB.SessionId
-                FROM SessionsB SB
-                CROSS JOIN bounds B
-                WHERE SB.FileId = B.FileId
-            )
             SELECT
-                CASE
-                    WHEN R.MsgTime < B.CallStart THEN 'before'
-                    WHEN R.MsgTime <= B.CallEnd THEN 'during'
-                    ELSE 'after'
-                END AS Phase,
-                DATEDIFF(ms, B.CallStart, R.MsgTime) / 1000.0 AS SecondsFromCallStart,
-                R.MsgId,
-                R.SessionId,
-                R.TestId,
-                R.MsgTime,
-                R.PosId,
-                R.NetworkId,
-                R.RRCRelease,
-                R.RRCVersion,
-                R.PhyCellId,
-                R.Freq,
-                R.ChnType,
-                R.MsgType,
-                R.MsgTypeName,
-                R.Direction,
-                R.MsgName,
-                LEFT(R.Msg, 500) AS Msg
-            FROM vLTERRCMessages R
-            INNER JOIN sessions_in_window SI ON SI.SessionId = R.SessionId
+                'before' AS Phase,
+
+                DATEDIFF(ms, B.CallStart, l.FullDate) / 1000.0 AS SecondsFromCallStart,
+
+                l.FullDate AS MsgTime,
+                l.SessionId,
+                l.Technology,
+                l.Direction,
+                l.Layer,
+                l.MsgName,
+                l.SimpleMsgName,
+                l.Category,
+                l.Class,
+                l.SIPResponse,
+                l.CombinedMsgNameSIPResponse,
+                l.SIPCallId,
+                l.PCI,
+                l.ARFCN,
+                LEFT(l.Message, 1500) AS Message
+
+            FROM FactL3Messages l
             CROSS JOIN bounds B
-            WHERE R.MsgTime BETWEEN B.PreStart AND B.PostEnd
-              AND (
-                    R.MsgTypeName LIKE '%Paging%'
-                 OR R.MsgName    LIKE '%Paging%'
-              )
-            ORDER BY R.MsgTime
-        """, (session_id, session_id, before_seconds, after_seconds))
+            WHERE l.FileId = B.FileId
+              AND l.SessionId <> TRY_CONVERT(BIGINT, ?)
+              AND l.FullDate >= B.PreStart
+              AND l.FullDate <  B.CallStart
 
-        lte_rrc_paging = fetch_dicts()
+            UNION ALL
 
-        # 4. NR RRC paging messages, if available in DB
-        try:
-            cursor.execute("""
-                ;WITH target_call AS (
-                    SELECT TOP (1)
-                        CA.FileId,
-                        CA.callStartTimeStamp AS CallStart,
-                        COALESCE(
-                            CA.callEndTimeStamp,
-                            DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
-                        ) AS CallEnd
-                    FROM CallAnalysis CA
-                    WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
-                       OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
-                ),
-                bounds AS (
-                    SELECT
-                        FileId,
-                        CallStart,
-                        CallEnd,
-                        DATEADD(second, -?, CallStart) AS PreStart,
-                        DATEADD(second,  ?, CallEnd) AS PostEnd
-                    FROM target_call
-                ),
-                sessions_in_window AS (
-                    SELECT S.SessionId
-                    FROM Sessions S
-                    CROSS JOIN bounds B
-                    WHERE S.FileId = B.FileId
+            SELECT
+                'after' AS Phase,
 
-                    UNION
+                DATEDIFF(ms, B.CallStart, l.FullDate) / 1000.0 AS SecondsFromCallStart,
 
-                    SELECT SB.SessionId
-                    FROM SessionsB SB
-                    CROSS JOIN bounds B
-                    WHERE SB.FileId = B.FileId
-                )
-                SELECT
-                    CASE
-                        WHEN R.MsgTime < B.CallStart THEN 'before'
-                        WHEN R.MsgTime <= B.CallEnd THEN 'during'
-                        ELSE 'after'
-                    END AS Phase,
-                    DATEDIFF(ms, B.CallStart, R.MsgTime) / 1000.0 AS SecondsFromCallStart,
-                    R.MsgId,
-                    R.SessionId,
-                    R.TestId,
-                    R.MsgTime,
-                    R.PosId,
-                    R.NetworkId,
-                    R.RRCRelease,
-                    R.RRCVersion,
-                    R.ChnType,
-                    R.MsgType,
-                    R.MsgTypeName,
-                    R.Msg
-                FROM vNR5GRRCMessages R
-                INNER JOIN sessions_in_window SI ON SI.SessionId = R.SessionId
-                CROSS JOIN bounds B
-                WHERE R.MsgTime BETWEEN B.PreStart AND B.PostEnd
-                  AND R.MsgTypeName LIKE '%Paging%'
-                ORDER BY R.MsgTime
-            """, (session_id, session_id, before_seconds, after_seconds))
+                l.FullDate AS MsgTime,
+                l.SessionId,
+                l.Technology,
+                l.Direction,
+                l.Layer,
+                l.MsgName,
+                l.SimpleMsgName,
+                l.Category,
+                l.Class,
+                l.SIPResponse,
+                l.CombinedMsgNameSIPResponse,
+                l.SIPCallId,
+                l.PCI,
+                l.ARFCN,
+                LEFT(l.Message, 1500) AS Message
 
-            nr_rrc_paging = fetch_dicts()
-        except Exception:
-            nr_rrc_paging = []
+            FROM FactL3Messages l
+            CROSS JOIN bounds B
+            WHERE l.FileId = B.FileId
+              AND l.SessionId <> TRY_CONVERT(BIGINT, ?)
+              AND l.FullDate >  B.CallEnd
+              AND l.FullDate <= B.PostEnd
+        """
 
-        conn.close()
+        params = [
+            resolved_session_id, resolved_session_id, before_seconds, after_seconds,
+            resolved_session_id,   # during
+            resolved_session_id,   # before (exclude own session, already covered by during)
+            resolved_session_id,   # after  (exclude own session, already covered by during)
+        ]
 
-        timeline = []
+        q = cte + f" SELECT * FROM ({branches}) AS combined WHERE 1=1"
 
-        for row in lte_paging_edrx:
-            timeline.append({
-                "phase": row.get("Phase"),
-                "time": row.get("MsgTime"),
-                "secondsFromCallStart": row.get("SecondsFromCallStart"),
-                "type": "lte_paging_edrx",
-                "title": f"LTE Paging/eDRX EARFCN={row.get('EARFCN')} PCI={row.get('PCI')}",
-                "details": row,
-            })
+        if technology:
+            q += " AND Technology = ?"
+            params.append(technology)
 
-        for row in lte_rrc_paging:
-            timeline.append({
-                "phase": row.get("Phase"),
-                "time": row.get("MsgTime"),
-                "secondsFromCallStart": row.get("SecondsFromCallStart"),
-                "type": "lte_rrc_paging",
-                "title": row.get("MsgTypeName") or row.get("MsgName") or "LTE RRC Paging",
-                "details": row,
-            })
+        if layer:
+            q += " AND Layer = ?"
+            params.append(layer)
 
-        for row in nr_rrc_paging:
-            timeline.append({
-                "phase": row.get("Phase"),
-                "time": row.get("MsgTime"),
-                "secondsFromCallStart": row.get("SecondsFromCallStart"),
-                "type": "nr_rrc_paging",
-                "title": row.get("MsgTypeName") or "NR RRC Paging",
-                "details": row,
-            })
+        q += " ORDER BY MsgTime"
 
-        timeline.sort(key=lambda x: (x["time"] is None, x["time"] or ""))
+        cursor.execute(q, tuple(params))
+        data = _rows(cursor)
+
+        # LTE MeasurementReport rows carry a UPER-encoded RRC PDU in Message (raw hex) —
+        # decode it into RSRP/RSRQ so the L3 log never shows hex to the user.
+        for r in data:
+            decoded = decode_row_message(r.get("Technology"), r.get("SimpleMsgName"), r.get("MsgName"), r.get("Message"))
+            if decoded is not None:
+                r["Message"] = decoded
+
+        phase_counts = {"before": 0, "during": 0, "after": 0}
+
+        for r in data:
+            ph = r.get("Phase")
+            if ph in phase_counts:
+                phase_counts[ph] += 1
 
         return {
             "callWindow": call_window,
-            "ltePagingEDRX": lte_paging_edrx,
-            "lteRrcPaging": lte_rrc_paging,
-            "nrRrcPaging": nr_rrc_paging,
-            "timeline": timeline,
+            "l3Messages": data,
             "summary": {
-                "ltePagingEDRX": len(lte_paging_edrx),
-                "lteRrcPaging": len(lte_rrc_paging),
-                "nrRrcPaging": len(nr_rrc_paging),
-                "totalPagingEvents": len(timeline),
-            }
+                "selectedSide": side,
+                "resolvedSessionId": resolved_session_id,
+                "aSessionId": a_session_id,
+                "bSessionId": b_session_id,
+                "total": len(data),
+                "byPhase": phase_counts,
+                "windowBeforeSec": before_seconds,
+                "windowAfterSec": after_seconds,
+            },
         }
+
+    except HTTPException:
+        raise
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+    finally:
+        if conn:
+            conn.close()
 
 
 @app.get("/api/call_device_info")
@@ -2069,52 +2138,78 @@ def get_lte_measurement_comparison(
 @app.get("/api/lte_scanner_raw")
 def get_lte_scanner_raw(
     database: str = Query(..., min_length=1),
-    session_id: str = Query(..., min_length=1)
+    session_id: str = Query(..., min_length=1),
+    top_only: bool = Query(default=False),   # μόνο η καλύτερη κυψέλη ανά EARFCN (DmnIdTopN_RSRP=1)
 ):
-    """Raw FactLTEScanner rows matched by call datetime window, not by SessionId."""
+    """FactLTEScanner rows in the call time window, A-side & B-side.
+    Richer than before: includes MCC/MNC/PCI/CId/TAC, TopN ranking, MIMO/rank,
+    ENDC flag and best-neighbour context — so you can compare what the UE was
+    camped on (FactLTERadio serving) vs what the scanner saw as best available.
+    ?top_only=true keeps only the #1 ranked cell per EARFCN (best server)."""
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
 
-        # A-side: match scanner rows by A-side call time window
-        cursor.execute("""
-            ;WITH call_time AS (
+        scanner_cols = """
+                fs.FullDate,
+                fs.EARFCN,
+                fs.PCI,
+                fs.CId,
+                fs.TAC,
+                fs.MCC,
+                fs.MNC,
+                fs.RFBand,
+                fs.IsConfiguredBand,
+                ROUND(fs.RSRP, 2)              AS RSRP,
+                ROUND(fs.RSRQ, 2)              AS RSRQ,
+                ROUND(fs.SINR, 2)              AS SINR,
+                ROUND(fs.RSSI, 2)              AS RSSI,
+                ROUND(fs.RSRP_Avg_Operator, 2) AS RSRP_AvgOperator,
+                ROUND(fs.SINR_Avg_Operator, 2) AS SINR_AvgOperator,
+                fs.MIMO,
+                fs.NR5GENDC                    AS ENDC_capable,
+                fs.Bandwidth,
+                fs.DmnIdTopN_RSRP              AS RankByRSRP,
+                fs.DistanceToBTS,
+                fs.CGI
+        """
+
+        def run(where_time_cte, params):
+            q = f"""
+                {where_time_cte}
+                SELECT {scanner_cols}
+                FROM FactLTEScanner fs
+                CROSS JOIN win w
+                WHERE fs.EARFCN IS NOT NULL
+                  AND fs.FullDate >= w.start_time
+                  AND fs.FullDate <= w.end_time
+                  {"AND fs.DmnIdTopN_RSRP = 1" if top_only else ""}
+                ORDER BY fs.FullDate, fs.DmnIdTopN_RSRP
+            """
+            cursor.execute(q, params)
+            cols = [c[0] for c in cursor.description] if cursor.description else []
+            return [{cols[i]: r[i] for i in range(len(cols))} for r in cursor.fetchall()]
+
+        # A-side time window
+        a_cte = """
+            ;WITH win AS (
                 SELECT TOP 1
                     CA.callStartTimeStamp AS start_time,
-                    COALESCE(
-                        CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                    COALESCE(CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration,0), CA.callStartTimeStamp)
                     ) AS end_time
                 FROM CallAnalysis CA
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
             )
-            SELECT
-                fs.FullDate,
-                fs.EARFCN,
-                fs.PCI,
-                fs.RFBand,
-                ROUND(fs.RSRP, 2)  AS RSRP,
-                ROUND(fs.RSRQ, 2)  AS RSRQ,
-                ROUND(fs.SINR, 2)  AS SINR,
-                ROUND(fs.RSSI, 2)  AS RSSI
-            FROM FactLTEScanner fs
-            CROSS JOIN call_time ct
-            WHERE fs.EARFCN IS NOT NULL
-              AND fs.FullDate >= ct.start_time
-              AND fs.FullDate <= ct.end_time
-            ORDER BY fs.FullDate
-        """, (session_id,))
-        cols_a = [c[0] for c in cursor.description] if cursor.description else []
-        a_side = [{cols_a[i]: row[i] for i in range(len(cols_a))} for row in cursor.fetchall()]
+        """
+        a_side = run(a_cte, (session_id,))
 
-        # B-side: resolve B session then match scanner rows by B-side call time window
-        cursor.execute("""
+        # B-side: resolve B session, then its time window
+        b_cte = """
             ;WITH pair_root AS (
                 SELECT TOP (1)
-                    CASE
-                        WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
-                        ELSE CA.SessionId
-                    END AS ASessionId
+                    CASE WHEN CA.Side='B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                         ELSE CA.SessionId END AS ASessionId
                 FROM CallAnalysis CA
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
                    OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
@@ -2123,36 +2218,19 @@ def get_lte_scanner_raw(
                 SELECT TOP (1) CA.SessionId AS BSessionId
                 FROM CallAnalysis CA
                 INNER JOIN pair_root PR ON CA.SessionIdA = PR.ASessionId
-                WHERE CA.Side = 'B'
+                WHERE CA.Side='B'
             ),
-            b_time AS (
+            win AS (
                 SELECT TOP 1
                     CA.callStartTimeStamp AS start_time,
-                    COALESCE(
-                        CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                    COALESCE(CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration,0), CA.callStartTimeStamp)
                     ) AS end_time
                 FROM CallAnalysis CA
                 INNER JOIN b_session B ON CA.SessionId = B.BSessionId
             )
-            SELECT
-                fs.FullDate,
-                fs.EARFCN,
-                fs.PCI,
-                fs.RFBand,
-                ROUND(fs.RSRP, 2)  AS RSRP,
-                ROUND(fs.RSRQ, 2)  AS RSRQ,
-                ROUND(fs.SINR, 2)  AS SINR,
-                ROUND(fs.RSSI, 2)  AS RSSI
-            FROM FactLTEScanner fs
-            CROSS JOIN b_time bt
-            WHERE fs.EARFCN IS NOT NULL
-              AND fs.FullDate >= bt.start_time
-              AND fs.FullDate <= bt.end_time
-            ORDER BY fs.FullDate
-        """, (session_id, session_id))
-        cols_b = [c[0] for c in cursor.description] if cursor.description else []
-        b_side = [{cols_b[i]: row[i] for i in range(len(cols_b))} for row in cursor.fetchall()]
+        """
+        b_side = run(b_cte, (session_id, session_id))
 
         conn.close()
         return {"aSide": a_side, "bSide": b_side}
@@ -2160,54 +2238,119 @@ def get_lte_scanner_raw(
         raise HTTPException(status_code=500, detail=str(e))
 
 
-@app.get("/api/gsm_scanner_raw")
-def get_gsm_scanner_raw(
+@app.get("/api/lte_serving_vs_scanner")
+def get_lte_serving_vs_scanner(
     database: str = Query(..., min_length=1),
     session_id: str = Query(..., min_length=1)
 ):
-    """FactGSMScanner rows matched by call datetime window.
-    For each unique BCCH+RFBand keeps the single reading closest to call start."""
+    """Head-to-head: what the UE was CAMPED ON (FactLTERadio serving cell) vs the
+    BEST cell the SCANNER saw at the same time. Grouped per EARFCN+PCI so you can
+    spot missed handovers (scanner best PCI stronger than serving)."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        # SERVING (FactLTERadio) aggregated per cell during the call
+        cursor.execute("""
+            ;WITH win AS (
+                SELECT TOP 1
+                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration,0), CA.callStartTimeStamp)
+                    ) AS end_time
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+            )
+            SELECT
+                'serving' AS Source,
+                fr.EARFCN,
+                fr.PhyCellId AS PCI,
+                COUNT(*)                 AS samples,
+                ROUND(AVG(fr.RSRP),2)    AS avgRSRP,
+                ROUND(AVG(fr.RSRQ),2)    AS avgRSRQ,
+                ROUND(AVG(fr.SINR),2)    AS avgSINR
+            FROM FactLTERadio fr
+            CROSS JOIN win w
+            WHERE fr.SessionId = TRY_CONVERT(BIGINT, ?)
+              AND fr.FullDate BETWEEN w.start_time AND w.end_time
+              AND fr.EARFCN IS NOT NULL
+            GROUP BY fr.EARFCN, fr.PhyCellId
+        """, (session_id, session_id))
+        cols = [c[0] for c in cursor.description]
+        serving = [{cols[i]: r[i] for i in range(len(cols))} for r in cursor.fetchall()]
+
+        # SCANNER (FactLTEScanner) aggregated per cell during the call
+        cursor.execute("""
+            ;WITH win AS (
+                SELECT TOP 1
+                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration,0), CA.callStartTimeStamp)
+                    ) AS end_time
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+            )
+            SELECT
+                'scanner' AS Source,
+                fs.EARFCN,
+                fs.PCI,
+                COUNT(*)                 AS samples,
+                ROUND(AVG(fs.RSRP),2)    AS avgRSRP,
+                ROUND(AVG(fs.RSRQ),2)    AS avgRSRQ,
+                ROUND(AVG(fs.SINR),2)    AS avgSINR
+            FROM FactLTEScanner fs
+            CROSS JOIN win w
+            WHERE fs.FullDate BETWEEN w.start_time AND w.end_time
+              AND fs.EARFCN IS NOT NULL
+            GROUP BY fs.EARFCN, fs.PCI
+            ORDER BY avgRSRP DESC
+        """, (session_id,))
+        cols = [c[0] for c in cursor.description]
+        scanner = [{cols[i]: r[i] for i in range(len(cols))} for r in cursor.fetchall()]
+
+        conn.close()
+
+        # derive: was the scanner's best cell stronger than the serving cell?
+        serving_best = max((s["avgRSRP"] for s in serving if s["avgRSRP"] is not None), default=None)
+        scanner_best = scanner[0] if scanner else None
+        missed_ho = None
+        if serving_best is not None and scanner_best and scanner_best.get("avgRSRP") is not None:
+            # scanner best PCI not in serving list and >3 dB stronger
+            serving_pcis = {s["PCI"] for s in serving}
+            if scanner_best["PCI"] not in serving_pcis and scanner_best["avgRSRP"] - serving_best > 3:
+                missed_ho = {
+                    "scannerBestPCI": scanner_best["PCI"],
+                    "scannerBestRSRP": scanner_best["avgRSRP"],
+                    "servingBestRSRP": serving_best,
+                    "deltaDb": round(scanner_best["avgRSRP"] - serving_best, 1),
+                    "note": "Scanner saw a stronger cell than serving — possible missed/late handover",
+                }
+
+        return {"serving": serving, "scanner": scanner, "missedHandoverHint": missed_ho}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/gsm_scanner_raw")
+def get_gsm_scanner_raw(
+    database: str = Query(..., min_length=1),
+    cgi: str = Query(..., min_length=1),
+    start: str = Query(..., min_length=1),
+    end: str = Query(..., min_length=1)
+):
+    """FactGSMScanner rows for a given CGI within [start, end]."""
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
 
         cursor.execute("""
-            ;WITH call_time AS (
-                SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
-                    COALESCE(
-                        CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
-                    ) AS end_time
-                FROM CallAnalysis CA
-                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
-            ),
-            scanner_ranked AS (
-                SELECT
-                    fs.FullDate,
-                    fs.BCCH,
-                    fs.RFBand,
-                    fs.BSIC,
-                    fs.RxLev,
-                    fs.CoverI,
-                    fs.CGI,
-                    fs.CId,
-                    fs.LAC,
-                    ROW_NUMBER() OVER (
-                        PARTITION BY fs.BCCH, fs.RFBand
-                        ORDER BY ABS(DATEDIFF(MILLISECOND, ct.start_time, fs.FullDate))
-                    ) AS rn
-                FROM FactGSMScanner fs
-                CROSS JOIN call_time ct
-                WHERE fs.BCCH IS NOT NULL
-                  AND fs.FullDate >= ct.start_time
-                  AND fs.FullDate <= ct.end_time
-            )
             SELECT FullDate, BCCH, RFBand, BSIC, RxLev, CoverI, CGI, CId, LAC
-            FROM scanner_ranked
-            WHERE rn = 1
-            ORDER BY BCCH, RFBand
-        """, (session_id,))
+            FROM FactGSMScanner
+            WHERE CGI = ?
+              AND FullDate >= ?
+              AND FullDate <= ?
+            ORDER BY FullDate
+        """, (cgi, start, end))
         cols = [c[0] for c in cursor.description] if cursor.description else []
         rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
 
@@ -2409,5 +2552,347 @@ def get_wcdma_values(
         conn.close()
 
         return {"wcdmaValues": [{columns[i]: row[i] for i in range(len(columns))} for row in rows]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+# ============================================================================
+#  Extra per-call endpoints â cover tables not touched by the API above.
+#  Verified against schema MTWS_26H1 (wma.sql).
+# ============================================================================
+
+def _rows(cursor):
+    cols = [c[0] for c in cursor.description] if cursor.description else []
+    return [{cols[i]: r[i] for i in range(len(cols))} for r in cursor.fetchall()]
+
+
+@app.get("/api/handover_info")
+def get_handover_info(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """All handover events during the call: status + duration. HoStatus tells you
+    if the HO succeeded/failed; hoDuration is the interruption length (ms)."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT h.MsgId, h.SessionId, h.MsgTime, h.HoStatus, h.hoDuration,
+                   p.Latitude, p.Longitude
+            FROM HandoverInfo h
+            LEFT JOIN Position p ON p.PosId = h.PosId
+            WHERE h.SessionId = TRY_CONVERT(BIGINT, ?)
+            ORDER BY h.MsgTime
+        """, (session_id,))
+        data = _rows(cursor)
+        conn.close()
+        return {"handoverInfo": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/l3_summary")
+def get_l3_summary(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """Aggregated signalling overview for the call: how many of each message type,
+    by technology and direction. Quick way to spot e.g. repeated RRC re-establish
+    or paging storms without scrolling the whole log."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                l.Technology,
+                l.Layer,
+                l.Direction,
+                l.SimpleMsgName,
+                COUNT(*) AS cnt,
+                MIN(l.FullDate) AS firstSeen,
+                MAX(l.FullDate) AS lastSeen
+            FROM FactL3Messages l
+            WHERE l.SessionId = TRY_CONVERT(BIGINT, ?)
+            GROUP BY l.Technology, l.Layer, l.Direction, l.SimpleMsgName
+            ORDER BY cnt DESC
+        """, (session_id,))
+        data = _rows(cursor)
+        conn.close()
+        return {"l3Summary": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/gsm_neighbors")
+def get_gsm_neighbors(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """GSM neighbour list during the call: BCCH/BSIC/RxLev/C1/C2 per neighbour."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                n.FullDate AS MsgTime,
+                n.SessionId,
+                n.Cell,
+                n.BCCH,
+                n.BSICFormatted AS BSIC,
+                n.RxLev,
+                n.C1,
+                n.C2,
+                n.DistanceToBTS,
+                p.Latitude,
+                p.Longitude
+            FROM FactGSMNeighbors n
+            LEFT JOIN Position p ON p.PosId = n.PosId
+            WHERE n.SessionId = TRY_CONVERT(BIGINT, ?)
+            ORDER BY n.FullDate, n.RxLev DESC
+        """, (session_id,))
+        data = _rows(cursor)
+        conn.close()
+        return {"gsmNeighbors": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/nr5g_state")
+def get_nr5g_state(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """5G MM state over time (StateAsTxt / SubStateAsTxt) â shows when the UE
+    actually camped on / dropped 5G during the call."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                s.FullDate AS MsgTime,
+                s.SessionId,
+                s.StateAsTxt,
+                s.SubStateAsTxt,
+                s.MM5GUpdateStatusTxt,
+                s.TAC,
+                s.PLMNID
+            FROM FactNR5GMM5GState s
+            WHERE s.SessionId = TRY_CONVERT(BIGINT, ?)
+            ORDER BY s.FullDate
+        """, (session_id,))
+        data = _rows(cursor)
+        conn.close()
+        return {"nr5gState": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/nr5g_throughput")
+def get_nr5g_throughput(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """NR PDSCH net/scheduled downlink throughput over the call, plus BER & carriers."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                t.FullDate AS MsgTime,
+                t.SessionId,
+                t.Interval,
+                ROUND(t.NetThroughput,   2) AS NetThroughput,
+                ROUND(t.SchedThroughput, 2) AS SchedThroughput,
+                t.BER,
+                t.NumCarriers,
+                t.Overhead
+            FROM FactNR5GPDSCHThroughput t
+            WHERE t.SessionId = TRY_CONVERT(BIGINT, ?)
+            ORDER BY t.FullDate
+        """, (session_id,))
+        data = _rows(cursor)
+        conn.close()
+        return {"nr5gThroughput": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/lte_cell_info")
+def get_lte_cell_info(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """LTE serving cell + CA configuration over the call: PCI, EARFCN, bandwidths,
+    number of antennas, transmission mode, aggregated bandwidth (CA)."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                c.FullDate AS MsgTime,
+                c.SessionId,
+                c.CarrierIndexName,
+                c.PCI,
+                c.DL_EARFCN,
+                c.UL_EARFCN,
+                c.DLBandwidth,
+                c.ULBandwidth,
+                c.RFBand,
+                c.NumberOfAntennas,
+                c.TransmissionMode,
+                c.NumCarriers,
+                c.DLBandwidthAggregated,
+                c.MCC,
+                c.MNC,
+                c.TAC
+            FROM FactLTECellInfo c
+            WHERE c.SessionId = TRY_CONVERT(BIGINT, ?)
+            ORDER BY c.FullDate
+        """, (session_id,))
+        data = _rows(cursor)
+        conn.close()
+        return {"lteCellInfo": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/nr5g_cell_info")
+def get_nr5g_cell_info(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """NR serving cell over the call: PCI, NRARFCN, band, SCS, bandwidths,
+    serving beam index and number of detected beams."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                c.FullDate AS MsgTime,
+                c.SessionId,
+                c.PCI,
+                c.DL_NRARFCN,
+                c.UL_NRARFCN,
+                c.Band,
+                c.CellType,
+                c.DuplexMode,
+                c.DL_SubCarrierSpacing,
+                c.DL_Bandwidth,
+                c.UL_Bandwidth,
+                c.ServingBeamSSBIndex,
+                c.DetectedBeams,
+                c.NumCarrier
+            FROM FactNR5GCellInfo c
+            WHERE c.SessionId = TRY_CONVERT(BIGINT, ?)
+            ORDER BY c.FullDate
+        """, (session_id,))
+        data = _rows(cursor)
+        conn.close()
+        return {"nr5gCellInfo": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/coverage_class")
+def get_coverage_class(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """Best-server coverage classification per geo bin: which channel/band/operator
+    gave the best SS-RSRP (5G), RSRP (LTE), RSCP (3G), RxLev (2G) at each point."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                f.FullDate AS MsgTime,
+                f.SessionId,
+                f.RadioTechnology,
+                f.RadioTechnologyBand,
+                f.Frequency,
+                f.Channel,
+                f.Best_SS_RSRP_Channel,
+                f.Best_SS_RSRP_Band,
+                f.Best_RSRP_Channel,
+                f.Best_RSRP_Band,
+                f.Best_RSCP_Channel,
+                f.Best_RxLev_Channel,
+                f.MCC,
+                f.MNC
+            FROM FactCoverageClassification f
+            WHERE f.SessionId = TRY_CONVERT(BIGINT, ?)
+            ORDER BY f.FullDate
+        """, (session_id,))
+        data = _rows(cursor)
+        conn.close()
+        return {"coverageClass": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/ping_summary")
+def get_ping_summary(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """Ping RTT summary for the session: average / median / 10th-percentile RTT,
+    packet size, request count and error code."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                p.FullDate AS MsgTime,
+                p.SessionId,
+                p.Protocol,
+                p.Host,
+                p.PacketSize,
+                p.Requests,
+                p.ErrorCode,
+                ROUND(p.RTTAverage,        2) AS RTTAverage_ms,
+                ROUND(p.RTTMedian,         2) AS RTTMedian_ms,
+                ROUND(p.RTT10thPercentile, 2) AS RTT_P10_ms
+            FROM FactPingSummary p
+            WHERE p.SessionId = TRY_CONVERT(BIGINT, ?)
+            ORDER BY p.FullDate
+        """, (session_id,))
+        data = _rows(cursor)
+        conn.close()
+        return {"pingSummary": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/wcdma_radio")
+def get_wcdma_radio(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """3G WCDMA radio over the call: aggregate Ec/Io, RSCP, Tx/Rx power, SIR, BLER."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                w.FullDate AS MsgTime,
+                w.SessionId,
+                w.ARFCN,
+                w.NumCells,
+                ROUND(w.AggrEcIo, 2) AS AggrEcIo,
+                ROUND(w.AggrRSCP, 2) AS AggrRSCP,
+                ROUND(w.RxPwr,    2) AS RxPwr,
+                ROUND(w.TxPwr,    2) AS TxPwr,
+                ROUND(w.SIR,      2) AS SIR,
+                w.BLERDecimal AS BLER,
+                w.NumPolluter,
+                w.DistanceToBTS,
+                w.CGI
+            FROM FactWCDMARadio w
+            WHERE w.SessionId = TRY_CONVERT(BIGINT, ?)
+            ORDER BY w.FullDate
+        """, (session_id,))
+        data = _rows(cursor)
+        conn.close()
+        return {"wcdmaRadio": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

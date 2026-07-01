@@ -11,10 +11,11 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchCallPagingInfo, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchGsmScannerRaw, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallPagingInfoResponse, type PagingTimelineEvent, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchGsmScannerRaw, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchCallKpiTile, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE } from "@/lib/chartStyles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useSignallingHighlights, SEV_ROW_CLASS, SEV_BADGE_CLASS, SEV_LABEL } from "@/lib/signallingHighlights";
 //ReferenceLine για γραμμες στο διαγραμμα, πχ για thresholds. 
 /**
  * Interface για τα props του Component CallDetail.
@@ -33,6 +34,7 @@ interface CallDetailProps {
  * Δέχεται σαν είσοδο (iso) ένα string και εγγυάται(: string) 
  * ότι το αποτέλεσμά της θα είναι επίσης string.
  */
+// Χρωματισμός LTE RSRP: πράσινο καλό, πορτοκαλί οριακό, κόκκινο κακό (χρησιμοποιείται στο χάρτη)
 function rsrpColor(val: number | null | undefined): string {
   if (val == null) return "#6b7280";
   if (val >= -115) return "#22c55e";
@@ -40,6 +42,7 @@ function rsrpColor(val: number | null | undefined): string {
   return "#ef4444";
 }
 
+// Ίδια λογική με rsrpColor αλλά για GSM RxLev (διαφορετικά thresholds)
 function rxLevColor(val: number | null | undefined): string {
   if (val == null) return "#6b7280";
   if (val >= -88) return "#22c55e";
@@ -47,6 +50,10 @@ function rxLevColor(val: number | null | undefined): string {
   return "#ef4444";
 }
 
+/**
+ * Tooltip για τα σημεία/antenna marker του χάρτη που αλλάζει αυτόματα κατεύθυνση
+ * ώστε να μην "κόβεται" εκτός οθόνης όταν το σημείο βρίσκεται κοντά στην άκρη του χάρτη.
+ */
 function SmartTooltip({ lat, lon, children }: { lat: number; lon: number; children: React.ReactNode }) {
   const map = useMap();
   const pt = map.latLngToContainerPoint([lat, lon]);
@@ -69,6 +76,7 @@ function SmartTooltip({ lat, lon, children }: { lat: number; lon: number; childr
   );
 }
 
+// Κεντράρει/κάνει zoom τον χάρτη ώστε να χωράνε όλα τα GPS σημεία της κλήσης όποτε αλλάζουν
 function MapAutoFit({ points }: { points: Array<[number, number]> }) {
   const map = useMap();
   useEffect(() => {
@@ -84,6 +92,7 @@ function MapAutoFit({ points }: { points: Array<[number, number]> }) {
   return null;
 }
 
+// Απόσταση μεταξύ δύο γεωγραφικών σημείων σε μέτρα (haversine formula)
 function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): number {
   const R = 6371000;
   const dLat = (lat2 - lat1) * Math.PI / 180;
@@ -92,10 +101,12 @@ function haversineM(lat1: number, lon1: number, lat2: number, lon2: number): num
   return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
 }
 
+// Μορφοποίηση απόστασης: μέτρα κάτω από 1km, αλλιώς χιλιόμετρα με 2 δεκαδικά
 function fmtDist(m: number): string {
   return m < 1000 ? `${Math.round(m)} m` : `${(m / 1000).toFixed(2)} km`;
 }
 
+// Ελληνικό format ημερομηνίας/ώρας (dd/mm/yyyy hh:mm:ss) για όλους τους πίνακες
 function formatDateTime(iso: string): string {
   return new Date(iso).toLocaleString("el-GR", {
     day: "2-digit",
@@ -108,6 +119,7 @@ function formatDateTime(iso: string): string {
 }
 
 const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
+  // LTE/GSM radio measurement rows (A-side and B-side, for the "Radio Measurements" table + chart)
   const [radioValues, setRadioValues] = useState<any[]>([]);
   const [gsmValues, setGsmValues] = useState<any[]>([]);
   const [bSideGsmValues, setBSideGsmValues] = useState<any[]>([]);
@@ -116,14 +128,19 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
   const [tracelogValues, setTracelogValues] = useState<TraceLogRow[]>([]);
   const [sideComparison, setSideComparison] = useState<CallSideComparisonRow[]>([]);
   const [bSideLteValues, setBSideLteValues] = useState<any[]>([]);
+  // Which side (A/B) and which network (LTE/GSM, only relevant for SRVCC calls) the UI currently shows
   const [selectedLteSide, setSelectedLteSide] = useState<"A" | "B">("A");
   const [srvccNetwork, setSrvccNetwork] = useState<"LTE" | "GSM">("LTE");
 
+  // Serving cell (eNB/EARFCN/PCI) for A-side and B-side, plus the nearest physical antenna
+  // matched by PCI + shortest distance to the call's average GPS position (Cosmote Free only)
   const [cellInfo, setCellInfo] = useState<{ eNBId: number | null; EARFCN: number | null; PCI: number | null } | null>(null);
   const [bSideCellInfo, setBSideCellInfo] = useState<{ eNBId: number | null; EARFCN: number | null; PCI: number | null } | null>(null);
   const [matchedAntenna, setMatchedAntenna] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number; azimuth: number | null; freq: number | null; vendor: string | null; enbName: string | null; tech: string | null; height: number | null; downtilt: number | null; siteId: number | null; cellId: number | null } | null>(null);
   const [matchedAntennaBSide, setMatchedAntennaBSide] = useState<{ lat: number; lon: number; cellName: string | null; distanceM: number; azimuth: number | null; freq: number | null; vendor: string | null; enbName: string | null; tech: string | null; height: number | null; downtilt: number | null; siteId: number | null; cellId: number | null } | null>(null);
 
+  // Network "context" signal/technology around the call (before/during/after window), used
+  // by the "Συμπεριφορά δικτύου" charts further down the page
   const [contextSignal, setContextSignal] = useState<any[]>([]);
   const [contextSignalBSide, setContextSignalBSide] = useState<any[]>([]);
   const [gsmContextSignal, setGsmContextSignal] = useState<any[]>([]);
@@ -131,18 +148,28 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
   const [selectedContextSide, setSelectedContextSide] = useState<"A" | "B">("A");
   const [contextWindowSec, setContextWindowSec] = useState(30);
   const [contextTechnology, setContextTechnology] = useState<any[]>([]);
-  const [pagingData, setPagingData] = useState<CallPagingInfoResponse | null>(null);
+  // L3 signaling (RRC/NAS/SIP messages) for A-side and B-side
+  const [l3Data, setL3Data] = useState<CallL3MessagesResponse | null>(null);
+  const [l3DataBSide, setL3DataBSide] = useState<CallL3MessagesResponse | null>(null);
+  const [selectedL3Side, setSelectedL3Side] = useState<"A" | "B">("A");
   const [deviceInfo, setDeviceInfo] = useState<CallDeviceInfo | null>(null);
+  // LTE-only measurement/scanner comparison stats and raw scanner samples (used to cross-check UE vs scanner)
   const [lteMeasComp, setLteMeasComp] = useState<{ aSide: LteMeasurementStat[]; bSide: LteMeasurementStat[] } | null>(null);
   const [lteScannerComp, setLteScannerComp] = useState<{ aSide: LteScannerStat[]; bSide: LteScannerStat[] } | null>(null);
   const [scannerRawA, setScannerRawA] = useState<any[]>([]);
   const [scannerRawB, setScannerRawB] = useState<any[]>([]);
   const [gsmScannerRaw, setGsmScannerRaw] = useState<any[]>([]);
+  const [callKpiTile, setCallKpiTile] = useState<CallKpiTile | null>(null);
 
+  // True when the active table/chart should show GSM columns instead of LTE:
+  // CS calls are always GSM; SRVCC calls let the user toggle between LTE and GSM.
   const isGSMMode = call.callMode === "CS" || (call.callMode === "SRVCC" && srvccNetwork === "GSM");
   const [isLoadingRadio, setIsLoadingRadio] = useState(false);
+  // Chart series visibility toggles (strength/quality/scanner overlay)
   const [showStrength, setShowStrength] = useState(true);
   const [showQuality, setShowQuality] = useState(true);
+  const [showScanner, setShowScanner] = useState(false);
+  // Editable free-text comment attached to the call
   const [commentText, setCommentText] = useState(call.comment || "");
   const [isEditingComment, setIsEditingComment] = useState(false);
   const [isSavingComment, setIsSavingComment] = useState(false);
@@ -159,6 +186,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
 
 
 
+  // Persists the comment textarea to the backend and updates the in-memory call record so the
+  // header reflects the new text immediately without a refetch.
   const handleSaveComment = async () => {
     setIsSavingComment(true);
     try {
@@ -181,11 +210,18 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     }
   };
 
+  // Main data-load effect: fires whenever the selected call changes. Fetches every panel's data
+  // in parallel with Promise.allSettled so that one failing endpoint doesn't block the rest of
+  // the page from rendering. Several fetches are skipped (replaced with an already-resolved empty
+  // value) based on call.callMode, since GSM-only calls have no LTE data and vice versa:
+  //   - callMode === "CS"            → circuit-switched (GSM only)
+  //   - callMode === "SRVCC"         → starts LTE, handed over to GSM (both fetched)
+  //   - anything else                → LTE only
   useEffect(() => {
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
-        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, deviceRes, lteMeasCompRes, lteScannerCompRes, scannerRawRes, gsmScannerRes, gsmCtxSignalRes, ctxSignalBSideRes, gsmCtxSignalBSideRes] = await Promise.allSettled([
+        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, pagingBSideRes, deviceRes, lteMeasCompRes, lteScannerCompRes, scannerRawRes, gsmCtxSignalRes, ctxSignalBSideRes, gsmCtxSignalBSideRes, callKpiTileRes] = await Promise.allSettled([
           call.callMode !== "CS" ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
           fetchMosValues(database, call.callId),
@@ -198,15 +234,16 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           call.callMode !== "CS" ? fetchCellInfoBSide(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
           fetchCallContextSignal(database, call.callId, contextWindowSec),
           fetchCallContextTechnology(database, call.callId, contextWindowSec),
-          fetchCallPagingInfo(database, call.callId),
+          fetchL3Messages(database, call.callId, { side: "A" }),
+          fetchL3Messages(database, call.callId, { side: "B" }),
           fetchCallDeviceInfo(database, call.callId),
           call.callMode !== "CS" ? fetchLteMeasurementComparison(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
           call.callMode !== "CS" ? fetchLteScannerMeasurement(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
           call.callMode !== "CS" ? fetchLteScannerRaw(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
-          call.callMode === "CS" ? fetchGsmScannerRaw(database, call.callId) : Promise.resolve([]),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
           call.callMode !== "CS" ? fetchCallContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+          fetchCallKpiTile(database, call.callId),
         ]);
 
         if (lteRes.status === "fulfilled") {
@@ -270,9 +307,15 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         }
 
         if (pagingRes.status === "fulfilled") {
-          setPagingData(pagingRes.value as CallPagingInfoResponse);
+          setL3Data(pagingRes.value as CallL3MessagesResponse);
         } else {
-          setPagingData(null);
+          setL3Data(null);
+        }
+
+        if (pagingBSideRes.status === "fulfilled") {
+          setL3DataBSide(pagingBSideRes.value as CallL3MessagesResponse);
+        } else {
+          setL3DataBSide(null);
         }
 
         if (deviceRes.status === "fulfilled") {
@@ -302,12 +345,6 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           setScannerRawB([]);
         }
 
-        if (gsmScannerRes.status === "fulfilled") {
-          setGsmScannerRaw((gsmScannerRes.value as any) ?? []);
-        } else {
-          setGsmScannerRaw([]);
-        }
-
         if (gsmCtxSignalRes.status === "fulfilled") {
           setGsmContextSignal((gsmCtxSignalRes.value as any).signal || []);
         } else {
@@ -325,12 +362,19 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         } else {
           setGsmContextSignalBSide([]);
         }
+
+        if (callKpiTileRes.status === "fulfilled") {
+          setCallKpiTile(callKpiTileRes.value as CallKpiTile);
+        } else {
+          setCallKpiTile(null);
+        }
       } catch (err) {
         console.error("Failed to load metrics", err);
       } finally {
         setIsLoadingRadio(false);
       }
     }
+    // Reset all UI selections and stale data back to defaults before loading the newly selected call
     if (call.callId && database) {
       setSelectedLteSide("A");
       setSrvccNetwork("LTE");
@@ -342,11 +386,47 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       setGsmContextSignal([]);
       setContextSignalBSide([]);
       setGsmContextSignalBSide([]);
+      setCallKpiTile(null);
       setSelectedContextSide("A");
       loadRadio();
     }
   }, [database, call.callId, call.callMode]);
 
+  // For CS (GSM) calls, fetch GSM scanner samples per contiguous serving-cell segment so the
+  // "RxLev Scanner" column can cross-check the UE's own measurements against the scanner.
+  useEffect(() => {
+    if (call.callMode !== "CS" || gsmValues.length === 0 || !database) {
+      setGsmScannerRaw([]);
+      return;
+    }
+
+    // gsmValues is ordered by MsgTime — split it into contiguous runs of the
+    // same CGI (handover segments) and pull scanner data per segment, since
+    // the serving CGI can change several times within a single call.
+    type Segment = { cgi: string; start: string; end: string };
+    const segments: Segment[] = [];
+    for (const v of gsmValues) {
+      if (!v.CGI || !v.MsgTime) continue;
+      const last = segments[segments.length - 1];
+      if (last && last.cgi === v.CGI) {
+        last.end = v.MsgTime;
+      } else {
+        segments.push({ cgi: v.CGI, start: v.MsgTime, end: v.MsgTime });
+      }
+    }
+    if (segments.length === 0) { setGsmScannerRaw([]); return; }
+
+    let cancelled = false;
+    Promise.all(
+      segments.map(seg => fetchGsmScannerRaw(database, seg.cgi, seg.start, seg.end).catch(() => []))
+    ).then(results => {
+      if (!cancelled) setGsmScannerRaw(results.flat());
+    });
+    return () => { cancelled = true; };
+  }, [database, call.callMode, gsmValues]);
+
+  // Re-fetches only the "before/during/after" context-signal data when the user changes the
+  // time window (10/30/60/120s) — cheaper than re-running the full loadRadio() load above.
   useEffect(() => {
     if (!call.callId || !database) return;
     async function reloadContext() {
@@ -366,6 +446,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     reloadContext();
   }, [contextWindowSec, call.callId, database, call.callMode]);
 
+  // Cosmote Free only: match the A-side serving cell (by PCI) to the physical antenna closest
+  // to the call's average GPS position, since PCI alone can be reused by several sites.
   useEffect(() => {
     const isCosmoteFree = call.region?.toLowerCase().includes("cosmote free");
     if (!isCosmoteFree || !cellInfo || cellInfo.PCI === null) {
@@ -391,6 +473,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     }).catch(() => setMatchedAntenna(null));
   }, [cellInfo, radioValues, call.region]);
 
+  // Same antenna-matching logic as above, but for the B-side (second leg) of the call
   useEffect(() => {
     const isCosmoteFree = call.region?.toLowerCase().includes("cosmote free");
     if (!isCosmoteFree || !bSideCellInfo || bSideCellInfo.PCI === null) {
@@ -416,24 +499,60 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     }).catch(() => setMatchedAntennaBSide(null));
   }, [bSideCellInfo, bSideLteValues, call.region]);
 
+  // Single source of truth for "which measurement rows are currently on screen", combining the
+  // callMode/srvccNetwork (LTE vs GSM) and selectedLteSide (A vs B) selections into one array.
   const activeRadioValues = useMemo(() => {
     if (call.callMode === "CS") return selectedLteSide === "B" ? bSideGsmValues : gsmValues;
     if (call.callMode === "SRVCC" && srvccNetwork === "GSM") return selectedLteSide === "B" ? bSideGsmValues : gsmValues;
     return selectedLteSide === "B" ? bSideLteValues : radioValues;
   }, [call.callMode, selectedLteSide, radioValues, bSideLteValues, gsmValues, bSideGsmValues, srvccNetwork]);
 
+  // Formats a numeric KPI value with fixed decimals + unit suffix, or an em-dash when missing
+  const fmtMetric = (v: number | null | undefined, decimals: number, suffix: string) =>
+    v != null ? `${v.toFixed(decimals)}${suffix}` : "—";
+
+  // KPI tile values fall back to per-call fields when the dedicated KPI tile endpoint has no data
+  const avgMos = callKpiTile?.AvgMOS ?? (call.avgMos || null);
+  const downloadMbps = callKpiTile?.Download_Mbps ?? null;
+  const uploadMbps = callKpiTile?.Upload_Mbps ?? null;
+  const latencyMs = callKpiTile?.Latency_ms ?? null;
+  const jitterMs = callKpiTile?.Jitter_ms ?? null;
+  const packetLossPct = callKpiTile?.PacketLoss_pct ?? null;
+
+  // Definitions for the inline metrics strip shown in the top controls bar
   const metrics = [
-    { label: "Download", value: `${call.downloadSpeed.toFixed(1)} Mbps`, icon: ArrowDown, color: "text-primary" },
-    { label: "Upload", value: `${call.uploadSpeed.toFixed(1)} Mbps`, icon: ArrowUp, color: "text-accent" },
-    { label: "Latency", value: `${call.latency.toFixed(0)} ms`, icon: Gauge, color: "text-warning" },
-    { label: "AVG Mos", value: `${call.avgMos.toFixed(2)}`, icon: Gauge, color: "text-warning" },
-    { label: "Jitter", value: `${call.jitter.toFixed(1)} ms`, icon: Activity, color: "text-chart-4" },
-    { label: "Packet Loss", value: `${call.packetLoss.toFixed(2)}%`, icon: Wifi, color: call.packetLoss > 2 ? "text-destructive" : "text-success" },
+    { label: "Download", value: fmtMetric(downloadMbps, 1, " Mbps"), icon: ArrowDown, color: "text-primary" },
+    { label: "Upload", value: fmtMetric(uploadMbps, 1, " Mbps"), icon: ArrowUp, color: "text-accent" },
+    { label: "Latency", value: fmtMetric(latencyMs, 0, " ms"), icon: Gauge, color: "text-warning" },
+    { label: "AVG Mos", value: fmtMetric(avgMos, 2, ""), icon: Gauge, color: "text-warning" },
+    { label: "Jitter", value: fmtMetric(jitterMs, 1, " ms"), icon: Activity, color: "text-chart-4" },
+    { label: "Packet Loss", value: fmtMetric(packetLossPct, 2, "%"), icon: Wifi, color: packetLossPct != null && packetLossPct > 2 ? "text-destructive" : "text-success" },
     { label: "Setup Time", value: `${call.setupTime_ms} ms`, icon: Timer, color: call.setupTime_ms > 500 ? "text-warning" : "text-success" },
   ];
 
-  const chartData = useMemo(() => {
+  // Precompute GSM scanner match per measurement row — O(n log m) once, O(1) in render
+  const gsmScannerMatched = useMemo(() => {
+    if (gsmScannerRaw.length === 0 || !isGSMMode) return [] as (any | null)[];
+    const sorted = gsmScannerRaw
+      .map(r => ({ ...r, _ts: new Date(r.FullDate).getTime() }))
+      .sort((a, b) => a._ts - b._ts);
     return activeRadioValues.map(val => {
+      if (!val.MsgTime) return null;
+      const ts = new Date(val.MsgTime).getTime();
+      let lo = 0, hi = sorted.length - 1, best = 0;
+      while (lo <= hi) {
+        const mid = (lo + hi) >> 1;
+        if (sorted[mid]._ts <= ts) { best = mid; lo = mid + 1; }
+        else hi = mid - 1;
+      }
+      const a = sorted[best];
+      const b = sorted[best + 1];
+      return b && Math.abs(b._ts - ts) < Math.abs(a._ts - ts) ? b : a;
+    });
+  }, [gsmScannerRaw, activeRadioValues, isGSMMode]);
+
+  const chartData = useMemo(() => {
+    return activeRadioValues.map((val, idx) => {
       const isGSM = isGSMMode;
 
       // Βοηθητική συνάρτηση για να μην μετατρέπεται το null/κενό σε 0 από την Number()
@@ -445,9 +564,10 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         RxQualSub: isGSM ? parseValue(val.RxQualSub) : undefined,
         RSRP: !isGSM ? parseValue(val.RSRP) : undefined,
         RSRQ: !isGSM ? parseValue(val.RSRQ) : undefined,
+        ScannerRxLev: isGSM ? parseValue(gsmScannerMatched[idx]?.RxLev) : undefined,
       };
     });
-  }, [activeRadioValues, isGSMMode]);
+  }, [activeRadioValues, isGSMMode, gsmScannerMatched]);
 
   // Ποιό x-value (time string) να δείξει στο ReferenceLine — ορίζεται ΜΕΤΑ το chartData
   const chartHighlightTime = hoveredRadioIndex !== null
@@ -462,6 +582,14 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     return -1;
   }, [hoveredRadioIndex, hoveredTimeStr, chartData]);
 
+  // Currently displayed L3 signalling side (A/B) + per-row anomaly classification for it
+  const activeL3Data = useMemo(
+    () => (selectedL3Side === "B" ? l3DataBSide : l3Data),
+    [selectedL3Side, l3Data, l3DataBSide]
+  );
+  const l3Highlights = useSignallingHighlights(activeL3Data?.l3Messages ?? []);
+
+  // Aggregate min/max/avg RSRP & RSRQ for the B-side LTE leg (samples, avg, min, max)
   const bSideLteSummary = useMemo(() => {
     if (!bSideLteValues || bSideLteValues.length === 0) {
       return null;
@@ -487,11 +615,15 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     };
   }, [bSideLteValues]);
 
-  // Pre-index scanner rows by EARFCN for fast nearest-time lookup
+  // Pre-index scanner rows by EARFCN for fast nearest-time lookup.
+  // B-side falls back to the A-side scanner data when no B-side scanner rows exist.
   const activeScannerRaw = selectedLteSide === "B"
     ? (scannerRawB.length > 0 ? scannerRawB : scannerRawA)
     : scannerRawA;
 
+  // Build two lookup maps over the scanner rows, sorted by timestamp so nearest-time lookups
+  // can use binary search: byKey is keyed on EARFCN+PCI (most specific), byEarfcn falls back to
+  // EARFCN alone when the exact PCI combination has no scanner samples.
   const { scannerByKey, scannerByEarfcnOnly } = useMemo(() => {
     const byKey = new Map<string, any[]>();
     const byEarfcn = new Map<number, any[]>();
@@ -511,6 +643,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
 
   const scannerByEarfcn = scannerByKey;
 
+  // Binary search for the first row at/after `ts` in a list already sorted ascending by _ts —
+  // used to find the closest scanner sample taken on/after a given UE measurement's MsgTime.
   const findNextInList = (rows: any[], ts: number): any | null => {
     let lo = 0, hi = rows.length - 1, result = -1;
     while (lo <= hi) {
@@ -521,6 +655,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     return result >= 0 ? rows[result] : null;
   };
 
+  // Looks up the nearest scanner sample for a given UE measurement: try the exact EARFCN+PCI
+  // match first (most accurate), then fall back to EARFCN-only if no PCI-specific data exists.
   const findNearestScanner = (earfcn: number | null, pci: number | null, msgTime: string | null): any | null => {
     if (earfcn == null || msgTime == null) return null;
     const ts = new Date(msgTime).getTime();
@@ -531,29 +667,11 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     return null;
   };
 
-  // Precompute GSM scanner match per measurement row — O(n log m) once, O(1) in render
-  const gsmScannerMatched = useMemo(() => {
-    if (gsmScannerRaw.length === 0 || !isGSMMode) return [] as (any | null)[];
-    const sorted = gsmScannerRaw
-      .map(r => ({ ...r, _ts: new Date(r.FullDate).getTime() }))
-      .sort((a, b) => a._ts - b._ts);
-    return activeRadioValues.map(val => {
-      if (!val.MsgTime) return null;
-      const ts = new Date(val.MsgTime).getTime();
-      let lo = 0, hi = sorted.length - 1, best = 0;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (sorted[mid]._ts <= ts) { best = mid; lo = mid + 1; }
-        else hi = mid - 1;
-      }
-      const a = sorted[best];
-      const b = sorted[best + 1];
-      return b && Math.abs(b._ts - ts) < Math.abs(a._ts - ts) ? b : a;
-    });
-  }, [gsmScannerRaw, activeRadioValues, isGSMMode]);
-
+  // The GPS map is only shown for the "Cosmote Free" region, since that's the only dataset
+  // that reliably carries per-sample Latitude/Longitude values.
   const isCosmoteFree = call.region?.toLowerCase().includes("cosmote free");
 
+  // GPS points for the currently selected side/network, colored by signal strength
   const mapActivePts = useMemo(() => {
     if (!isCosmoteFree) return [];
     const source = selectedLteSide === "B"
@@ -569,12 +687,16 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
 
   const mapActiveAntenna = selectedLteSide === "B" ? matchedAntennaBSide : matchedAntenna;
 
+  // Bounds used by MapAutoFit — includes the matched antenna position so the map frames both
+  // the UE's GPS trail and the serving antenna it's connected to.
   const mapFitPts = useMemo((): [number, number][] => {
     const pts: [number, number][] = mapActivePts.map(p => p.pos);
     if (mapActiveAntenna) pts.push([mapActiveAntenna.lat, mapActiveAntenna.lon]);
     return pts;
   }, [mapActivePts, mapActiveAntenna]);
 
+  // B-side context signal is only used when it actually has data, otherwise silently fall back
+  // to A-side so the chart doesn't render empty just because the toggle is on "B".
   const activeContextSignal = selectedContextSide === "B" && contextSignalBSide.length > 0
     ? contextSignalBSide
     : contextSignal;
@@ -583,6 +705,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     ? gsmContextSignalBSide
     : gsmContextSignal;
 
+  // LTE RSRP/RSRQ series for the "network behavior around the call" chart, tagged with
+  // before/during/after phase so the chart can shade each period differently
   const contextChartData = useMemo(() =>
     activeContextSignal.map((v, idx) => ({
       idx,
@@ -593,6 +717,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     }))
   , [activeContextSignal]);
 
+  // Finds the [first, last] index range where phase === "during", used to draw the shaded
+  // "during the call" ReferenceArea band on the LTE context chart (before/after are the rest)
   const duringZone = useMemo(() => {
     const firstIdx = contextChartData.findIndex(d => d.phase === "during");
     const lastIdx  = [...contextChartData].reverse().findIndex(d => d.phase === "during");
@@ -625,6 +751,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     }));
   }, [isGSMMode, activeGsmContextSignal, activeRadioValues]);
 
+  // Same before/during/after range-finding as duringZone, but for the GSM RxLev/RxQual chart
   const gsmDuringZone = useMemo(() => {
     const firstIdx = gsmChartData.findIndex(d => d.phase === "during");
     const lastIdx  = [...gsmChartData].reverse().findIndex(d => d.phase === "during");
@@ -666,6 +793,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               );
 
               if (isMos) {
+                // AVG Mos gets a hoverable tooltip listing the individual MOS samples it was averaged from
                 return (
                   <Tooltip key={m.label} delayDuration={150}>
                     <TooltipTrigger asChild>
@@ -697,6 +825,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           </TooltipProvider>
         </div>
 
+        {/* Overall call status badge: green completed, orange dropped, red anything else */}
         <span className={`shrink-0 text-xs px-2 py-0.5 rounded font-medium ${call.status === "completed" ? "bg-success/10 text-success" :
           call.status === "dropped" ? "bg-warning/10 text-warning" :
             "bg-destructive/10 text-destructive"
@@ -747,6 +876,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
 
             <div className="flex items-center gap-3 flex-wrap">
               <h2 className="text-sm font-bold font-mono text-foreground">{call.region} · {call.callId}</h2>
+              {/* Checkboxes to toggle each line series on the chart below (labels swap for GSM vs LTE) */}
               {activeRadioValues && activeRadioValues.length > 0 && (
                 <div className="flex items-center gap-3 bg-muted/50 px-2 py-0.5 rounded border border-border/50">
                   <label className="flex items-center gap-1.5 text-xs font-medium text-foreground cursor-pointer select-none">
@@ -767,6 +897,17 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                     />
                     {isGSMMode ? "RxQual" : "RSRQ"}
                   </label>
+                  {isGSMMode && (
+                    <label className="flex items-center gap-1.5 text-xs font-medium text-foreground cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        checked={showScanner}
+                        onChange={(e) => setShowScanner(e.target.checked)}
+                        className="h-3.5 w-3.5 rounded-sm border-primary text-primary focus:ring-primary"
+                      />
+                      RxLev Scanner
+                    </label>
+                  )}
                 </div>
               )}
             </div>
@@ -776,6 +917,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               <span>Λήξη: {formatDateTime(call.endTime)}</span>
               <span className="font-mono text-foreground">{Math.floor(call.duration_s / 60)}m {call.duration_s % 60}s</span>
             </div>
+            {/* Serving cell details (eNB/EARFCN/PCI), matched antenna distance, and A/B side status comparison */}
             {cellInfo && cellInfo.eNBId !== null && (
               <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap mt-0.5 text-[10px] font-mono">
                 <span className="text-muted-foreground">eNB <span className="text-foreground font-bold">{cellInfo.eNBId}</span></span>
@@ -789,6 +931,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                     )}
                   </>
                 )}
+                {/* Per-side call outcome (e.g. status/reason code) when both A and B side data is available */}
                 {sideComparison.length > 0 && (
                   <>
                     <span className="text-border">│</span>
@@ -817,9 +960,10 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                 </Button>
               )}
             </div>
+            {/* Editable comment box: quick-select dropdown of common tags plus a free-text textarea */}
             {isEditingComment ? (
               <div className="space-y-1">
-                {/* Dropdown quick-select */}
+                {/* Dropdown quick-select — picking an option overwrites commentText, it does not append */}
                 <select
                   className="w-full text-xs rounded border border-border bg-muted/60 px-2 py-1 text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                   value=""
@@ -872,6 +1016,9 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                   <CartesianGrid {...GRID_STYLE} vertical={false} />
                   <XAxis dataKey="time" {...AXIS_STYLE} axisLine={false} tickLine={false} />
 
+                  {/* Axis domains, threshold reference lines and dashed thresholds differ per network:
+                      GSM uses RxLev/RxQual scales (RxQual axis reversed, 0=best..7=worst),
+                      LTE uses RSRP/RSRQ scales (both axes standard, more negative=worse). */}
                   {isGSMMode ? (
                     <>
                       {showStrength && <YAxis yAxisId="left" domain={[-105, dataMax => Math.max(dataMax, -60)]} {...AXIS_STYLE} axisLine={false} tickLine={false} />}
@@ -882,7 +1029,10 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                       {showQuality && !showStrength && <ReferenceLine y={6} yAxisId="right" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
                       <RechartsTooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }} itemStyle={{ color: 'hsl(var(--foreground))' }} />
                       <Legend wrapperStyle={{ fontSize: '12px' }} />
+                      {/* Custom dot renderer: only draws a visible circle at chartHighlightIndex (the
+                          row currently hovered in the table below), keeping every other point invisible */}
                       {showStrength && <Line yAxisId="left" type="monotone" dataKey="RxLevSub" stroke={CHART_PALETTE[1]} dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill={CHART_PALETTE[1]} stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RxLevSub" />}
+                      {showScanner && <Line yAxisId="left" type="monotone" dataKey="ScannerRxLev" stroke={CHART_PALETTE[2]} strokeDasharray="4 3" dot={false} activeDot={false} strokeWidth={2} connectNulls name="RxLev Scanner" />}
                       {showQuality && <Line yAxisId="right" type="monotone" dataKey="RxQualSub" stroke={CHART_PALETTE[4]} dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill={CHART_PALETTE[4]} stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RxQualSub" />}
                       {chartHighlightTime && (
                         <ReferenceLine
@@ -931,6 +1081,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                 </div>
               );
 
+              // Custom SVG antenna icon (signal-wave glyph) drawn in the side's accent color, only
+              // rendered when a matched antenna position exists
               const antennaIcon = mapActiveAntenna ? L.divIcon({
                 className: "",
                 html: `<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="${antennaColor}" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -967,6 +1119,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                         weight={0}
                       />
                     ))}
+                    {/* Dashed line from the UE's last known GPS fix to its matched serving antenna */}
                     {mapActiveAntenna && antennaIcon && (
                       <>
                         <Polyline
@@ -1032,6 +1185,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                   {tracelogValues.map((val, idx) => {
                     const tStr = toChartTime(val.FullDate ?? null);
                     const isActive = tStr !== null && tStr === hoveredTimeStr;
+                    // Flag TraceLog rows containing known failure/teardown keywords so they stand out in red
                     const isCritical = val.Info != null && [
                       "No sync signal found",
                       "Task stopped",
@@ -1093,6 +1247,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50">
+                  {/* Copy the array before sorting — kpiValues itself must stay in API order */}
                   {[...kpiValues]
                     .sort((a, b) => new Date(a.StartTime).getTime() - new Date(b.StartTime).getTime())
                     .map((val, idx) => {
@@ -1135,6 +1290,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
             </h3>
 
             <div className="flex items-center gap-2">
+              {/* SRVCC calls start on LTE and hand over to GSM mid-call — this toggle lets the
+                  user inspect either leg's measurements, and resets side back to "A" on switch */}
               {call.callMode === "SRVCC" && (
                 <div className="inline-flex rounded-md border border-border overflow-hidden mr-2">
                   <button
@@ -1198,41 +1355,38 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
             <p className="text-xs text-muted-foreground">Φόρτωση δεδομένων...</p>
           ) : activeRadioValues && activeRadioValues.length > 0 ? (
             <div className="overflow-x-auto max-h-[260px] overflow-y-auto">
+              {/* GSM table: BCCH/RxLev/RxQual/BSIC, with an optional scanner comparison column
+                  (only shown once gsmScannerMatched has data) */}
               {isGSMMode ? (
                 <table className="w-full text-xs text-center">
                   <thead className="sticky top-0 bg-muted border-b border-border z-10">
                     <tr>
                       <th className="px-1 py-1 font-semibold text-left">BCCH</th>
-                      <th className="px-1 py-1 font-semibold">
-                        <div className="text-primary">RxLev</div>
-                        {gsmScannerMatched.length > 0 && <div className="text-[9px] text-cyan-400 font-normal leading-none">UE · SCN</div>}
-                      </th>
+                      <th className="px-1 py-1 font-semibold text-left">Band</th>
+                      <th className="px-1 py-1 font-semibold text-primary">RxLev</th>
+                      {gsmScannerMatched.length > 0 && (
+                        <th className="px-1 py-1 font-semibold text-cyan-400/80">RxLev Scanner</th>
+                      )}
                       <th className="px-1 py-1 font-semibold">RxQual</th>
                       {gsmScannerMatched.length > 0 && (
-                        <>
-                          <th className="px-1 py-1 font-semibold text-muted-foreground/60" title="Χρονική απόσταση UE → scanner sample">Δt(s)</th>
-                          <th className="px-1 py-1 font-semibold text-cyan-400/80">RFBand</th>
-                          <th className="px-1 py-1 font-semibold text-cyan-400/80">BSIC</th>
-                          <th className="px-1 py-1 font-semibold text-cyan-400/80">CGI</th>
-                          <th className="px-1 py-1 font-semibold text-cyan-400/80">SCN Date</th>
-                        </>
+                        <th className="px-1 py-1 font-semibold text-cyan-400/80">BSIC</th>
                       )}
-                      <th className="px-1 py-1 font-semibold">MsgTime</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/50">
                     {activeRadioValues.map((val, idx) => {
+                      // Severity coloring uses |value| since RxLev/RxQual are stored as negative/positive
+                      // magnitudes depending on source — thresholds tuned per column
                       const rxAbs = Math.abs(Number(val.RxLevSub));
                       const rxColor = rxAbs >= 95 ? "text-destructive" : rxAbs >= 90 ? "text-warning" : "text-primary";
                       const rxqAbs = Math.abs(Number(val.RxQualSub));
                       const rxqColor = rxqAbs >= 6 ? "text-destructive" : rxqAbs >= 5 ? "text-warning" : "text-primary";
                       const isActive = hoveredRadioIndex === idx;
 
+                      // Pre-matched scanner sample for this row (see gsmScannerMatched memo above)
                       const scn = gsmScannerMatched[idx] ?? null;
-                      const dtSec = scn && val.MsgTime ? Math.abs(scn._ts - new Date(val.MsgTime).getTime()) / 1000 : null;
-                      const dtColor = dtSec == null ? "" : dtSec <= 2 ? "text-green-400" : dtSec <= 10 ? "text-yellow-400" : "text-red-400";
                       const scnRxAbs = scn ? Math.abs(Number(scn.RxLev)) : null;
-                      const scnRxColor = scnRxAbs == null ? "" : scnRxAbs >= 95 ? "text-destructive" : scnRxAbs >= 90 ? "text-warning" : "text-cyan-400";
+                      const scnRxColor = scnRxAbs == null ? "" : scnRxAbs >= 80 ? "text-destructive" : scnRxAbs >= 77 ? "text-warning" : "text-cyan-400";
 
                       return (
                         <tr
@@ -1243,47 +1397,39 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                           onMouseLeave={() => setHoveredRadioIndex(null)}
                         >
                           <td className="px-1 py-0.5 font-mono text-left font-bold">{scn?.BCCH ?? "—"}</td>
-                          <td className="px-1 py-0.5 font-mono leading-tight">
-                            {val.RxLevSub != null ? (
-                              <>
-                                <div className={`font-bold ${rxColor}`}>{val.RxLevSub}</div>
-                                {scn?.RxLev != null && <div className={`text-[10px] ${scnRxColor}`}>{scn.RxLev}</div>}
-                              </>
-                            ) : (
-                              <div className="text-muted-foreground/40">—</div>
-                            )}
+                          <td className="px-1 py-0.5 font-mono text-left">{val.band ?? "—"}</td>
+                          <td className={`px-1 py-0.5 font-mono font-bold ${val.RxLevSub != null ? rxColor : "text-muted-foreground/40"}`}>
+                            {val.RxLevSub != null ? val.RxLevSub : "—"}
                           </td>
+                          {gsmScannerMatched.length > 0 && (
+                            <td className={`px-1 py-0.5 font-mono font-bold ${scn?.RxLev != null ? scnRxColor : "text-muted-foreground/40"}`}>
+                              {scn?.RxLev != null ? scn.RxLev : "—"}
+                            </td>
+                          )}
                           <td className={`px-1 py-0.5 font-mono font-bold ${rxqColor}`}>{val.RxQualSub}</td>
                           {gsmScannerMatched.length > 0 && (
-                            <>
-                              <td className={`px-1 py-0.5 font-mono ${dtColor}`} title={scn ? `Scanner: ${scn.FullDate}` : ""}>
-                                {dtSec != null ? dtSec.toFixed(1) : "—"}
-                              </td>
-                              <td className="px-1 py-0.5 font-mono text-cyan-400/80">{scn?.RFBand ?? "—"}</td>
-                              <td className="px-1 py-0.5 font-mono text-cyan-400/80">{scn?.BSIC ?? "—"}</td>
-                              <td className="px-1 py-0.5 font-mono text-cyan-400/80 text-[10px]">{scn?.CGI ?? "—"}</td>
-                              <td className="px-1 py-0.5 text-cyan-400/80">{scn?.FullDate ? formatDateTime(scn.FullDate) : "—"}</td>
-                            </>
+                            <td className="px-1 py-0.5 font-mono text-cyan-400/80">{scn?.BSIC ?? "—"}</td>
                           )}
-                          <td className="px-1 py-0.5">{formatDateTime(val.MsgTime)}</td>
                         </tr>
                       );
                     })}
                   </tbody>
                 </table>
               ) : (
+                // LTE table: EARFCN/RSRP/RSRQ, plus a scanner comparison + Δt(s) column when
+                // scanner data is available for the active EARFCN
                 <table className="w-full text-xs text-center">
                   <thead className="sticky top-0 bg-muted border-b border-border z-10">
                     <tr>
                       <th className="px-1 py-1 font-semibold text-left">EARFCN</th>
-                      <th className="px-1 py-1 font-semibold">
-                        <div className="text-primary">RSRP</div>
-                        {scannerByEarfcn.size > 0 && <div className="text-[9px] text-cyan-400 font-normal leading-none">UE · SCN</div>}
-                      </th>
-                      <th className="px-1 py-1 font-semibold">
-                        <div className="text-primary">RSRQ</div>
-                        {scannerByEarfcn.size > 0 && <div className="text-[9px] text-cyan-400 font-normal leading-none">UE · SCN</div>}
-                      </th>
+                      <th className="px-1 py-1 font-semibold text-primary">RSRP</th>
+                      {scannerByEarfcn.size > 0 && (
+                        <th className="px-1 py-1 font-semibold text-cyan-400/80">RSRP Scanner</th>
+                      )}
+                      <th className="px-1 py-1 font-semibold text-primary">RSRQ</th>
+                      {scannerByEarfcn.size > 0 && (
+                        <th className="px-1 py-1 font-semibold text-cyan-400/80">RSRQ Scanner</th>
+                      )}
                       {scannerByEarfcn.size > 0 && <>
                         <th className="px-1 py-1 font-semibold text-muted-foreground/60" title="Χρονική απόσταση UE → scanner sample">Δt(s)</th>
                       </>}
@@ -1301,6 +1447,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                       const scn = scannerByEarfcn.size > 0
                         ? findNearestScanner(val.EARFCN, val.PhyCellId, val.MsgTime)
                         : null;
+                      // Δt(s): how far the matched scanner sample is from this UE measurement in time —
+                      // green/yellow/red so the reader can judge how trustworthy the comparison is
                       const dtSec = scn && val.MsgTime ? Math.abs(scn._ts - new Date(val.MsgTime).getTime()) / 1000 : null;
                       const dtColor = dtSec == null ? "" : dtSec <= 2 ? "text-green-400" : dtSec <= 10 ? "text-yellow-400" : "text-red-400";
                       const scnRsrpAbs = scn ? Math.abs(Number(scn.RSRP)) : null;
@@ -1314,30 +1462,22 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                           onMouseLeave={() => setHoveredRadioIndex(null)}
                         >
                           <td className="px-1 py-0.5 font-mono text-left">{val.EARFCN}</td>
-                          <td className="px-1 py-0.5 font-mono leading-tight">
-                            {val.RSRP != null ? (
-                              <>
-                                <div className={`font-bold ${rsrpColor}`}>{val.RSRP}</div>
-                                {scn?.RSRP != null && <div className={`text-[10px] ${scnRsrpColor}`}>{Number(scn.RSRP).toFixed(1)}</div>}
-                              </>
-                            ) : scn?.RSRP != null ? (
-                              <div className={`font-bold ${scnRsrpColor}`}>{Number(scn.RSRP).toFixed(1)}</div>
-                            ) : (
-                              <div className="text-muted-foreground/40">—</div>
-                            )}
+                          <td className={`px-1 py-0.5 font-mono font-bold ${val.RSRP != null ? rsrpColor : "text-muted-foreground/40"}`}>
+                            {val.RSRP != null ? val.RSRP : "—"}
                           </td>
-                          <td className="px-1 py-0.5 font-mono leading-tight">
-                            {val.RSRQ != null ? (
-                              <>
-                                <div className={`font-bold ${rsrqColor}`}>{val.RSRQ}</div>
-                                {scn?.RSRQ != null && <div className="text-[10px] text-cyan-400/80">{Number(scn.RSRQ).toFixed(1)}</div>}
-                              </>
-                            ) : scn?.RSRQ != null ? (
-                              <div className="font-bold text-cyan-400/80">{Number(scn.RSRQ).toFixed(1)}</div>
-                            ) : (
-                              <div className="text-muted-foreground/40">—</div>
-                            )}
+                          {scannerByEarfcn.size > 0 && (
+                            <td className={`px-1 py-0.5 font-mono font-bold ${scn?.RSRP != null ? scnRsrpColor : "text-muted-foreground/40"}`}>
+                              {scn?.RSRP != null ? Number(scn.RSRP).toFixed(1) : "—"}
+                            </td>
+                          )}
+                          <td className={`px-1 py-0.5 font-mono font-bold ${val.RSRQ != null ? rsrqColor : "text-muted-foreground/40"}`}>
+                            {val.RSRQ != null ? val.RSRQ : "—"}
                           </td>
+                          {scannerByEarfcn.size > 0 && (
+                            <td className="px-1 py-0.5 font-mono font-bold text-cyan-400/80">
+                              {scn?.RSRQ != null ? Number(scn.RSRQ).toFixed(1) : "—"}
+                            </td>
+                          )}
                           {scannerByEarfcn.size > 0 && <>
                             <td className={`px-1 py-0.5 font-mono ${dtColor}`} title={scn ? `Scanner: ${scn.FullDate}` : ""}>
                               {dtSec != null ? dtSec.toFixed(1) : "—"}
@@ -1366,6 +1506,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               Συμπεριφορά δικτύου ±{contextWindowSec}δευτ. πριν / μετά κλήση
             </h3>
             <div className="flex items-center gap-2">
+              {/* Window-size selector — changing this re-fetches context data via the reloadContext effect */}
               <div className="inline-flex rounded-md border border-border overflow-hidden">
                 {[10, 30, 60, 120].map(s => (
                   <button
@@ -1378,6 +1519,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                   </button>
                 ))}
               </div>
+              {/* A/B toggle for the LTE context chart only — GSM context always uses activeGsmContextSignal's own A/B fallback */}
               {!isGSMMode && (() => {
                 const hasBSide = contextSignalBSide.length > 0;
                 return (
@@ -1402,7 +1544,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
             </div>
           </div>
 
-          {/* GSM chart — RxLev / RxQual */}
+          {/* GSM chart — RxLev / RxQual over the before/during/after window, shaded by gsmDuringZone */}
           {isGSMMode && gsmChartData.length > 0 && (
             <div>
               <div className="flex items-center gap-3 mb-1">
@@ -1448,7 +1590,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
             </div>
           )}
 
-          {/* LTE Signal chart */}
+          {/* LTE Signal chart — RSRP / RSRQ over the before/during/after window, shaded by duringZone */}
           {contextChartData.length > 0 && (
             <div>
               <div className="flex items-center gap-3 mb-1">
@@ -1513,6 +1655,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                   </thead>
                   <tbody className="divide-y divide-border/50">
                     {contextTechnology.map((row, i) => {
+                      // Same before/during/after color convention as the charts above (amber/primary/orange)
                       const phaseColor =
                         row.phase === "before" ? "bg-amber-500/10 text-amber-400" :
                         row.phase === "after"  ? "bg-orange-500/10 text-orange-400" :
@@ -1541,54 +1684,63 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         </div>
       )}
 
-      {/* ── Paging & Call Setup Signaling ── */}
-      {pagingData && pagingData.callWindow && (
+      {/* ── L3 Signaling (RRC / NAS / SIP) ── */}
+      {(() => {
+        // A/B toggle mirrors the pattern used elsewhere: B-side button is disabled until B-side data exists
+        // (activeL3Data / l3Highlights are hoisted to component scope so useSignallingHighlights stays a top-level hook call)
+        const hasL3BSide = !!l3DataBSide?.callWindow;
+        if (!activeL3Data || !activeL3Data.callWindow) return null;
+        return (
         <div className="bg-card border border-border rounded-lg p-3 space-y-3">
           <div className="flex items-center justify-between flex-wrap gap-2">
             <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
               <Signal className="h-4 w-4 text-primary" />
-              Paging &amp; Call Setup Signaling
-              <span className={`text-xs px-2 py-0.5 rounded font-medium ${pagingData.callWindow.callDir === "MO" ? "bg-primary/10 text-primary" : "bg-accent/10 text-accent"}`}>
-                {pagingData.callWindow.callDir ?? "—"}
+              L3 Signaling
+              <span className={`text-xs px-2 py-0.5 rounded font-medium ${activeL3Data.callWindow.callDir === "MO" ? "bg-primary/10 text-primary" : "bg-accent/10 text-accent"}`}>
+                {activeL3Data.callWindow.callDir ?? "—"}
               </span>
+              <div className="inline-flex rounded-md border border-border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => setSelectedL3Side("A")}
+                  className={`px-2 py-1 text-xs font-normal ${selectedL3Side === "A" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
+                >
+                  A-side
+                </button>
+                <button
+                  type="button"
+                  disabled={!hasL3BSide}
+                  onClick={() => hasL3BSide && setSelectedL3Side("B")}
+                  className={`px-2 py-1 text-xs font-normal border-l border-border ${selectedL3Side === "B" ? "bg-primary text-primary-foreground" : hasL3BSide ? "bg-muted text-foreground hover:bg-muted/80" : "bg-muted text-muted-foreground/40 cursor-not-allowed"}`}
+                >
+                  B-side
+                </button>
+              </div>
             </h3>
-            {/* Summary badges */}
+            {/* Summary badges — message count per phase, only rendered for phases that actually have messages */}
             <div className="flex items-center gap-2 text-xs">
-              {(["ltePagingEDRX", "lteRrcPaging", "nrRrcPaging"] as const).map(key => {
-                const count = pagingData.summary[key];
-                const labels: Record<string, string> = { ltePagingEDRX: "LTE eDRX", lteRrcPaging: "LTE RRC", nrRrcPaging: "NR RRC" };
+              {(["before", "during", "after"] as const).map(phase => {
+                const count = activeL3Data.summary.byPhase[phase];
                 return count > 0 ? (
-                  <span key={key} className="px-2 py-0.5 rounded border border-primary/30 bg-primary/5 font-mono">
-                    {labels[key]} <b>{count}</b>
+                  <span key={phase} className="px-2 py-0.5 rounded border border-primary/30 bg-primary/5 font-mono">
+                    {phase} <b>{count}</b>
                   </span>
                 ) : null;
               })}
-              {pagingData.summary.totalPagingEvents === 0 && (
-                <span className="text-muted-foreground">Δεν βρέθηκαν paging events</span>
+              {activeL3Data.summary.total === 0 && (
+                <span className="text-muted-foreground">Δεν βρέθηκαν L3 messages</span>
               )}
             </div>
           </div>
 
-          {/* Unified Paging Table — all sources merged */}
-          {pagingData.timeline.length > 0 && (() => {
-            const enriched = pagingData.timeline.map(ev => {
-              let extra: Record<string, any> = {};
-              if (ev.type === "lte_paging_edrx") {
-                const m = pagingData.ltePagingEDRX.find(r => r.MsgTime === ev.time);
-                if (m) extra = m;
-              } else if (ev.type === "lte_rrc_paging") {
-                const m = pagingData.lteRrcPaging.find(r => r.MsgTime === ev.time);
-                if (m) extra = m;
-              }
-              return { ...ev, extra };
-            });
-
-            const hasEarfcn   = enriched.some(ev => (ev.details.EARFCN ?? ev.details.Freq) != null);
-            const hasPci      = enriched.some(ev => (ev.details.PCI ?? ev.details.PhyCellId ?? ev.extra?.PhyCellId) != null);
-            const hasCycle    = enriched.some(ev => ev.details.PagingCycleDecoded != null || ev.extra?.EDRXCycleLength != null);
-            const hasNb       = enriched.some(ev => ev.details.NbDecoded != null);
-            const hasEdrx     = enriched.some(ev => ev.extra?.EDRXPTWLength != null);
-            const hasRrc      = enriched.some(ev => ev.extra?.Msg != null);
+          {/* Unified L3 message log — combines RRC/NAS/SIP messages from all layers/technologies into
+              one chronological table. PCI/ARFCN/SIP columns are only rendered when at least one row
+              actually has that data, so e.g. a pure-SIP call doesn't show empty PCI/ARFCN columns. */}
+          {activeL3Data.l3Messages.length > 0 && (() => {
+            const rows = activeL3Data.l3Messages;
+            const hasPci    = rows.some(r => r.PCI != null);
+            const hasArfcn  = rows.some(r => r.ARFCN != null);
+            const hasSip    = rows.some(r => r.SIPResponse != null || r.SIPCallId != null);
 
             return (
               <div className="overflow-x-auto max-h-[320px] overflow-y-auto rounded border border-border/50">
@@ -1598,57 +1750,51 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                       <th className="px-2 py-1 font-semibold text-left">Φάση</th>
                       <th className="px-2 py-1 font-semibold text-left">Ώρα</th>
                       <th className="px-2 py-1 font-semibold text-left">Δευτ.</th>
-                      <th className="px-2 py-1 font-semibold text-left">Τύπος</th>
-                      <th className="px-2 py-1 font-semibold text-left">Τίτλος</th>
-                      {hasEarfcn && <th className="px-2 py-1 font-semibold text-left">EARFCN</th>}
-                      {hasPci    && <th className="px-2 py-1 font-semibold text-left">PCI</th>}
-                      {hasCycle  && <th className="px-2 py-1 font-semibold text-left">Cycle</th>}
-                      {hasNb     && <th className="px-2 py-1 font-semibold text-left">Nb</th>}
-                      {hasEdrx   && <th className="px-2 py-1 font-semibold text-left">PTW</th>}
-                      {hasEdrx   && <th className="px-2 py-1 font-semibold text-left">PageStart</th>}
-                      {hasEdrx   && <th className="px-2 py-1 font-semibold text-left">PageEnd</th>}
-                      {hasEdrx   && <th className="px-2 py-1 font-semibold text-left">HF Off</th>}
-                      {hasRrc    && <th className="px-2 py-1 font-semibold text-left">Dir</th>}
-                      {hasRrc    && <th className="px-2 py-1 font-semibold text-left">ChnType</th>}
-                      {hasRrc    && <th className="px-2 py-1 font-semibold text-left">Msg</th>}
+                      <th className="px-2 py-1 font-semibold text-left">Τεχνολογία</th>
+                      <th className="px-2 py-1 font-semibold text-left">Layer</th>
+                      <th className="px-2 py-1 font-semibold text-left">Dir</th>
+                      <th className="px-2 py-1 font-semibold text-left">Μήνυμα</th>
+                      {hasPci   && <th className="px-2 py-1 font-semibold text-left">PCI</th>}
+                      {hasArfcn && <th className="px-2 py-1 font-semibold text-left">ARFCN</th>}
+                      {hasSip   && <th className="px-2 py-1 font-semibold text-left">SIP</th>}
+                      <th className="px-2 py-1 font-semibold text-left">Λεπτομέρειες</th>
+                      <th className="px-2 py-1 font-semibold text-right">Ειδοπ.</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/50">
-                    {enriched.map((ev, i) => {
+                    {rows.map((r, i) => {
+                      // Same before/during/after color convention used throughout this component
                       const phaseColor =
-                        ev.phase === "before" ? "text-amber-400" :
-                        ev.phase === "after"  ? "text-orange-400" :
+                        r.Phase === "before" ? "text-amber-400" :
+                        r.Phase === "after"  ? "text-orange-400" :
                         "text-primary";
-                      const typeColor =
-                        ev.type === "lte_paging_edrx" ? "text-cyan-400" :
-                        ev.type === "nr_rrc_paging"   ? "text-purple-400" :
-                        "text-emerald-400";
-                      const d = ev.details;
-                      const x = ev.extra;
+                      const h = l3Highlights[i] ?? { severity: "none" as const, reason: "" };
                       return (
-                        <tr key={i} className="hover:bg-muted/40 transition-colors">
-                          <td className={`px-2 py-0.5 font-semibold ${phaseColor}`}>{ev.phase}</td>
+                        <tr
+                          key={i}
+                          title={h.reason || undefined}
+                          className={`hover:bg-muted/40 transition-colors ${SEV_ROW_CLASS[h.severity]}`}
+                        >
+                          <td className={`px-2 py-0.5 font-semibold ${phaseColor}`}>{r.Phase}</td>
                           <td className="px-2 py-0.5 font-mono whitespace-nowrap">
-                            {ev.time ? new Date(ev.time).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}
+                            {r.MsgTime ? new Date(r.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}
                           </td>
                           <td className="px-2 py-0.5 font-mono text-right">
-                            {ev.secondsFromCallStart != null ? `${ev.secondsFromCallStart > 0 ? "+" : ""}${ev.secondsFromCallStart.toFixed(1)}s` : "—"}
+                            {r.SecondsFromCallStart != null ? `${r.SecondsFromCallStart > 0 ? "+" : ""}${r.SecondsFromCallStart.toFixed(1)}s` : "—"}
                           </td>
-                          <td className={`px-2 py-0.5 font-mono text-[10px] ${typeColor}`}>
-                            {ev.type === "lte_paging_edrx" ? "LTE eDRX" : ev.type === "lte_rrc_paging" ? "LTE RRC" : "NR RRC"}
+                          <td className="px-2 py-0.5 font-mono text-[10px] text-cyan-400">{r.Technology ?? "—"}</td>
+                          <td className="px-2 py-0.5 font-mono text-[10px]">{r.Layer ?? "—"}</td>
+                          <td className="px-2 py-0.5">{r.Direction ?? "—"}</td>
+                          {/* Prefer the richest available message label: combined SIP response name, then
+                              simplified name, then raw MsgName */}
+                          <td className="px-2 py-0.5 max-w-[200px] truncate" title={r.MsgName ?? ""}>{r.CombinedMsgNameSIPResponse || r.SimpleMsgName || r.MsgName || "—"}</td>
+                          {hasPci   && <td className="px-2 py-0.5 font-mono">{r.PCI ?? "—"}</td>}
+                          {hasArfcn && <td className="px-2 py-0.5 font-mono">{r.ARFCN ?? "—"}</td>}
+                          {hasSip   && <td className="px-2 py-0.5 font-mono text-[10px]">{r.SIPResponse ?? "—"}</td>}
+                          <td className="px-2 py-0.5 font-mono text-[10px] max-w-[320px] truncate" title={r.Message ?? ""}>{r.Message ?? "—"}</td>
+                          <td className={`px-2 py-0.5 text-right font-semibold text-[10px] whitespace-nowrap ${SEV_BADGE_CLASS[h.severity]}`}>
+                            {SEV_LABEL[h.severity]}
                           </td>
-                          <td className="px-2 py-0.5 max-w-[180px] truncate" title={x?.MsgTypeName || ev.title}>{x?.MsgTypeName || ev.title}</td>
-                          {hasEarfcn && <td className="px-2 py-0.5 font-mono">{d.EARFCN ?? d.Freq ?? "—"}</td>}
-                          {hasPci    && <td className="px-2 py-0.5 font-mono">{d.PCI ?? d.PhyCellId ?? x?.PhyCellId ?? "—"}</td>}
-                          {hasCycle  && <td className="px-2 py-0.5 font-mono text-[10px]">{d.PagingCycleDecoded != null ? `${d.PagingCycleDecoded} ms` : x?.EDRXCycleLength != null ? `${x.EDRXCycleLength} ms` : "—"}</td>}
-                          {hasNb     && <td className="px-2 py-0.5 font-mono text-[10px]">{d.NbDecoded ?? "—"}</td>}
-                          {hasEdrx   && <td className="px-2 py-0.5 font-mono text-[10px]">{x?.EDRXPTWLength ?? "—"}</td>}
-                          {hasEdrx   && <td className="px-2 py-0.5 font-mono text-[10px]">{x?.EDRXPageStartOffset ?? "—"}</td>}
-                          {hasEdrx   && <td className="px-2 py-0.5 font-mono text-[10px]">{x?.EDRXPageEndOffset ?? "—"}</td>}
-                          {hasEdrx   && <td className="px-2 py-0.5 font-mono text-[10px]">{x?.EDRXHyperFrameOffset ?? "—"}</td>}
-                          {hasRrc    && <td className="px-2 py-0.5">{x?.Direction ?? "—"}</td>}
-                          {hasRrc    && <td className="px-2 py-0.5">{x?.ChnType ?? "—"}</td>}
-                          {hasRrc    && <td className="px-2 py-0.5 font-mono text-[10px] max-w-[280px] truncate" title={x?.Msg ?? ""}>{x?.Msg ?? "—"}</td>}
                         </tr>
                       );
                     })}
@@ -1658,11 +1804,12 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
             );
           })()}
 
-          {pagingData.summary.totalPagingEvents === 0 && (
-            <p className="text-xs text-muted-foreground">Δεν βρέθηκαν paging events στο παράθυρο ±{60}s.</p>
+          {activeL3Data.summary.total === 0 && (
+            <p className="text-xs text-muted-foreground">Δεν βρέθηκαν L3 messages στο παράθυρο ±{activeL3Data.summary.windowBeforeSec}s.</p>
           )}
         </div>
-      )}
+        );
+      })()}
       {/* ── Scanner / Device Info ── */}
       {deviceInfo && (
         <div className="bg-card border border-border rounded-lg p-3 space-y-3">
@@ -1672,7 +1819,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           </h3>
 
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {/* A-side */}
+            {/* A-side — each row prefers the dedicated device-info field (d.*) and falls back to
+                whatever was parsed from the trace file name/header (f.*) when the former is missing */}
             <div className="rounded border border-border/60 bg-muted/20 p-2 space-y-1">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-primary mb-1.5">A-Side</p>
               {(() => {
@@ -1696,6 +1844,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                   ["File", f.ASideFileName],
                   ["Location", f.ASideLocation],
                 ];
+                // Hide any row whose value is missing/empty rather than showing a blank field
                 return rows
                   .filter(([, v]) => v != null && v !== "")
                   .map(([label, value]) => (
@@ -1707,7 +1856,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
               })()}
             </div>
 
-            {/* B-side */}
+            {/* B-side — same fallback pattern as A-side above, but with an explicit empty-state message
+                since the B-side leg often has no device info at all */}
             <div className="rounded border border-border/60 bg-muted/20 p-2 space-y-1">
               <p className="text-[10px] font-semibold uppercase tracking-wider text-accent mb-1.5">B-Side</p>
               {(() => {

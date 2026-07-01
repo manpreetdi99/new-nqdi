@@ -192,6 +192,24 @@ export async function fetchGsmValues(
   return requestJson(`/api/gsm_values?${params.toString()}`);
 }
 
+export interface CallKpiTile {
+  SetupTime_s: number | null;
+  AvgMOS: number | null;
+  Jitter_ms: number | null;
+  PacketLoss_pct: number | null;
+  Download_Mbps: number | null;
+  Upload_Mbps: number | null;
+  Latency_ms: number | null;
+}
+
+export async function fetchCallKpiTile(
+  database: string,
+  session_id: string
+): Promise<CallKpiTile> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/call_kpi_tile?${params.toString()}`);
+}
+
 export async function fetchGsmValuesBSide(
   database: string,
   session_id: string
@@ -336,26 +354,34 @@ export async function fetchCallContextTechnology(
   return requestJson(`/api/call_context_technology?${params.toString()}`);
 }
 
-export interface PagingTimelineEvent {
-  phase: "before" | "during" | "after";
-  time: string | null;
-  secondsFromCallStart: number | null;
-  type: "lte_paging_edrx" | "lte_rrc_paging" | "nr_rrc_paging";
-  title: string;
-  details: Record<string, any>;
+export interface L3MessageRow {
+  Phase: "before" | "during" | "after";
+  SecondsFromCallStart: number | null;
+  MsgTime: string | null;
+  SessionId: string | null;
+  Technology: string | null;
+  Direction: string | null;
+  Layer: string | null;
+  MsgName: string | null;
+  SimpleMsgName: string | null;
+  Category: string | null;
+  Class: string | null;
+  SIPResponse: string | null;
+  CombinedMsgNameSIPResponse: string | null;
+  SIPCallId: string | null;
+  PCI: number | null;
+  ARFCN: number | null;
+  Message: string | null;
 }
 
-export interface CallPagingInfoResponse {
+export interface CallL3MessagesResponse {
   callWindow: Record<string, any> | null;
-  ltePagingEDRX: Record<string, any>[];
-  lteRrcPaging: Record<string, any>[];
-  nrRrcPaging: Record<string, any>[];
-  timeline: PagingTimelineEvent[];
+  l3Messages: L3MessageRow[];
   summary: {
-    ltePagingEDRX: number;
-    lteRrcPaging: number;
-    nrRrcPaging: number;
-    totalPagingEvents: number;
+    total: number;
+    byPhase: { before: number; during: number; after: number };
+    windowBeforeSec: number;
+    windowAfterSec: number;
   };
   message?: string;
 }
@@ -446,17 +472,28 @@ export interface LteScannerStat {
 
 export async function fetchLteScannerRaw(
   database: string,
-  session_id: string
+  session_id: string,
+  top_only: boolean = false
 ): Promise<{ aSide: any[]; bSide: any[] }> {
-  const params = new URLSearchParams({ database, session_id });
+  const params = new URLSearchParams({ database, session_id, top_only: String(top_only) });
   return requestJson(`/api/lte_scanner_raw?${params.toString()}`);
+}
+
+export async function fetchLteServingVsScanner(
+  database: string,
+  session_id: string
+): Promise<{ serving: any[]; scanner: any[]; missedHandoverHint: any | null }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/lte_serving_vs_scanner?${params.toString()}`);
 }
 
 export async function fetchGsmScannerRaw(
   database: string,
-  session_id: string
+  cgi: string,
+  start: string,
+  end: string
 ): Promise<any[]> {
-  const params = new URLSearchParams({ database, session_id });
+  const params = new URLSearchParams({ database, cgi, start, end });
   return requestJson(`/api/gsm_scanner_raw?${params.toString()}`);
 }
 
@@ -476,19 +513,21 @@ export async function fetchLteScannerMeasurement(
   return requestJson(`/api/lte_scanner_measurement?${params.toString()}`);
 }
 
-export async function fetchCallPagingInfo(
+export async function fetchL3Messages(
   database: string,
   session_id: string,
-  before_seconds = 60,
-  after_seconds = 60
-): Promise<CallPagingInfoResponse> {
+  options?: { side?: "A" | "B"; technology?: string; layer?: string; before_seconds?: number; after_seconds?: number }
+): Promise<CallL3MessagesResponse> {
   const params = new URLSearchParams({
     database,
     session_id,
-    before_seconds: String(before_seconds),
-    after_seconds: String(after_seconds),
+    side: options?.side ?? "A",
+    before_seconds: String(options?.before_seconds ?? 10),
+    after_seconds: String(options?.after_seconds ?? 10),
   });
-  return requestJson(`/api/call_paging_info?${params.toString()}`);
+  if (options?.technology) params.append("technology", options.technology);
+  if (options?.layer) params.append("layer", options.layer);
+  return requestJson(`/api/l3_messages?${params.toString()}`);
 }
 
 export async function fetchGsmContextSignal(
