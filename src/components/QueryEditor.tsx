@@ -30,6 +30,8 @@ interface DefaultChart {
   type: ChartType;
   xCol: string;
   yCols: string[];
+  rightCols?: string[];
+  axisOverrides?: Record<string, { domain: [number, number]; reversed?: boolean }>;
   aggFn?: "count" | "sum" | "avg" | "min" | "max";
   aggEnabled?: boolean;
   groupCol?: string;
@@ -248,6 +250,101 @@ FROM FactCapacity CAP
 LEFT JOIN DmnFile DF ON DF.DmnId = CAP.DmnIdFile
 GROUP BY DF.CollectionName, DF.Location
 ORDER BY avg_sustainable_kbps DESC`,
+  },
+  {
+    label: "R24 Scanner vs Radio RSRP (time bins)",
+    category: "SmartAnalytics R24",
+    defaultChart: { type: "line", xCol: "TimeBin", yCols: ["Scan_RSRP", "Radio_RSRP"], aggFn: "avg", aggEnabled: false },
+    sql: `DECLARE @MaxRows INT = 5000;
+DECLARE @Collection NVARCHAR(200) = '%';   -- π.χ. '%Epirus%'
+
+WITH Combined AS (
+    -- Πηγή 1: Scanner
+    SELECT
+        'SCAN'          AS Src,
+        fs.FullDate,
+        fs.RSRP, fs.RSRQ, fs.SINR, fs.RSSI,
+        CAST(NULL AS FLOAT) AS RSRP_Rx0,
+        CAST(NULL AS FLOAT) AS RSRP_Rx1,
+        CAST(NULL AS FLOAT) AS SINR_Rx0,
+        CAST(NULL AS FLOAT) AS SINR_Rx1,
+        CAST(NULL AS FLOAT) AS Latitude,
+        CAST(NULL AS FLOAT) AS Longitude,
+        df.CollectionName
+    FROM FactLTEScanner fs
+    JOIN DmnFile df    ON df.FileId = fs.DmnIdFile
+    WHERE fs.MccMncList = '202-1'
+      AND fs.RSRP IS NOT NULL
+      AND dmnIdTopN_RSRP = 1
+      AND df.CollectionName LIKE @Collection
+
+    UNION ALL
+
+    -- Πηγή 2: Radio (UE)
+    SELECT
+        'RADIO'         AS Src,
+        fr.FullDate,
+        fr.RSRP, fr.RSRQ, fr.SINR, fr.RSSI,
+        fr.RSRP_Rx0, fr.RSRP_Rx1,
+        fr.SINR_Rx0, fr.SINR_Rx1,
+        dp.Latitude, dp.Longitude,
+        df.CollectionName
+    FROM FactLTERadio fr
+    LEFT JOIN DmnPosition dp ON dp.DmnId = fr.DmnIdPosition
+    INNER JOIN DmnFile df    ON df.FileId = fr.DmnIdFile
+    WHERE df.Location LIKE '%cos%a'
+      AND df.CollectionName LIKE @Collection
+),
+Ranked AS (
+    SELECT *,
+        NTILE(@MaxRows) OVER (ORDER BY FullDate) AS BinId
+    FROM Combined
+),
+BinCollections AS (
+    -- διακριτά CollectionNames ανά bin (όχι ένα ανά δείγμα)
+    SELECT BinId,
+           STRING_AGG(CAST(CollectionName AS NVARCHAR(MAX)), ', ')
+             WITHIN GROUP (ORDER BY CollectionName) AS Collections
+    FROM (SELECT DISTINCT BinId, CollectionName FROM Ranked) d
+    GROUP BY BinId
+),
+Agg AS (
+    SELECT
+        BinId
+       ,MIN(FullDate)                                          AS TimeBin
+       ,COUNT(*)                                               AS Samples_Total
+       ,SUM(CASE WHEN Src = 'SCAN'  THEN 1 ELSE 0 END)         AS Samples_Scanner
+       ,SUM(CASE WHEN Src = 'RADIO' THEN 1 ELSE 0 END)         AS Samples_Radio
+        -- Scanner metrics
+       ,ROUND(AVG(CASE WHEN Src = 'SCAN' THEN RSRP END), 2)    AS Scan_RSRP
+       ,ROUND(AVG(CASE WHEN Src = 'SCAN' THEN RSRQ END), 2)    AS Scan_RSRQ
+       ,ROUND(AVG(CASE WHEN Src = 'SCAN' THEN SINR END), 2)    AS Scan_SINR
+       ,ROUND(AVG(CASE WHEN Src = 'SCAN' THEN RSSI END), 2)    AS Scan_RSSI
+        -- Radio (UE) metrics
+       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSRP END), 2)   AS Radio_RSRP
+       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSRQ END), 2)   AS Radio_RSRQ
+       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN SINR END), 2)   AS Radio_SINR
+       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSSI END), 2)   AS Radio_RSSI
+       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSRP_Rx0 END), 2) AS Radio_RSRP_Rx0
+       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSRP_Rx1 END), 2) AS Radio_RSRP_Rx1
+       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN SINR_Rx0 END), 2) AS Radio_SINR_Rx0
+       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN SINR_Rx1 END), 2) AS Radio_SINR_Rx1
+        -- Θέση (μόνο από radio)
+       ,AVG(CASE WHEN Src = 'RADIO' THEN Latitude END)         AS Latitude
+       ,AVG(CASE WHEN Src = 'RADIO' THEN Longitude END)        AS Longitude
+    FROM Ranked
+    GROUP BY BinId
+)
+SELECT
+    a.TimeBin, a.Samples_Total, a.Samples_Scanner, a.Samples_Radio,
+    a.Scan_RSRP, a.Scan_RSRQ, a.Scan_SINR, a.Scan_RSSI,
+    a.Radio_RSRP, a.Radio_RSRQ, a.Radio_SINR, a.Radio_RSSI,
+    a.Radio_RSRP_Rx0, a.Radio_RSRP_Rx1, a.Radio_SINR_Rx0, a.Radio_SINR_Rx1,
+    a.Latitude, a.Longitude,
+    bc.Collections
+FROM Agg a
+LEFT JOIN BinCollections bc ON bc.BinId = a.BinId
+ORDER BY a.TimeBin`,
   },
   {
     label: "All calls",
@@ -555,6 +652,74 @@ WHERE S.Valid IN (0, 1)
   AND GM.RxLevSub IS NOT NULL
 GROUP BY FL.ASideLocation
 ORDER BY avg_RxLev DESC`,
+  },
+  {
+    label: "GSM RxLev/RxQual ανά κλήση (30s buckets, μόνο GSM end)",
+    category: "Signal",
+    defaultChart: {
+      type: "line",
+      xCol: "BucketTs",
+      yCols: ["AvgRxLev", "AvgRxQual", "OutcomeFlag"],
+      // AvgRxQual: δικός του κρυφός άξονας 0–7, ανάποδα (7=χαμηλή ποιότητα κάτω, 0=καλή ποιότητα πάνω),
+      // ώστε να πιάνει όλο το ύψος του chart ανεξάρτητα από την κλίμακα του AvgRxLev.
+      axisOverrides: { AvgRxQual: { domain: [0, 7], reversed: true } },
+      groupCol: "SessionId",
+      aggFn: "avg",
+      aggEnabled: false,
+    },
+    sql: `WITH loc_files AS (
+  SELECT FileId
+  FROM FileList
+  WHERE ASideLocation LIKE '%%'
+    AND CollectionName LIKE '%%'
+),
+gsm_calls AS (
+  -- κλήσεις που ΚΑΤΑΛΗΓΟΥΝ σε GSM, με outcome flag 0/1
+  SELECT
+    CA.SessionId,
+    CA.FileId,
+    CA.callStatus,
+    CASE
+      WHEN CA.callStatus LIKE '%Complet%' THEN 1
+      WHEN CA.callStatus LIKE '%Drop%'
+        OR CA.callStatus LIKE '%Fail%'
+        OR CA.callStatus LIKE '%Release%' THEN 0
+      ELSE NULL
+    END AS OutcomeFlag
+  FROM CallAnalysis CA
+  INNER JOIN loc_files LF ON LF.FileId = CA.FileId
+  WHERE CA.EndTechnology = 'GSM'
+),
+radio_bucketed AS (
+  -- 30άρια buckets πάνω στο FullDate
+  SELECT
+    GR.SessionId,
+    DATEADD(
+      SECOND,
+      (DATEDIFF(SECOND, '2000-01-01', GR.FullDate) / 30) * 30,
+      '2000-01-01'
+    ) AS BucketTs,
+    GR.RxLevSub,
+    GR.RxQualSub
+  FROM FactGSMRadio GR
+  INNER JOIN gsm_calls GC ON GC.SessionId = GR.SessionId
+  WHERE GR.RxLevSub IS NOT NULL
+)
+SELECT
+  GC.SessionId,
+  GC.FileId,
+  GC.callStatus,
+  GC.OutcomeFlag,
+  RB.BucketTs,
+  ROUND(AVG(CAST(RB.RxLevSub  AS FLOAT)), 2) AS AvgRxLev,
+  ROUND(AVG(CAST(RB.RxQualSub AS FLOAT)), 2) AS AvgRxQual,
+  COUNT(*)                                   AS SampleCount
+FROM gsm_calls GC
+LEFT JOIN radio_bucketed RB ON RB.SessionId = GC.SessionId
+GROUP BY
+  GC.SessionId, GC.FileId, GC.callStatus, GC.OutcomeFlag, RB.BucketTs
+ORDER BY
+  GC.SessionId, RB.BucketTs`,
   },
   {
     label: "NR 5G Bands",
@@ -1803,6 +1968,8 @@ function ResultGrid({ result, defaultChart }: { result: QueryResult; defaultChar
             defaultChartType={defaultChart?.type}
             defaultXCol={defaultChart?.xCol}
             defaultYCols={defaultChart?.yCols}
+            defaultRightCols={defaultChart?.rightCols}
+            defaultAxisOverrides={defaultChart?.axisOverrides}
             defaultAggFn={defaultChart?.aggFn}
             defaultAggEnabled={defaultChart?.aggEnabled}
             defaultGroupCol={defaultChart?.groupCol}

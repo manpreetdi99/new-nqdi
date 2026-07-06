@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
 import {
   ArrowLeft, Signal, Activity, Gauge, ArrowDown, ArrowUp,
-  Wifi, Timer, Save, Edit2
+  Wifi, Timer, Save, Edit2, Flag
 } from "lucide-react";
 import L from "leaflet";
 import { MapContainer, TileLayer, CircleMarker, Marker, Polyline, useMap, Tooltip as LeafletTooltip } from "react-leaflet";
@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchGsmScannerRaw, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchCallKpiTile, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchTechnologyTimeline, fetchVoiceCodec, fetchMarkers, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE } from "@/lib/chartStyles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -159,7 +159,16 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
   const [scannerRawA, setScannerRawA] = useState<any[]>([]);
   const [scannerRawB, setScannerRawB] = useState<any[]>([]);
   const [gsmScannerRaw, setGsmScannerRaw] = useState<any[]>([]);
+  const [gsmScannerBestRaw, setGsmScannerBestRaw] = useState<any[]>([]);
+  const [lteScannerBestRaw, setLteScannerBestRaw] = useState<any[]>([]);
   const [callKpiTile, setCallKpiTile] = useState<CallKpiTile | null>(null);
+  // SRVCC handover events (4G->3G/2G, success/fail + interruption time), technology
+  // changes over the call (incl. CA carrier counts), and voice codec used per direction
+  const [handoverInfo, setHandoverInfo] = useState<HandoverInfoRow[]>([]);
+  const [technologyTimeline, setTechnologyTimeline] = useState<TechnologyTimelineRow[]>([]);
+  const [voiceCodec, setVoiceCodec] = useState<VoiceCodecRow[]>([]);
+  // User-placed annotations during the session, merged into the TraceLog panel as timeline events
+  const [markers, setMarkers] = useState<MarkerRow[]>([]);
 
   // True when the active table/chart should show GSM columns instead of LTE:
   // CS calls are always GSM; SRVCC calls let the user toggle between LTE and GSM.
@@ -169,6 +178,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
   const [showStrength, setShowStrength] = useState(true);
   const [showQuality, setShowQuality] = useState(true);
   const [showScanner, setShowScanner] = useState(false);
+  const [showBScanner, setShowBScanner] = useState(false);
   // Editable free-text comment attached to the call
   const [commentText, setCommentText] = useState(call.comment || "");
   const [isEditingComment, setIsEditingComment] = useState(false);
@@ -221,7 +231,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
-        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, pagingBSideRes, deviceRes, lteMeasCompRes, lteScannerCompRes, scannerRawRes, gsmCtxSignalRes, ctxSignalBSideRes, gsmCtxSignalBSideRes, callKpiTileRes] = await Promise.allSettled([
+        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, pagingBSideRes, deviceRes, lteMeasCompRes, lteScannerCompRes, gsmCtxSignalRes, ctxSignalBSideRes, gsmCtxSignalBSideRes, callKpiTileRes, handoverInfoRes, technologyTimelineRes, voiceCodecRes, markersRes] = await Promise.allSettled([
           call.callMode !== "CS" ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
           fetchMosValues(database, call.callId),
@@ -239,11 +249,14 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           fetchCallDeviceInfo(database, call.callId),
           call.callMode !== "CS" ? fetchLteMeasurementComparison(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
           call.callMode !== "CS" ? fetchLteScannerMeasurement(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
-          call.callMode !== "CS" ? fetchLteScannerRaw(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
           call.callMode !== "CS" ? fetchCallContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
           fetchCallKpiTile(database, call.callId),
+          fetchHandoverInfo(database, call.callId),
+          fetchTechnologyTimeline(database, call.callId),
+          fetchVoiceCodec(database, call.callId),
+          fetchMarkers(database, call.callId),
         ]);
 
         if (lteRes.status === "fulfilled") {
@@ -336,15 +349,6 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
           setLteScannerComp(null);
         }
 
-        if (scannerRawRes.status === "fulfilled") {
-          const raw = scannerRawRes.value as any;
-          setScannerRawA(raw.aSide ?? []);
-          setScannerRawB(raw.bSide ?? []);
-        } else {
-          setScannerRawA([]);
-          setScannerRawB([]);
-        }
-
         if (gsmCtxSignalRes.status === "fulfilled") {
           setGsmContextSignal((gsmCtxSignalRes.value as any).signal || []);
         } else {
@@ -368,6 +372,30 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         } else {
           setCallKpiTile(null);
         }
+
+        if (handoverInfoRes.status === "fulfilled") {
+          setHandoverInfo((handoverInfoRes.value as any).handoverInfo || []);
+        } else {
+          setHandoverInfo([]);
+        }
+
+        if (technologyTimelineRes.status === "fulfilled") {
+          setTechnologyTimeline((technologyTimelineRes.value as any).technologyTimeline || []);
+        } else {
+          setTechnologyTimeline([]);
+        }
+
+        if (voiceCodecRes.status === "fulfilled") {
+          setVoiceCodec((voiceCodecRes.value as any).voiceCodec || []);
+        } else {
+          setVoiceCodec([]);
+        }
+
+        if (markersRes.status === "fulfilled") {
+          setMarkers((markersRes.value as any).markers || []);
+        } else {
+          setMarkers([]);
+        }
       } catch (err) {
         console.error("Failed to load metrics", err);
       } finally {
@@ -383,6 +411,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       setScannerRawA([]);
       setScannerRawB([]);
       setGsmScannerRaw([]);
+      setGsmScannerBestRaw([]);
+      setLteScannerBestRaw([]);
       setGsmContextSignal([]);
       setContextSignalBSide([]);
       setGsmContextSignalBSide([]);
@@ -391,6 +421,66 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       loadRadio();
     }
   }, [database, call.callId, call.callMode]);
+
+  // For LTE calls (A-side), fetch LTE scanner samples per contiguous serving-CGI segment so the
+  // "LTE Scanner" chart line / "RSRP Scanner" column can cross-check the UE's own measurements
+  // against the scanner — same per-segment approach as the GSM fetch below.
+  useEffect(() => {
+    if (call.callMode === "CS" || radioValues.length === 0 || !database) {
+      setScannerRawA([]);
+      return;
+    }
+
+    type Segment = { cgi: string; start: string; end: string };
+    const segments: Segment[] = [];
+    for (const v of radioValues) {
+      if (!v.CGI || !v.MsgTime) continue;
+      const last = segments[segments.length - 1];
+      if (last && last.cgi === v.CGI) {
+        last.end = v.MsgTime;
+      } else {
+        segments.push({ cgi: v.CGI, start: v.MsgTime, end: v.MsgTime });
+      }
+    }
+    if (segments.length === 0) { setScannerRawA([]); return; }
+
+    let cancelled = false;
+    Promise.all(
+      segments.map(seg => fetchLteScannerRaw(database, seg.cgi, seg.start, seg.end).catch(() => []))
+    ).then(results => {
+      if (!cancelled) setScannerRawA(results.flat());
+    });
+    return () => { cancelled = true; };
+  }, [database, call.callMode, radioValues]);
+
+  // Same as above, but for the B-side (second leg) of the call.
+  useEffect(() => {
+    if (call.callMode === "CS" || bSideLteValues.length === 0 || !database) {
+      setScannerRawB([]);
+      return;
+    }
+
+    type Segment = { cgi: string; start: string; end: string };
+    const segments: Segment[] = [];
+    for (const v of bSideLteValues) {
+      if (!v.CGI || !v.MsgTime) continue;
+      const last = segments[segments.length - 1];
+      if (last && last.cgi === v.CGI) {
+        last.end = v.MsgTime;
+      } else {
+        segments.push({ cgi: v.CGI, start: v.MsgTime, end: v.MsgTime });
+      }
+    }
+    if (segments.length === 0) { setScannerRawB([]); return; }
+
+    let cancelled = false;
+    Promise.all(
+      segments.map(seg => fetchLteScannerRaw(database, seg.cgi, seg.start, seg.end).catch(() => []))
+    ).then(results => {
+      if (!cancelled) setScannerRawB(results.flat());
+    });
+    return () => { cancelled = true; };
+  }, [database, call.callMode, bSideLteValues]);
 
   // For CS (GSM) calls, fetch GSM scanner samples per contiguous serving-cell segment so the
   // "RxLev Scanner" column can cross-check the UE's own measurements against the scanner.
@@ -424,6 +514,37 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     });
     return () => { cancelled = true; };
   }, [database, call.callMode, gsmValues]);
+
+  // "Best RxLev Scanner" — the strongest cell the scanner saw for the call's own operator at
+  // each scan cycle (DmnIdTopN_RxLev_Operator = 1), independent of the UE's serving CGI. Fetched
+  // once over the whole call window (resolved server-side from SessionId — call.operator is
+  // hardcoded to "N/A" for real calls, and call.startTime/endTime are lossy JS Date round-trips).
+  useEffect(() => {
+    const canBeGSM = call.callMode === "CS" || call.callMode === "SRVCC";
+    if (!canBeGSM || !database || !call.callId) {
+      setGsmScannerBestRaw([]);
+      return;
+    }
+    let cancelled = false;
+    fetchGsmScannerBest(database, call.callId)
+      .then(rows => { if (!cancelled) setGsmScannerBestRaw(rows); })
+      .catch(() => { if (!cancelled) setGsmScannerBestRaw([]); });
+    return () => { cancelled = true; };
+  }, [database, call.callMode, call.callId]);
+
+  // "Best LTE Scanner" — same idea as the GSM one above, but for FactLTEScanner
+  // (DmnIdTopN_RSRP_Operator = 1), independent of the UE's serving EARFCN/PCI.
+  useEffect(() => {
+    if (call.callMode === "CS" || !database || !call.callId) {
+      setLteScannerBestRaw([]);
+      return;
+    }
+    let cancelled = false;
+    fetchLteScannerBest(database, call.callId)
+      .then(rows => { if (!cancelled) setLteScannerBestRaw(rows); })
+      .catch(() => { if (!cancelled) setLteScannerBestRaw([]); });
+    return () => { cancelled = true; };
+  }, [database, call.callMode, call.callId]);
 
   // Re-fetches only the "before/during/after" context-signal data when the user changes the
   // time window (10/30/60/120s) — cheaper than re-running the full loadRadio() load above.
@@ -530,13 +651,14 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     { label: "Setup Time", value: `${call.setupTime_ms} ms`, icon: Timer, color: call.setupTime_ms > 500 ? "text-warning" : "text-success" },
   ];
 
-  // Precompute GSM scanner match per measurement row — O(n log m) once, O(1) in render
-  const gsmScannerMatched = useMemo(() => {
-    if (gsmScannerRaw.length === 0 || !isGSMMode) return [] as (any | null)[];
-    const sorted = gsmScannerRaw
+  // Matches each measurement row (by MsgTime) to the nearest sample in a time-sorted scanner
+  // array — O(n log m) once, O(1) per row in render. Shared by the raw and "best" GSM scanner series.
+  const matchNearestByTime = (raw: any[], byMsgTime: any[]): (any | null)[] => {
+    if (raw.length === 0) return [];
+    const sorted = raw
       .map(r => ({ ...r, _ts: new Date(r.FullDate).getTime() }))
       .sort((a, b) => a._ts - b._ts);
-    return activeRadioValues.map(val => {
+    return byMsgTime.map(val => {
       if (!val.MsgTime) return null;
       const ts = new Date(val.MsgTime).getTime();
       let lo = 0, hi = sorted.length - 1, best = 0;
@@ -549,7 +671,96 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       const b = sorted[best + 1];
       return b && Math.abs(b._ts - ts) < Math.abs(a._ts - ts) ? b : a;
     });
+  };
+
+  // Precompute GSM scanner match per measurement row (serving-CGI scanner + best-per-operator scanner)
+  const gsmScannerMatched = useMemo(() => {
+    if (!isGSMMode) return [] as (any | null)[];
+    return matchNearestByTime(gsmScannerRaw, activeRadioValues);
   }, [gsmScannerRaw, activeRadioValues, isGSMMode]);
+
+  const gsmScannerBestMatched = useMemo(() => {
+    if (!isGSMMode) return [] as (any | null)[];
+    return matchNearestByTime(gsmScannerBestRaw, activeRadioValues);
+  }, [gsmScannerBestRaw, activeRadioValues, isGSMMode]);
+
+  // Pre-index scanner rows by EARFCN for fast nearest-time lookup.
+  // B-side falls back to the A-side scanner data when no B-side scanner rows exist.
+  const activeScannerRaw = selectedLteSide === "B"
+    ? (scannerRawB.length > 0 ? scannerRawB : scannerRawA)
+    : scannerRawA;
+
+  // Build lookup maps over the scanner rows, sorted by timestamp so nearest-time lookups can use
+  // binary search: byCgi is keyed on the UE's own serving CGI (globally unique — same "common CGI"
+  // cross-check GSM uses), byKey falls back to EARFCN+PCI, byEarfcn falls back to EARFCN alone.
+  const { scannerByKey, scannerByEarfcnOnly, scannerByCgi } = useMemo(() => {
+    const byKey = new Map<string, any[]>();
+    const byEarfcn = new Map<number, any[]>();
+    const byCgi = new Map<string, any[]>();
+    for (const row of activeScannerRaw) {
+      const entry = { ...row, _ts: new Date(row.FullDate).getTime() };
+      const key = `${row.EARFCN}_${row.PCI}`;
+      if (!byKey.has(key)) byKey.set(key, []);
+      byKey.get(key)!.push(entry);
+      const e = row.EARFCN as number;
+      if (!byEarfcn.has(e)) byEarfcn.set(e, []);
+      byEarfcn.get(e)!.push(entry);
+      if (row.CGI) {
+        if (!byCgi.has(row.CGI)) byCgi.set(row.CGI, []);
+        byCgi.get(row.CGI)!.push(entry);
+      }
+    }
+    byKey.forEach(rows => rows.sort((a, b) => a._ts - b._ts));
+    byEarfcn.forEach(rows => rows.sort((a, b) => a._ts - b._ts));
+    byCgi.forEach(rows => rows.sort((a, b) => a._ts - b._ts));
+    return { scannerByKey: byKey, scannerByEarfcnOnly: byEarfcn, scannerByCgi: byCgi };
+  }, [activeScannerRaw]);
+
+  const scannerByEarfcn = scannerByKey;
+
+  // Binary search for the first row at/after `ts` in a list already sorted ascending by _ts —
+  // used to find the closest scanner sample taken on/after a given UE measurement's MsgTime.
+  const findNextInList = (rows: any[], ts: number): any | null => {
+    let lo = 0, hi = rows.length - 1, result = -1;
+    while (lo <= hi) {
+      const mid = (lo + hi) >> 1;
+      if (rows[mid]._ts >= ts) { result = mid; hi = mid - 1; }
+      else lo = mid + 1;
+    }
+    return result >= 0 ? rows[result] : null;
+  };
+
+  // Looks up the nearest scanner sample for a given UE measurement: prefer the common CGI match
+  // (PCI alone can be reused by multiple physical cells, CGI can't — same idea as GSM's "RxLev
+  // Scanner"), then fall back to EARFCN+PCI, then EARFCN-only if no CGI match exists.
+  const findNearestScanner = (cgi: string | null, earfcn: number | null, pci: number | null, msgTime: string | null): any | null => {
+    if (msgTime == null) return null;
+    const ts = new Date(msgTime).getTime();
+    if (cgi) {
+      const byCgiRows = scannerByCgi.get(cgi);
+      if (byCgiRows && byCgiRows.length > 0) return findNextInList(byCgiRows, ts);
+    }
+    if (earfcn == null) return null;
+    const byPci = scannerByKey.get(`${earfcn}_${pci}`);
+    if (byPci && byPci.length > 0) return findNextInList(byPci, ts);
+    const byEarfcn = scannerByEarfcnOnly.get(earfcn);
+    if (byEarfcn && byEarfcn.length > 0) return findNextInList(byEarfcn, ts);
+    return null;
+  };
+
+  // Precompute LTE scanner match per measurement row: "LTE Scanner" is the scanner reading for
+  // the UE's own serving cell — matched on common CGI first (same idea as GSM's "RxLev Scanner"),
+  // falling back to EARFCN+PCI; "Best LTE Scanner" is the strongest cell the scanner saw for the
+  // call's operator (DmnIdTopN_RSRP_Operator = 1).
+  const lteScannerMatched = useMemo(() => {
+    if (isGSMMode) return [] as (any | null)[];
+    return activeRadioValues.map(val => findNearestScanner(val.CGI, val.EARFCN, val.PhyCellId, val.MsgTime));
+  }, [activeRadioValues, isGSMMode, scannerByKey, scannerByEarfcnOnly, scannerByCgi]);
+
+  const lteScannerBestMatched = useMemo(() => {
+    if (isGSMMode) return [] as (any | null)[];
+    return matchNearestByTime(lteScannerBestRaw, activeRadioValues);
+  }, [lteScannerBestRaw, activeRadioValues, isGSMMode]);
 
   const chartData = useMemo(() => {
     return activeRadioValues.map((val, idx) => {
@@ -565,9 +776,12 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
         RSRP: !isGSM ? parseValue(val.RSRP) : undefined,
         RSRQ: !isGSM ? parseValue(val.RSRQ) : undefined,
         ScannerRxLev: isGSM ? parseValue(gsmScannerMatched[idx]?.RxLev) : undefined,
+        BestScannerRxLev: isGSM ? parseValue(gsmScannerBestMatched[idx]?.RxLev) : undefined,
+        ScannerRSRP: !isGSM ? parseValue(lteScannerMatched[idx]?.RSRP) : undefined,
+        BestScannerRSRP: !isGSM ? parseValue(lteScannerBestMatched[idx]?.RSRP) : undefined,
       };
     });
-  }, [activeRadioValues, isGSMMode, gsmScannerMatched]);
+  }, [activeRadioValues, isGSMMode, gsmScannerMatched, gsmScannerBestMatched, lteScannerMatched, lteScannerBestMatched]);
 
   // Ποιό x-value (time string) να δείξει στο ReferenceLine — ορίζεται ΜΕΤΑ το chartData
   const chartHighlightTime = hoveredRadioIndex !== null
@@ -581,6 +795,32 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     if (hoveredTimeStr !== null) return chartData.findIndex(d => d.time === hoveredTimeStr);
     return -1;
   }, [hoveredRadioIndex, hoveredTimeStr, chartData]);
+
+  // TraceLog rows + user-placed Markers merged into one time-sorted timeline, so annotations
+  // the user dropped during the session show up alongside the engine's own trace events.
+  type TimelineEntry = { kind: "trace" | "marker"; time: string | null; side: string | null; sessionId: string | null; info: string | null };
+  const combinedTraceLog = useMemo<TimelineEntry[]>(() => {
+    const traceEntries: TimelineEntry[] = tracelogValues.map(v => ({
+      kind: "trace", time: v.FullDate, side: v.Side, sessionId: v.SessionId, info: v.Info,
+    }));
+    const markerEntries: TimelineEntry[] = markers.map(m => ({
+      kind: "marker", time: m.MsgTime, side: null, sessionId: m.SessionId, info: m.MarkerText,
+    }));
+    return [...traceEntries, ...markerEntries].sort((a, b) => {
+      const ta = a.time ? new Date(a.time).getTime() : 0;
+      const tb = b.time ? new Date(b.time).getTime() : 0;
+      return ta - tb;
+    });
+  }, [tracelogValues, markers]);
+
+  // Τα threshold ReferenceLines εμφανίζονται μόνο όταν είναι επιλεγμένο ακριβώς ΕΝΑ checkbox
+  // σειράς — με 2+ σειρές ταυτόχρονα απενεργοποιούνται για να μένει καθαρό το διάγραμμα.
+  const selectedSeriesCount = [showStrength, showQuality, showScanner, showBScanner].filter(Boolean).length;
+  const showStrengthThresholds = selectedSeriesCount === 1 && !showQuality;
+  const showQualityThresholds = selectedSeriesCount === 1 && showQuality;
+  // Ο αριστερός άξονας (ισχύς) χρειάζεται και από τις scanner σειρές (yAxisId="left"), αλλιώς
+  // η σύγκριση scanner με μόνο RxQual/RSRQ ενεργό δεν σχεδιάζεται (λείπει ο άξονάς τους).
+  const showLeftAxis = showStrength || showScanner || showBScanner;
 
   // Currently displayed L3 signalling side (A/B) + per-row anomaly classification for it
   const activeL3Data = useMemo(
@@ -614,58 +854,6 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       maxRsrq: rsrqVals.length ? Math.max(...rsrqVals) : null,
     };
   }, [bSideLteValues]);
-
-  // Pre-index scanner rows by EARFCN for fast nearest-time lookup.
-  // B-side falls back to the A-side scanner data when no B-side scanner rows exist.
-  const activeScannerRaw = selectedLteSide === "B"
-    ? (scannerRawB.length > 0 ? scannerRawB : scannerRawA)
-    : scannerRawA;
-
-  // Build two lookup maps over the scanner rows, sorted by timestamp so nearest-time lookups
-  // can use binary search: byKey is keyed on EARFCN+PCI (most specific), byEarfcn falls back to
-  // EARFCN alone when the exact PCI combination has no scanner samples.
-  const { scannerByKey, scannerByEarfcnOnly } = useMemo(() => {
-    const byKey = new Map<string, any[]>();
-    const byEarfcn = new Map<number, any[]>();
-    for (const row of activeScannerRaw) {
-      const entry = { ...row, _ts: new Date(row.FullDate).getTime() };
-      const key = `${row.EARFCN}_${row.PCI}`;
-      if (!byKey.has(key)) byKey.set(key, []);
-      byKey.get(key)!.push(entry);
-      const e = row.EARFCN as number;
-      if (!byEarfcn.has(e)) byEarfcn.set(e, []);
-      byEarfcn.get(e)!.push(entry);
-    }
-    byKey.forEach(rows => rows.sort((a, b) => a._ts - b._ts));
-    byEarfcn.forEach(rows => rows.sort((a, b) => a._ts - b._ts));
-    return { scannerByKey: byKey, scannerByEarfcnOnly: byEarfcn };
-  }, [activeScannerRaw]);
-
-  const scannerByEarfcn = scannerByKey;
-
-  // Binary search for the first row at/after `ts` in a list already sorted ascending by _ts —
-  // used to find the closest scanner sample taken on/after a given UE measurement's MsgTime.
-  const findNextInList = (rows: any[], ts: number): any | null => {
-    let lo = 0, hi = rows.length - 1, result = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (rows[mid]._ts >= ts) { result = mid; hi = mid - 1; }
-      else lo = mid + 1;
-    }
-    return result >= 0 ? rows[result] : null;
-  };
-
-  // Looks up the nearest scanner sample for a given UE measurement: try the exact EARFCN+PCI
-  // match first (most accurate), then fall back to EARFCN-only if no PCI-specific data exists.
-  const findNearestScanner = (earfcn: number | null, pci: number | null, msgTime: string | null): any | null => {
-    if (earfcn == null || msgTime == null) return null;
-    const ts = new Date(msgTime).getTime();
-    const byPci = scannerByKey.get(`${earfcn}_${pci}`);
-    if (byPci && byPci.length > 0) return findNextInList(byPci, ts);
-    const byEarfcn = scannerByEarfcnOnly.get(earfcn);
-    if (byEarfcn && byEarfcn.length > 0) return findNextInList(byEarfcn, ts);
-    return null;
-  };
 
   // The GPS map is only shown for the "Cosmote Free" region, since that's the only dataset
   // that reliably carries per-sample Latitude/Longitude values.
@@ -897,53 +1085,122 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                     />
                     {isGSMMode ? "RxQual" : "RSRQ"}
                   </label>
-                  {isGSMMode && (
-                    <label className="flex items-center gap-1.5 text-xs font-medium text-foreground cursor-pointer select-none">
-                      <input
-                        type="checkbox"
-                        checked={showScanner}
-                        onChange={(e) => setShowScanner(e.target.checked)}
-                        className="h-3.5 w-3.5 rounded-sm border-primary text-primary focus:ring-primary"
-                      />
-                      RxLev Scanner
-                    </label>
-                  )}
+                  <Tooltip delayDuration={150}>
+                    <TooltipTrigger asChild>
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-foreground cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={showScanner}
+                          onChange={(e) => setShowScanner(e.target.checked)}
+                          className="h-3.5 w-3.5 rounded-sm border-primary text-primary focus:ring-primary"
+                        />
+                        {isGSMMode ? "RxLev Scanner" : "LTE Scanner"}
+                      </label>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" align="center" className="max-w-[220px]">
+                      <p className="text-xs">
+                        {isGSMMode
+                          ? "Ο scanner στο ίδιο CGI με το κινητό — σύγκριση RxLev κινητού vs scanner στο κοινό serving CGI."
+                          : "Ο scanner στο ίδιο EARFCN/PCI με το κινητό — σύγκριση RSRP κινητού vs scanner στο κοινό serving cell."}
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
+                  <Tooltip delayDuration={150}>
+                    <TooltipTrigger asChild>
+                      <label className="flex items-center gap-1.5 text-xs font-medium text-foreground cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={showBScanner}
+                          onChange={(e) => setShowBScanner(e.target.checked)}
+                          className="h-3.5 w-3.5 rounded-sm border-primary text-primary focus:ring-primary"
+                        />
+                        {isGSMMode ? "best RxLev Scanner" : "Best LTE Scanner"}
+                      </label>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom" align="center" className="max-w-[220px]">
+                      <p className="text-xs">
+                        {isGSMMode
+                          ? "Top 1 RxLev του scanner για τον operator της κλήσης."
+                          : "Top 1 RSRP του scanner για τον operator της κλήσης, ανεξαρτήτως EARFCN/PCI του κινητού."}
+                      </p>
+                    </TooltipContent>
+                  </Tooltip>
                 </div>
               )}
             </div>
-            <p className="text-xs text-muted-foreground">{call.callType} · {call.technology} · {call.operator}</p>
-            <div className="text-[10px] text-muted-foreground flex flex-wrap gap-x-3 mt-0.5">
+            {/* Call meta + timing on one line */}
+            <div className="text-[10px] text-muted-foreground flex flex-wrap items-center gap-x-3 mt-0.5">
+              <span className="text-xs">{call.callType} · {call.technology} · {call.operator}</span>
               <span>Έναρξη: {formatDateTime(call.startTime)}</span>
               <span>Λήξη: {formatDateTime(call.endTime)}</span>
               <span className="font-mono text-foreground">{Math.floor(call.duration_s / 60)}m {call.duration_s % 60}s</span>
             </div>
-            {/* Serving cell details (eNB/EARFCN/PCI), matched antenna distance, and A/B side status comparison */}
-            {cellInfo && cellInfo.eNBId !== null && (
-              <div className="flex items-center gap-x-3 gap-y-0.5 flex-wrap mt-0.5 text-[10px] font-mono">
-                <span className="text-muted-foreground">eNB <span className="text-foreground font-bold">{cellInfo.eNBId}</span></span>
-                <span className="text-muted-foreground">EARFCN <span className="text-primary font-bold">{cellInfo.EARFCN}</span></span>
-                <span className="text-muted-foreground">PCI <span className="text-accent font-bold">{cellInfo.PCI}</span></span>
-                {mapActiveAntenna && (
+            {/* Single signalling strip: SRVCC handovers │ voice codec │ serving cell + A/B side status */}
+            {(handoverInfo.length > 0 || voiceCodec.length > 0 || (cellInfo && cellInfo.eNBId !== null)) && (
+              <div className="flex items-center gap-x-2 gap-y-0.5 flex-wrap mt-0.5 text-[10px] font-mono">
+                {handoverInfo.length > 0 && (
                   <>
-                    <span className="text-muted-foreground">Dist <span className="text-yellow-400 font-bold">{fmtDist(mapActiveAntenna.distanceM)}</span></span>
-                    {mapActiveAntenna.cellName && (
-                      <span className="text-muted-foreground truncate max-w-[160px]">{mapActiveAntenna.cellName}</span>
-                    )}
+                    <span className="text-muted-foreground uppercase tracking-wider">HO</span>
+                    {handoverInfo.map((ho, idx) => {
+                      const isSuccess = ho.HoStatus?.toLowerCase().includes("success");
+                      return (
+                        <span
+                          key={idx}
+                          className={`px-1.5 py-0.5 rounded font-semibold ${isSuccess ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}`}
+                          title={ho.MsgTime ? formatDateTime(ho.MsgTime) : undefined}
+                        >
+                          {ho.HoStatus ?? "N/A"}{ho.hoDuration != null ? ` (${ho.hoDuration} ms)` : ""}
+                        </span>
+                      );
+                    })}
                   </>
                 )}
-                {/* Per-side call outcome (e.g. status/reason code) when both A and B side data is available */}
-                {sideComparison.length > 0 && (
+                {voiceCodec.length > 0 && (
                   <>
-                    <span className="text-border">│</span>
-                    {sideComparison.map((row, idx) => (
-                      <span key={idx} className="text-muted-foreground whitespace-nowrap">
-                        <span className="text-foreground font-bold">{row.Side}</span>
-                        {" "}{row.callStatus}{" "}
-                        <span className="text-foreground">{row.code}</span>
-                        {row.codeDescription ? ` ${row.codeDescription}` : ""}
-                        {idx < sideComparison.length - 1 && <span className="text-border mx-1">·</span>}
-                      </span>
-                    ))}
+                    {handoverInfo.length > 0 && <span className="text-border">│</span>}
+                    <span className="text-muted-foreground uppercase tracking-wider">Codec</span>
+                    {(["U", "D"] as const).map((dir) => {
+                      const last = [...voiceCodec].reverse().find((c) => c.Direction === dir);
+                      if (!last) return null;
+                      return (
+                        <span key={dir} className="text-muted-foreground">
+                          {dir === "U" ? "UL" : "DL"}{" "}
+                          <span className="text-foreground font-bold">{last.CodecName ?? `#${last.Codec}`}</span>
+                          {last.CodecRate != null ? ` (${last.CodecRate} kbps)` : ""}
+                        </span>
+                      );
+                    })}
+                  </>
+                )}
+                {cellInfo && cellInfo.eNBId !== null && (
+                  <>
+                    {(handoverInfo.length > 0 || voiceCodec.length > 0) && <span className="text-border">│</span>}
+                    <span className="text-muted-foreground">eNB <span className="text-foreground font-bold">{cellInfo.eNBId}</span></span>
+                    <span className="text-muted-foreground">EARFCN <span className="text-primary font-bold">{cellInfo.EARFCN}</span></span>
+                    <span className="text-muted-foreground">PCI <span className="text-accent font-bold">{cellInfo.PCI}</span></span>
+                    {mapActiveAntenna && (
+                      <>
+                        <span className="text-muted-foreground">Dist <span className="text-yellow-400 font-bold">{fmtDist(mapActiveAntenna.distanceM)}</span></span>
+                        {mapActiveAntenna.cellName && (
+                          <span className="text-muted-foreground truncate max-w-[160px]">{mapActiveAntenna.cellName}</span>
+                        )}
+                      </>
+                    )}
+                    {/* Per-side call outcome (e.g. status/reason code) when both A and B side data is available */}
+                    {sideComparison.length > 0 && (
+                      <>
+                        <span className="text-border">│</span>
+                        {sideComparison.map((row, idx) => (
+                          <span key={idx} className="text-muted-foreground whitespace-nowrap">
+                            <span className="text-foreground font-bold">{row.Side}</span>
+                            {" "}{row.callStatus}{" "}
+                            <span className="text-foreground">{row.code}</span>
+                            {row.codeDescription ? ` ${row.codeDescription}` : ""}
+                            {idx < sideComparison.length - 1 && <span className="text-border mx-1">·</span>}
+                          </span>
+                        ))}
+                      </>
+                    )}
                   </>
                 )}
               </div>
@@ -1021,23 +1278,24 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                       LTE uses RSRP/RSRQ scales (both axes standard, more negative=worse). */}
                   {isGSMMode ? (
                     <>
-                      {showStrength && <YAxis yAxisId="left" domain={[-105, dataMax => Math.max(dataMax, -60)]} {...AXIS_STYLE} axisLine={false} tickLine={false} />}
+                      {showLeftAxis && <YAxis yAxisId="left" domain={[-105, dataMax => Math.max(dataMax, -60)]} {...AXIS_STYLE} axisLine={false} tickLine={false} />}
                       {showQuality && <YAxis yAxisId="right" orientation="right" reversed={true} domain={[0, 7]} {...AXIS_STYLE} axisLine={false} tickLine={false} />}
-                      {showStrength && !showQuality && <ReferenceLine y={-88} yAxisId="left" stroke="hsl(var(--warning, 45 93% 58%))" strokeDasharray="3 3" />}
-                      {showStrength && !showQuality && <ReferenceLine y={-92} yAxisId="left" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
-                      {showQuality && !showStrength && <ReferenceLine y={5} yAxisId="right" stroke="hsl(var(--warning, 45 93% 58%))" strokeDasharray="3 3" />}
-                      {showQuality && !showStrength && <ReferenceLine y={6} yAxisId="right" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
+                      {showStrengthThresholds && <ReferenceLine y={-88} yAxisId="left" stroke="hsl(var(--warning, 45 93% 58%))" strokeDasharray="3 3" />}
+                      {showStrengthThresholds && <ReferenceLine y={-92} yAxisId="left" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
+                      {showQualityThresholds && <ReferenceLine y={5} yAxisId="right" stroke="hsl(var(--warning, 45 93% 58%))" strokeDasharray="3 3" />}
+                      {showQualityThresholds && <ReferenceLine y={6} yAxisId="right" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
                       <RechartsTooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }} itemStyle={{ color: 'hsl(var(--foreground))' }} />
                       <Legend wrapperStyle={{ fontSize: '12px' }} />
                       {/* Custom dot renderer: only draws a visible circle at chartHighlightIndex (the
                           row currently hovered in the table below), keeping every other point invisible */}
                       {showStrength && <Line yAxisId="left" type="monotone" dataKey="RxLevSub" stroke={CHART_PALETTE[1]} dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill={CHART_PALETTE[1]} stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RxLevSub" />}
                       {showScanner && <Line yAxisId="left" type="monotone" dataKey="ScannerRxLev" stroke={CHART_PALETTE[2]} strokeDasharray="4 3" dot={false} activeDot={false} strokeWidth={2} connectNulls name="RxLev Scanner" />}
+                      {showBScanner && <Line yAxisId="left" type="monotone" dataKey="BestScannerRxLev" stroke={CHART_PALETTE[3]} strokeDasharray="2 2" dot={false} activeDot={false} strokeWidth={2} connectNulls name="Best RxLev Scanner" />}
                       {showQuality && <Line yAxisId="right" type="monotone" dataKey="RxQualSub" stroke={CHART_PALETTE[4]} dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill={CHART_PALETTE[4]} stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RxQualSub" />}
-                      {chartHighlightTime && (
+                      {chartHighlightTime && (showLeftAxis || showQuality) && (
                         <ReferenceLine
                           x={chartHighlightTime}
-                          yAxisId={showStrength ? "left" : showQuality ? "right" : "left"}
+                          yAxisId={showLeftAxis ? "left" : "right"}
                           stroke="hsl(180, 90%, 55%)"
                           strokeWidth={3}
                           label={{ value: "│", position: "insideTopLeft", fill: "hsl(180, 90%, 65%)", fontSize: 18, fontWeight: 800 }}
@@ -1046,20 +1304,22 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                     </>
                   ) : (
                     <>
-                      {showStrength && <YAxis yAxisId="left" domain={[-140, dataMax => Math.max(dataMax, -100)]} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} axisLine={false} tickLine={false} />}
+                      {showLeftAxis && <YAxis yAxisId="left" domain={[-140, dataMax => Math.max(dataMax, -100)]} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} axisLine={false} tickLine={false} />}
                       {showQuality && <YAxis yAxisId="right" orientation="right" domain={[-25, -12]} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} axisLine={false} tickLine={false} />}
-                      {showStrength && !showQuality && <ReferenceLine y={-115} yAxisId="left" stroke="hsl(var(--warning, 45 93% 58%))" strokeDasharray="3 3" />}
-                      {showStrength && !showQuality && <ReferenceLine y={-120} yAxisId="left" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
-                      {showQuality && !showStrength && <ReferenceLine y={-16} yAxisId="right" stroke="hsl(var(--warning, 45 93% 58%))" strokeDasharray="3 3" />}
-                      {showQuality && !showStrength && <ReferenceLine y={-18} yAxisId="right" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
+                      {showStrengthThresholds && <ReferenceLine y={-115} yAxisId="left" stroke="hsl(var(--warning, 45 93% 58%))" strokeDasharray="3 3" />}
+                      {showStrengthThresholds && <ReferenceLine y={-120} yAxisId="left" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
+                      {showQualityThresholds && <ReferenceLine y={-16} yAxisId="right" stroke="hsl(var(--warning, 45 93% 58%))" strokeDasharray="3 3" />}
+                      {showQualityThresholds && <ReferenceLine y={-18} yAxisId="right" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
                       <RechartsTooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }} itemStyle={{ color: 'hsl(var(--foreground))' }} />
                       <Legend wrapperStyle={{ fontSize: '12px' }} />
                       {showStrength && <Line yAxisId="left" type="monotone" dataKey="RSRP" stroke="hsl(200, 80%, 55%)" dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill="hsl(200, 80%, 55%)" stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RSRP" />}
+                      {showScanner && <Line yAxisId="left" type="monotone" dataKey="ScannerRSRP" stroke={CHART_PALETTE[2]} strokeDasharray="4 3" dot={false} activeDot={false} strokeWidth={2} connectNulls name="LTE Scanner" />}
+                      {showBScanner && <Line yAxisId="left" type="monotone" dataKey="BestScannerRSRP" stroke={CHART_PALETTE[3]} strokeDasharray="2 2" dot={false} activeDot={false} strokeWidth={2} connectNulls name="Best LTE Scanner" />}
                       {showQuality && <Line yAxisId="right" type="monotone" dataKey="RSRQ" stroke="hsl(45, 93%, 58%)" dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill="hsl(45, 93%, 58%)" stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RSRQ" />}
-                      {chartHighlightTime && (
+                      {chartHighlightTime && (showLeftAxis || showQuality) && (
                         <ReferenceLine
                           x={chartHighlightTime}
-                          yAxisId={showStrength ? "left" : showQuality ? "right" : "left"}
+                          yAxisId={showLeftAxis ? "left" : "right"}
                           stroke="hsl(180, 90%, 55%)"
                           strokeWidth={3}
                           label={{ value: "│", position: "insideTopLeft", fill: "hsl(180, 90%, 65%)", fontSize: 18, fontWeight: 800 }}
@@ -1170,7 +1430,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
 
           {isLoadingRadio ? (
             <p className="text-xs text-muted-foreground">Φόρτωση δεδομένων...</p>
-          ) : tracelogValues && tracelogValues.length > 0 ? (
+          ) : combinedTraceLog.length > 0 ? (
             <div className="overflow-x-auto max-h-[260px] overflow-y-auto">
               <table className="w-full text-xs text-left">
                 <thead className="sticky top-0 bg-muted border-b border-border z-10">
@@ -1182,37 +1442,44 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-border/50">
-                  {tracelogValues.map((val, idx) => {
-                    const tStr = toChartTime(val.FullDate ?? null);
+                  {combinedTraceLog.map((entry, idx) => {
+                    const tStr = toChartTime(entry.time ?? null);
                     const isActive = tStr !== null && tStr === hoveredTimeStr;
+                    const isMarker = entry.kind === "marker";
                     // Flag TraceLog rows containing known failure/teardown keywords so they stand out in red
-                    const isCritical = val.Info != null && [
+                    const isCritical = !isMarker && entry.info != null && [
                       "No sync signal found",
                       "Task stopped",
                       "Close Engine",
                       "System Release",
-                    ].some(kw => val.Info!.includes(kw));
+                    ].some(kw => entry.info!.includes(kw));
                     return (
                       <tr
-                        key={`${val.FullDate ?? idx}-${idx}`}
-                        style={isCritical
-                          ? { boxShadow: "inset 3px 0 0 hsl(0, 72%, 51%)" }
-                          : isActive
-                            ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" }
-                            : undefined}
-                        className={`transition-all duration-100 cursor-pointer ${isCritical
-                          ? "bg-red-500/15 text-red-400"
-                          : isActive
-                            ? "bg-cyan-500/10"
-                            : "hover:bg-muted/40"
+                        key={`${entry.kind}-${entry.time ?? idx}-${idx}`}
+                        style={isMarker
+                          ? { boxShadow: "inset 3px 0 0 hsl(38, 92%, 50%)" }
+                          : isCritical
+                            ? { boxShadow: "inset 3px 0 0 hsl(0, 72%, 51%)" }
+                            : isActive
+                              ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" }
+                              : undefined}
+                        className={`transition-all duration-100 cursor-pointer ${isMarker
+                          ? "bg-amber-500/10 text-amber-400"
+                          : isCritical
+                            ? "bg-red-500/15 text-red-400"
+                            : isActive
+                              ? "bg-cyan-500/10"
+                              : "hover:bg-muted/40"
                           }`}
                         onMouseEnter={() => { setHoveredRadioIndex(null); setHoveredTimeStr(tStr); }}
                         onMouseLeave={() => setHoveredTimeStr(null)}
                       >
-                        <td className="px-1 py-0.5">{val.FullDate ? formatDateTime(val.FullDate) : "N/A"}</td>
-                        <td className="px-1 py-0.5 font-mono">{val.Side ?? "N/A"}</td>
-                        <td className="px-1 py-0.5 font-mono">{val.SessionId ?? "N/A"}</td>
-                        <td className="px-1 py-0.5 font-mono whitespace-pre-wrap break-words max-w-[400px]">{val.Info ?? "N/A"}</td>
+                        <td className="px-1 py-0.5">{entry.time ? formatDateTime(entry.time) : "N/A"}</td>
+                        <td className="px-1 py-0.5 font-mono">
+                          {isMarker ? <Flag className="h-3 w-3 inline" /> : entry.side ?? "N/A"}
+                        </td>
+                        <td className="px-1 py-0.5 font-mono">{entry.sessionId ?? "N/A"}</td>
+                        <td className="px-1 py-0.5 font-mono whitespace-pre-wrap break-words max-w-[400px]">{entry.info ?? "N/A"}</td>
                       </tr>
                     );
                   })}
@@ -1445,7 +1712,7 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                       const isActive = hoveredRadioIndex === idx;
 
                       const scn = scannerByEarfcn.size > 0
-                        ? findNearestScanner(val.EARFCN, val.PhyCellId, val.MsgTime)
+                        ? findNearestScanner(val.CGI, val.EARFCN, val.PhyCellId, val.MsgTime)
                         : null;
                       // Δt(s): how far the matched scanner sample is from this UE measurement in time —
                       // green/yellow/red so the reader can judge how trustworthy the comparison is
@@ -1493,6 +1760,55 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
             </div>
           ) : (
             <p className="text-xs text-muted-foreground">Δεν βρέθηκαν δεδομένα για αυτήν την κλήση.</p>
+          )}
+        </div>
+
+        {/* Technology Timeline panel: PrevTechnology -> CurrTechnology transitions during the call,
+            incl. CA carrier counts (LTE/NR5G) and band, so handovers/reselections between 2G/3G/4G/5G
+            (e.g. the SRVCC leg) are visible with exact timing instead of being inferred from RSRP gaps. */}
+        <div className="bg-card border border-border rounded-lg p-2">
+          <h3 className="text-xs font-semibold text-foreground mb-1 flex items-center gap-1.5">
+            <Signal className="h-3 w-3 text-primary" />
+            Technology Timeline
+          </h3>
+
+          {isLoadingRadio ? (
+            <p className="text-xs text-muted-foreground">Φόρτωση δεδομένων...</p>
+          ) : technologyTimeline.length > 0 ? (
+            <div className="overflow-x-auto max-h-[260px] overflow-y-auto">
+              <table className="w-full text-xs text-left">
+                <thead className="sticky top-0 bg-muted border-b border-border z-10">
+                  <tr>
+                    <th className="px-2 py-1 font-semibold">MsgTime</th>
+                    <th className="px-2 py-1 font-semibold">Prev → Curr</th>
+                    <th className="px-2 py-1 font-semibold">Band</th>
+                    <th className="px-2 py-1 font-semibold">CA (LTE/NR)</th>
+                    <th className="px-2 py-1 font-semibold">Duration</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-border/50">
+                  {technologyTimeline.map((t, idx) => (
+                    <tr key={idx} className="hover:bg-muted/40">
+                      <td className="px-1 py-0.5 whitespace-nowrap">{t.MsgTime ? formatDateTime(t.MsgTime) : "N/A"}</td>
+                      <td className="px-1 py-0.5 font-mono">
+                        <span className="text-muted-foreground">{t.PrevTechnology ?? "—"}</span>
+                        {" → "}
+                        <span className="text-foreground font-bold">{t.CurrTechnology ?? "—"}</span>
+                      </td>
+                      <td className="px-1 py-0.5 font-mono">{t.Band ?? "—"}</td>
+                      <td className="px-1 py-0.5 font-mono">
+                        {t.LTEDLCarriers != null || t.NR5GDLCarriers != null
+                          ? `${t.LTEDLCarriers ?? 0}/${t.NR5GDLCarriers ?? 0}`
+                          : "—"}
+                      </td>
+                      <td className="px-1 py-0.5 font-mono">{t.Duration != null ? `${t.Duration} ms` : "—"}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="text-xs text-muted-foreground">Δεν υπάρχουν δεδομένα τεχνολογίας.</p>
           )}
         </div>
 
@@ -1769,11 +2085,13 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                         r.Phase === "after"  ? "text-orange-400" :
                         "text-primary";
                       const h = l3Highlights[i] ?? { severity: "none" as const, reason: "" };
+                      // Paging is high-volume noise in the L3 log — render it dimmed
+                      const isPaging = /paging/i.test(r.SimpleMsgName || r.MsgName || "");
                       return (
                         <tr
                           key={i}
                           title={h.reason || undefined}
-                          className={`hover:bg-muted/40 transition-colors ${SEV_ROW_CLASS[h.severity]}`}
+                          className={`hover:bg-muted/40 transition-colors ${SEV_ROW_CLASS[h.severity]}${isPaging ? " opacity-50" : ""}`}
                         >
                           <td className={`px-2 py-0.5 font-semibold ${phaseColor}`}>{r.Phase}</td>
                           <td className="px-2 py-0.5 font-mono whitespace-nowrap">

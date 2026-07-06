@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from db import get_connection, get_available_databases
-from rrc_decode import decode_row_message
+from rrc_decode import decode_l3_row
 import time
 import os
 import openpyxl
@@ -1642,6 +1642,10 @@ def get_l3_messages(
     The window anchors on the EARLIEST of: first SIP INVITE, first RRC
     connection setup/reconfiguration, or callStartTimeStamp, then extends by
     before_seconds/after_seconds, so call-setup signalling isn't cut off.
+
+    If the selected side is missing callStartTimeStamp / callEndTimeStamp,
+    the paired side's timestamps are used instead (A <-> B fallback); the
+    borrowed field is flagged via CallStartSource / CallEndSource.
     """
 
     conn = None
@@ -1725,6 +1729,32 @@ def get_l3_messages(
         call_window["BSessionId"] = b_session_id
         call_window["ResolvedSessionId"] = resolved_session_id
 
+        # 1b) Fallback: if this side's CallStart/CallEnd is missing, borrow the
+        #     paired side's timestamps (A <-> B) so the window is still usable.
+        other_session_id = b_session_id if side == "A" else a_session_id
+        other_side = "B" if side == "A" else "A"
+        if (call_window.get("CallStart") is None or call_window.get("CallEnd") is None) \
+                and other_session_id is not None:
+            cursor.execute("""
+                SELECT TOP 1
+                    CA.callStartTimeStamp AS CallStart,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                    ) AS CallEnd
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                ORDER BY CA.callStartTimeStamp
+            """, (str(other_session_id),))
+            other_row = cursor.fetchone()
+            if other_row:
+                if call_window.get("CallStart") is None and other_row[0] is not None:
+                    call_window["CallStart"] = other_row[0]
+                    call_window["CallStartSource"] = other_side
+                if call_window.get("CallEnd") is None and other_row[1] is not None:
+                    call_window["CallEnd"] = other_row[1]
+                    call_window["CallEndSource"] = other_side
+
         # 2) Full L3 log based on the selected call window.
         #    'during' is scoped strictly to this side's own SessionId (no
         #    neighbouring SessionIds from the same FileId), so every one of
@@ -1738,11 +1768,8 @@ def get_l3_messages(
             ;WITH target_call AS (
                 SELECT TOP 1
                     CA.FileId,
-                    CA.callStartTimeStamp AS CallStart,
-                    COALESCE(
-                        CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
-                    ) AS CallEnd
+                    CAST(? AS DATETIME2) AS CallStart,
+                    CAST(? AS DATETIME2) AS CallEnd
                 FROM CallAnalysis CA
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
                 ORDER BY CA.callStartTimeStamp
@@ -1805,7 +1832,7 @@ def get_l3_messages(
                 l.SIPCallId,
                 l.PCI,
                 l.ARFCN,
-                LEFT(l.Message, 1500) AS Message
+                l.Message AS Message
 
             FROM FactL3Messages l
             CROSS JOIN bounds B
@@ -1833,7 +1860,7 @@ def get_l3_messages(
                 l.SIPCallId,
                 l.PCI,
                 l.ARFCN,
-                LEFT(l.Message, 1500) AS Message
+                l.Message AS Message
 
             FROM FactL3Messages l
             CROSS JOIN bounds B
@@ -1863,7 +1890,7 @@ def get_l3_messages(
                 l.SIPCallId,
                 l.PCI,
                 l.ARFCN,
-                LEFT(l.Message, 1500) AS Message
+                l.Message AS Message
 
             FROM FactL3Messages l
             CROSS JOIN bounds B
@@ -1874,6 +1901,7 @@ def get_l3_messages(
         """
 
         params = [
+            call_window.get("CallStart"), call_window.get("CallEnd"),   # target_call window (with A<->B fallback)
             resolved_session_id, resolved_session_id, before_seconds, after_seconds,
             resolved_session_id,   # during
             resolved_session_id,   # before (exclude own session, already covered by during)
@@ -1895,12 +1923,18 @@ def get_l3_messages(
         cursor.execute(q, tuple(params))
         data = _rows(cursor)
 
-        # LTE MeasurementReport rows carry a UPER-encoded RRC PDU in Message (raw hex) —
-        # decode it into RSRP/RSRQ so the L3 log never shows hex to the user.
+        # Every FactL3Messages row stores its PDU as raw hex — decode RRC/NAS/SIP/GSM
+        # payloads into readable text so the L3 log shows hex only when decode fails.
         for r in data:
-            decoded = decode_row_message(r.get("Technology"), r.get("SimpleMsgName"), r.get("MsgName"), r.get("Message"))
+            decoded = decode_l3_row(r.get("Technology"), r.get("Layer"), r.get("Direction"),
+                                    r.get("MsgName"), r.get("SimpleMsgName"), r.get("Message"))
             if decoded is not None:
+                if len(decoded) > 4000:
+                    decoded = decoded[:4000] + f"\n… [+{len(decoded) - 4000} chars]"
                 r["Message"] = decoded
+            elif r.get("Message") and len(r["Message"]) > 1500:
+                # undecodable payloads keep the old 1500-char hex cap
+                r["Message"] = r["Message"][:1500]
 
         phase_counts = {"before": 0, "during": 0, "after": 0}
 
@@ -2138,19 +2172,19 @@ def get_lte_measurement_comparison(
 @app.get("/api/lte_scanner_raw")
 def get_lte_scanner_raw(
     database: str = Query(..., min_length=1),
-    session_id: str = Query(..., min_length=1),
-    top_only: bool = Query(default=False),   # μόνο η καλύτερη κυψέλη ανά EARFCN (DmnIdTopN_RSRP=1)
+    cgi: str = Query(..., min_length=1),
+    start: str = Query(..., min_length=1),
+    end: str = Query(..., min_length=1)
 ):
-    """FactLTEScanner rows in the call time window, A-side & B-side.
-    Richer than before: includes MCC/MNC/PCI/CId/TAC, TopN ranking, MIMO/rank,
-    ENDC flag and best-neighbour context — so you can compare what the UE was
-    camped on (FactLTERadio serving) vs what the scanner saw as best available.
-    ?top_only=true keeps only the #1 ranked cell per EARFCN (best server)."""
+    """FactLTEScanner rows for a given serving CGI within [start, end] — mirrors
+    /api/gsm_scanner_raw's per-segment approach, since the serving CGI can change several
+    times within a single call (handovers) and PCI alone can be reused by other cells."""
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
 
-        scanner_cols = """
+        cursor.execute("""
+            SELECT
                 fs.FullDate,
                 fs.EARFCN,
                 fs.PCI,
@@ -2172,68 +2206,17 @@ def get_lte_scanner_raw(
                 fs.DmnIdTopN_RSRP              AS RankByRSRP,
                 fs.DistanceToBTS,
                 fs.CGI
-        """
-
-        def run(where_time_cte, params):
-            q = f"""
-                {where_time_cte}
-                SELECT {scanner_cols}
-                FROM FactLTEScanner fs
-                CROSS JOIN win w
-                WHERE fs.EARFCN IS NOT NULL
-                  AND fs.FullDate >= w.start_time
-                  AND fs.FullDate <= w.end_time
-                  {"AND fs.DmnIdTopN_RSRP = 1" if top_only else ""}
-                ORDER BY fs.FullDate, fs.DmnIdTopN_RSRP
-            """
-            cursor.execute(q, params)
-            cols = [c[0] for c in cursor.description] if cursor.description else []
-            return [{cols[i]: r[i] for i in range(len(cols))} for r in cursor.fetchall()]
-
-        # A-side time window
-        a_cte = """
-            ;WITH win AS (
-                SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
-                    COALESCE(CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration,0), CA.callStartTimeStamp)
-                    ) AS end_time
-                FROM CallAnalysis CA
-                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
-            )
-        """
-        a_side = run(a_cte, (session_id,))
-
-        # B-side: resolve B session, then its time window
-        b_cte = """
-            ;WITH pair_root AS (
-                SELECT TOP (1)
-                    CASE WHEN CA.Side='B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
-                         ELSE CA.SessionId END AS ASessionId
-                FROM CallAnalysis CA
-                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
-                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
-            ),
-            b_session AS (
-                SELECT TOP (1) CA.SessionId AS BSessionId
-                FROM CallAnalysis CA
-                INNER JOIN pair_root PR ON CA.SessionIdA = PR.ASessionId
-                WHERE CA.Side='B'
-            ),
-            win AS (
-                SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
-                    COALESCE(CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration,0), CA.callStartTimeStamp)
-                    ) AS end_time
-                FROM CallAnalysis CA
-                INNER JOIN b_session B ON CA.SessionId = B.BSessionId
-            )
-        """
-        b_side = run(b_cte, (session_id, session_id))
+            FROM FactLTEScanner fs
+            WHERE fs.CGI = ?
+              AND fs.FullDate >= ?
+              AND fs.FullDate <= ?
+            ORDER BY fs.FullDate
+        """, (cgi, start, end))
+        cols = [c[0] for c in cursor.description] if cursor.description else []
+        rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
 
         conn.close()
-        return {"aSide": a_side, "bSide": b_side}
+        return rows
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
@@ -2351,6 +2334,124 @@ def get_gsm_scanner_raw(
               AND FullDate <= ?
             ORDER BY FullDate
         """, (cgi, start, end))
+        cols = [c[0] for c in cursor.description] if cursor.description else []
+        rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
+
+        conn.close()
+        return rows
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/gsm_scanner_best")
+def get_gsm_scanner_best(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """Best (DmnIdTopN_RxLev_Operator = 1) FactGSMScanner reading per scan cycle for the
+    call's own operator — independent of the serving CGI, so it doesn't need per-segment
+    matching like /api/gsm_scanner_raw. Feeds the 'Best RxLev Scanner' chart line.
+
+    Time window and operator are both derived server-side from SessionId (like the other
+    scanner endpoints), instead of trusting values computed by the frontend: CallRecord's
+    `operator` field is hardcoded to "N/A" for real calls, and its `startTime`/`endTime`
+    are round-tripped through JS Date (local-time interpretation of a naive DB datetime),
+    which can shift the window by the browser's UTC offset."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            ;WITH call_ctx AS (
+                SELECT TOP 1
+                    COALESCE(S.startTime, SB.startTime) AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(S.startTime, SB.startTime))
+                    ) AS end_time,
+                    CASE
+                        WHEN DF.ASideLocation LIKE '%Cosmote%' OR DF.CollectionName LIKE '%Cosmote%' THEN 'COSMOTE'
+                        WHEN DF.ASideLocation LIKE '%Vodafone%' OR DF.CollectionName LIKE '%Vodafone%' THEN 'VODAFONE'
+                        WHEN DF.ASideLocation LIKE '%Nova%' OR DF.ASideLocation LIKE '%Wind%'
+                             OR DF.CollectionName LIKE '%Nova%' OR DF.CollectionName LIKE '%Wind%' THEN 'NOVA'
+                        ELSE NULL
+                    END AS call_operator
+                FROM CallAnalysis CA
+                LEFT JOIN FileList DF ON CA.FileId = DF.FileId
+                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+            )
+            SELECT fs.FullDate, fs.BCCH, fs.RFBand, fs.BSIC, fs.RxLev, fs.CoverI, fs.CGI, fs.CId, fs.LAC
+            FROM FactGSMScanner fs
+            CROSS JOIN call_ctx cc
+            WHERE fs.DmnIdTopN_RxLev_Operator = 1
+              AND fs.FullDate >= cc.start_time
+              AND fs.FullDate <= cc.end_time
+              AND cc.call_operator IS NOT NULL
+              AND (
+                    (cc.call_operator = 'VODAFONE' AND fs.CGI LIKE '202-5-%') OR
+                    (cc.call_operator = 'NOVA' AND fs.CGI LIKE '202-10-%') OR
+                    (cc.call_operator = 'COSMOTE' AND fs.CGI LIKE '202-1-%' AND fs.CGI NOT LIKE '202-10%')
+                  )
+            ORDER BY fs.FullDate
+        """, (session_id,))
+        cols = [c[0] for c in cursor.description] if cursor.description else []
+        rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
+
+        conn.close()
+        return rows
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/lte_scanner_best")
+def get_lte_scanner_best(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """Best (DmnIdTopN_RSRP_Operator = 1) FactLTEScanner reading per scan cycle for the
+    call's own operator — independent of the UE's serving EARFCN/PCI. Feeds the
+    'Best LTE Scanner' chart line. Same time-window/operator derivation as
+    /api/gsm_scanner_best, but matches the operator via MCC/MNC (both are already plain
+    int columns on FactLTEScanner) instead of a CGI string prefix."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            ;WITH call_ctx AS (
+                SELECT TOP 1
+                    COALESCE(S.startTime, SB.startTime) AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(S.startTime, SB.startTime))
+                    ) AS end_time,
+                    CASE
+                        WHEN DF.ASideLocation LIKE '%Cosmote%' OR DF.CollectionName LIKE '%Cosmote%' THEN 1
+                        WHEN DF.ASideLocation LIKE '%Vodafone%' OR DF.CollectionName LIKE '%Vodafone%' THEN 5
+                        WHEN DF.ASideLocation LIKE '%Nova%' OR DF.ASideLocation LIKE '%Wind%'
+                             OR DF.CollectionName LIKE '%Nova%' OR DF.CollectionName LIKE '%Wind%' THEN 10
+                        ELSE NULL
+                    END AS call_mnc
+                FROM CallAnalysis CA
+                LEFT JOIN FileList DF ON CA.FileId = DF.FileId
+                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+            )
+            SELECT fs.FullDate, fs.EARFCN, fs.PCI, fs.CId, fs.TAC, fs.MCC, fs.MNC,
+                   ROUND(fs.RSRP, 2) AS RSRP, ROUND(fs.RSRQ, 2) AS RSRQ, fs.CGI
+            FROM FactLTEScanner fs
+            CROSS JOIN call_ctx cc
+            WHERE fs.DmnIdTopN_RSRP_Operator = 1
+              AND fs.FullDate >= cc.start_time
+              AND fs.FullDate <= cc.end_time
+              AND cc.call_mnc IS NOT NULL
+              AND fs.MCC = 202
+              AND fs.MNC = cc.call_mnc
+            ORDER BY fs.FullDate
+        """, (session_id,))
         cols = [c[0] for c in cursor.description] if cursor.description else []
         rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
 
@@ -2894,5 +2995,37 @@ def get_wcdma_radio(
         data = _rows(cursor)
         conn.close()
         return {"wcdmaRadio": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/voice_codec")
+def get_voice_codec(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """Voice codec used per direction (uplink/downlink) during the call, incl. codec
+    rate (kbps) and how long each codec was active. DmnVoiceCodecInformation gives the
+    human-readable codec name (e.g. AMR-WB) for the raw codec id, when matched."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT
+                vc.MsgTime,
+                vc.SessionId,
+                vc.Direction,
+                vc.Codec,
+                dvc.CodecName,
+                vc.CodecRate,
+                vc.Duration
+            FROM VoiceCodecTest vc
+            LEFT JOIN DmnVoiceCodecInformation dvc ON dvc.Codec = vc.Codec
+            WHERE vc.SessionId = TRY_CONVERT(BIGINT, ?)
+            ORDER BY vc.MsgTime
+        """, (session_id,))
+        data = _rows(cursor)
+        conn.close()
+        return {"voiceCodec": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

@@ -67,6 +67,8 @@ interface ResultChartsProps {
   defaultChartType?: ChartType;
   defaultXCol?: string;
   defaultYCols?: string[];
+  defaultRightCols?: string[];
+  defaultAxisOverrides?: Record<string, { domain: [number, number]; reversed?: boolean }>;
   defaultAggFn?: AggFn;
   defaultAggEnabled?: boolean;
   defaultGroupCol?: string;
@@ -82,6 +84,26 @@ function toNum(v: unknown): number | null {
 
 function isNumericCol(col: string, sample: Record<string, unknown>[]): boolean {
   return sample.some((r) => toNum(r[col]) !== null);
+}
+
+// Round, evenly-spaced axis ticks (e.g. 60, 65, 70, 75...) instead of recharts'
+// default tick placement, which can land on awkward fractional values.
+function niceTicks(min: number, max: number, targetCount = 6): number[] {
+  if (!Number.isFinite(min) || !Number.isFinite(max) || min === max) return [];
+  const rawStep = (max - min) / targetCount;
+  const magnitude = Math.pow(10, Math.floor(Math.log10(rawStep)));
+  const residual = rawStep / magnitude;
+  const step = residual > 5 ? 10 * magnitude
+    : residual > 2 ? 5 * magnitude
+    : residual > 1 ? 2 * magnitude
+    : magnitude;
+  const niceMin = Math.floor(min / step) * step;
+  const niceMax = Math.ceil(max / step) * step;
+  const ticks: number[] = [];
+  for (let t = niceMin; t <= niceMax + step / 2; t += step) {
+    ticks.push(Math.round((t + Number.EPSILON) * 1e6) / 1e6);
+  }
+  return ticks;
 }
 
 // Prefer operator/categorical columns as the default X axis.
@@ -327,7 +349,7 @@ function ChartEmpty({ message }: { message: string }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ResultCharts({ columns, data, defaultChartType, defaultXCol, defaultYCols, defaultAggFn, defaultAggEnabled, defaultGroupCol }: ResultChartsProps) {
+export default function ResultCharts({ columns, data, defaultChartType, defaultXCol, defaultYCols, defaultRightCols, defaultAxisOverrides, defaultAggFn, defaultAggEnabled, defaultGroupCol }: ResultChartsProps) {
   // ── Derived from props ──────────────────────────────────────────────────
 
   const slice  = useMemo(
@@ -375,7 +397,7 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
     if (defaultYCols?.length) {
       return defaultYCols.map((col, i) => ({
         col,
-        side: "left" as YSide,
+        side: (defaultRightCols?.includes(col) ? "right" : "left") as YSide,
         color: CHART_PALETTE[i % CHART_PALETTE.length],
       }));
     }
@@ -655,16 +677,6 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
       .slice(0, 40);
   }, [yIsCategorical, categoricalYSeries, filteredSlice, xCol, xCol2, pivotSeries]);
 
-  const hasRight  = useMemo(() => ySeries.some((s) => s.side === "right"), [ySeries]);
-  const leftLabel = useMemo(
-    () => ySeries.filter((s) => s.side === "left").map((s) => s.col).join(", ").slice(0, 24),
-    [ySeries],
-  );
-  const rightLabel = useMemo(
-    () => ySeries.filter((s) => s.side === "right").map((s) => s.col).join(", ").slice(0, 24),
-    [ySeries],
-  );
-
   const rawChartData = useMemo(
     () =>
       filteredSlice.map((row) => {
@@ -681,6 +693,85 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
     if (!xIsNumeric && categoricalAggData) return categoricalAggData;
     return rawChartData;
   }, [shouldGroup, binnedData, xIsNumeric, categoricalAggData, rawChartData]);
+
+  // Columns whose values are only 0/1 (e.g. a call-outcome flag) get pinned to their own
+  // hidden [0, 1] axis instead of sharing the left/right scale — otherwise a flag plotted
+  // next to e.g. RSRP would flatline near whatever RSRP's min/max happens to be.
+  const binaryCols = useMemo(() => {
+    const cols = new Set<string>();
+    for (const s of ySeries) {
+      let sawValue = false;
+      let isBinary = true;
+      for (const row of chartData) {
+        const v = row[s.col];
+        if (typeof v !== "number" || !Number.isFinite(v)) continue;
+        sawValue = true;
+        if (v !== 0 && v !== 1) { isBinary = false; break; }
+      }
+      if (sawValue && isBinary) cols.add(s.col);
+    }
+    return cols;
+  }, [ySeries, chartData]);
+
+  // Columns rendered on their own hidden axis, spanning the full chart height —
+  // binary flags default to [0, 1]; templates can override domain/direction
+  // (e.g. a quality code 0–7 where 7 is worst, plotted low, via defaultAxisOverrides).
+  const dedicatedAxis = useMemo(() => {
+    const map = new Map<string, { id: string; domain: [number, number]; reversed: boolean }>();
+    for (const s of ySeries) {
+      const override = defaultAxisOverrides?.[s.col];
+      if (override) {
+        map.set(s.col, { id: `axis-${s.col}`, domain: override.domain, reversed: override.reversed ?? false });
+      } else if (binaryCols.has(s.col)) {
+        map.set(s.col, { id: "flag", domain: [0, 1], reversed: false });
+      }
+    }
+    return map;
+  }, [ySeries, defaultAxisOverrides, binaryCols]);
+  const dedicatedAxes = useMemo(() => {
+    const seen = new Map<string, { id: string; domain: [number, number]; reversed: boolean }>();
+    for (const cfg of dedicatedAxis.values()) if (!seen.has(cfg.id)) seen.set(cfg.id, cfg);
+    return Array.from(seen.values());
+  }, [dedicatedAxis]);
+
+  const hasRight  = useMemo(
+    () => ySeries.some((s) => s.side === "right" && !dedicatedAxis.has(s.col)),
+    [ySeries, dedicatedAxis],
+  );
+  const leftLabel = useMemo(
+    () => ySeries.filter((s) => s.side === "left" && !dedicatedAxis.has(s.col)).map((s) => s.col).join(", ").slice(0, 24),
+    [ySeries, dedicatedAxis],
+  );
+  const rightLabel = useMemo(
+    () => ySeries.filter((s) => s.side === "right" && !dedicatedAxis.has(s.col)).map((s) => s.col).join(", ").slice(0, 24),
+    [ySeries, dedicatedAxis],
+  );
+
+  // Round, evenly-spaced ticks for the main left/right axes (excludes dedicated-axis columns).
+  const axisTicks = useCallback(
+    (side: "left" | "right"): { domain: [number, number]; ticks: number[] } | undefined => {
+      const cols = ySeries.filter((s) => s.side === side && !dedicatedAxis.has(s.col)).map((s) => s.col);
+      if (cols.length === 0) return undefined;
+      let min = Infinity;
+      let max = -Infinity;
+      for (const row of chartData) {
+        for (const col of cols) {
+          const v = row[col];
+          if (typeof v === "number" && Number.isFinite(v)) {
+            if (v < min) min = v;
+            if (v > max) max = v;
+          }
+        }
+      }
+      if (!Number.isFinite(min) || !Number.isFinite(max)) return undefined;
+      const ticks = niceTicks(min, max);
+      if (ticks.length === 0) return undefined;
+      return { domain: [ticks[0], ticks[ticks.length - 1]], ticks };
+    },
+    [ySeries, chartData, dedicatedAxis],
+  );
+  const leftAxisTicks  = useMemo(() => axisTicks("left"), [axisTicks]);
+  const rightAxisTicks = useMemo(() => axisTicks("right"), [axisTicks]);
 
   const scatterData = useMemo(() => {
     const y0 = ySeries[0];
@@ -726,15 +817,18 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
 
   const renderSeries = useCallback(
     (s: YSeries) => {
+      const dedicated = dedicatedAxis.get(s.col);
+      const axisId = dedicated ? dedicated.id : s.side;
+      const name = `${s.col} (${dedicated ? `${dedicated.domain[0]}-${dedicated.domain[1]}` : s.side === "left" ? "L" : "R"})`;
       if (chartType === "bar")
         return (
           <Bar
             key={s.col}
             dataKey={s.col}
-            yAxisId={s.side}
+            yAxisId={axisId}
             stroke={s.color}
             fill={s.color}
-            name={`${s.col} (${s.side === "left" ? "L" : "R"})`}
+            name={name}
             radius={[3, 3, 0, 0]}
             maxBarSize={36}
             fillOpacity={DEFAULTS.barFillOpacity}
@@ -745,10 +839,10 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
           <Area
             key={s.col}
             dataKey={s.col}
-            yAxisId={s.side}
+            yAxisId={axisId}
             stroke={s.color}
             fill={s.color}
-            name={`${s.col} (${s.side === "left" ? "L" : "R"})`}
+            name={name}
             type="monotone"
             dot={false}
             strokeWidth={1.8}
@@ -759,10 +853,10 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
         <Line
           key={s.col}
           dataKey={s.col}
-          yAxisId={s.side}
+          yAxisId={axisId}
           stroke={s.color}
           fill={s.color}
-          name={`${s.col} (${s.side === "left" ? "L" : "R"})`}
+          name={name}
           type="monotone"
           dot={false}
           strokeWidth={2}
@@ -770,7 +864,7 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
         />
       );
     },
-    [chartType],
+    [chartType, dedicatedAxis],
   );
 
   // ── Chart render ────────────────────────────────────────────────────────
@@ -893,20 +987,25 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
             <Label value={xCol} offset={xIsNumeric ? -12 : -75} position="insideBottom" fontSize={10} fill="hsl(var(--muted-foreground))" />
           </XAxis>
           <YAxis yAxisId="left" orientation="left" {...AXIS_STYLE} width={56}
+            domain={leftAxisTicks?.domain} ticks={leftAxisTicks?.ticks}
             label={leftLabel ? { value: leftLabel, angle: -90, position: "insideLeft", fontSize: 9, fill: "hsl(var(--muted-foreground))", dx: -4 } : undefined}
           />
           {hasRight && (
             <YAxis yAxisId="right" orientation="right" {...AXIS_STYLE} width={60}
+              domain={rightAxisTicks?.domain} ticks={rightAxisTicks?.ticks}
               label={{ value: rightLabel, angle: 90, position: "insideRight", fontSize: 9, fill: "hsl(var(--muted-foreground))", dx: 4 }}
             />
           )}
+          {dedicatedAxes.map((ax) => (
+            <YAxis key={ax.id} yAxisId={ax.id} domain={ax.domain} reversed={ax.reversed} hide />
+          ))}
           <Tooltip content={<CustomTooltip />} />
           <Legend formatter={fmtLegend} wrapperStyle={{ paddingTop: 8 }} />
           {ySeries.map(renderSeries)}
         </ComposedChart>
       </ResponsiveContainer>
     );
-  }, [chartType, pieValue, pieData, ySeries, xCol, scatterData, chartData, hasRight, leftLabel, rightLabel, renderSeries, yIsCategorical, pivotData, pivotSeries, groupedBarData]);
+  }, [chartType, pieValue, pieData, ySeries, xCol, scatterData, chartData, hasRight, dedicatedAxes, leftAxisTicks, rightAxisTicks, leftLabel, rightLabel, renderSeries, yIsCategorical, pivotData, pivotSeries, groupedBarData]);
 
   // ─────────────────────────────────────────────────────────────────────────
 

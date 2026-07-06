@@ -472,10 +472,11 @@ export interface LteScannerStat {
 
 export async function fetchLteScannerRaw(
   database: string,
-  session_id: string,
-  top_only: boolean = false
-): Promise<{ aSide: any[]; bSide: any[] }> {
-  const params = new URLSearchParams({ database, session_id, top_only: String(top_only) });
+  cgi: string,
+  start: string,
+  end: string
+): Promise<any[]> {
+  const params = new URLSearchParams({ database, cgi, start, end });
   return requestJson(`/api/lte_scanner_raw?${params.toString()}`);
 }
 
@@ -495,6 +496,22 @@ export async function fetchGsmScannerRaw(
 ): Promise<any[]> {
   const params = new URLSearchParams({ database, cgi, start, end });
   return requestJson(`/api/gsm_scanner_raw?${params.toString()}`);
+}
+
+export async function fetchGsmScannerBest(
+  database: string,
+  session_id: string
+): Promise<any[]> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/gsm_scanner_best?${params.toString()}`);
+}
+
+export async function fetchLteScannerBest(
+  database: string,
+  session_id: string
+): Promise<any[]> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/lte_scanner_best?${params.toString()}`);
 }
 
 export async function fetchLteMeasurementComparison(
@@ -555,6 +572,81 @@ export async function fetchGsmContextSignalBSide(
 ): Promise<{ signal: any[] }> {
   const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
   return requestJson(`/api/gsm_context_signal_b_side?${params.toString()}`);
+}
+
+export interface HandoverInfoRow {
+  MsgId: number;
+  SessionId: string | null;
+  MsgTime: string | null;
+  HoStatus: string | null;
+  hoDuration: number | null;
+  Latitude: number | null;
+  Longitude: number | null;
+}
+
+export async function fetchHandoverInfo(
+  database: string,
+  session_id: string
+): Promise<{ handoverInfo: HandoverInfoRow[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/handover_info?${params.toString()}`);
+}
+
+export interface TechnologyTimelineRow {
+  MsgTime: string | null;
+  PrevTechnology: string | null;
+  CurrTechnology: string | null;
+  Duration: number | null;
+  Band: string | null;
+  LTEDLCarriers: number | null;
+  LTEULCarriers: number | null;
+  NR5GDLCarriers: number | null;
+  NR5GULCarriers: number | null;
+  Latitude: number | null;
+  Longitude: number | null;
+}
+
+export async function fetchTechnologyTimeline(
+  database: string,
+  session_id: string
+): Promise<{ technologyTimeline: TechnologyTimelineRow[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/technology_timeline?${params.toString()}`);
+}
+
+export interface VoiceCodecRow {
+  MsgTime: string | null;
+  SessionId: string | null;
+  Direction: string | null; // "U" (uplink) or "D" (downlink)
+  Codec: number | null;
+  CodecName: string | null;
+  CodecRate: number | null;
+  Duration: number | null;
+}
+
+export async function fetchVoiceCodec(
+  database: string,
+  session_id: string
+): Promise<{ voiceCodec: VoiceCodecRow[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/voice_codec?${params.toString()}`);
+}
+
+export interface MarkerRow {
+  markerId: number;
+  SessionId: string | null;
+  MsgTime: string | null;
+  PosId: number | null;
+  NetworkId: number | null;
+  MarkerText: string | null;
+}
+
+export async function fetchMarkers(
+  database: string,
+  session_id: string
+): Promise<{ markers: MarkerRow[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/markers?${params.toString()}`);
 }
 
 export interface RunMapResponse {

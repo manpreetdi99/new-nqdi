@@ -260,7 +260,7 @@ export function useSignallingHighlights(rows: L3Row[]): HighlightResult[] {
 export const SEV_ROW_CLASS: Record<Severity, string> = {
   red: "border-l-2 border-destructive bg-destructive/5",
   orange: "border-l-2 border-warning bg-warning/5",
-  yellow: "border-l-2 border-amber-400 bg-amber-400/5",
+  yellow: "border-l-2 border-amber-400",
   green: "border-l-2 border-success bg-success/5",
   none: "border-l-2 border-transparent",
 };
@@ -276,7 +276,7 @@ export const SEV_BADGE_CLASS: Record<Severity, string> = {
 export const SEV_LABEL: Record<Severity, string> = {
   red: "DROP/FAIL",
   orange: "ABNORMAL",
-  yellow: "WATCH",
+  yellow: "",
   green: "OK",
   none: "",
 };
