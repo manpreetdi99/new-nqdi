@@ -23,8 +23,9 @@ It allows a user to:
 ### Α. Για 1 Χρήστη Τοπικά (Στον ίδιο υπολογιστή - Single Local User)
 Ιδανικό για ανάπτυξη (development). Το frontend και το backend βρίσκονται στο ίδιο PC.
 
-1. **Backend (Python):** Στο τερματικό τρέξτε τον server για τοπικό reload.
+1. **Backend (Python):** Ενεργοποιήστε το virtual environment και τρέξτε τον server για τοπικό reload. (Αν δεν έχετε δημιουργήσει ακόμα το `.venv`, δείτε την ενότητα **4.1 Backend setup**.)
    ```bash
+   .venv\Scripts\activate
    cd backend
    uvicorn app:app --reload --port 8000
    ```
@@ -38,8 +39,9 @@ It allows a user to:
 Ιδανικό για testing από άλλα κινητά ή PC του σπιτιού/γραφείου σας, χωρίς να περνάτε από cloud tunnels που καθυστερούν την εφαρμογή.
 
 1. **Βρείτε την τοπική TCP/IPv4 IP σας:** Ανοίξτε το τερματικό και πληκτρολογήστε `ipconfig` (π.χ. `192.168.x.x`).
-2. **Backend (Python):** Τρέξτε τον server, ώστε να ακούει σε όλες τις διευθύνσεις (`0.0.0.0`) και να δέχεται πολλαπλά αιτήματα ταυτόχρονα με 4 workers (ταχύτητα).
+2. **Backend (Python):** Ενεργοποιήστε το virtual environment και τρέξτε τον server, ώστε να ακούει σε όλες τις διευθύνσεις (`0.0.0.0`) και να δέχεται πολλαπλά αιτήματα ταυτόχρονα με 4 workers (ταχύτητα).
    ```bash
+   .venv\Scripts\activate
    cd backend
    uvicorn app:app --host 0.0.0.0 --port 8000 --workers 4
    ```
@@ -142,16 +144,37 @@ performance-insights - Copy (2)/
 
 ## 4.1 Backend setup
 
-Go to the backend folder:
+Create a Python virtual environment in the **project root** (one-time setup):
 
 ```bash
-cd backend
+python -m venv .venv
+```
+
+> The `.venv/` folder is **git-ignored** (see `.gitignore`) — everything inside it stays local. Each developer creates their own venv; never commit it.
+
+Activate it:
+
+```bash
+# Windows (cmd)
+.venv\Scripts\activate
+
+# Windows (PowerShell)
+.venv\Scripts\Activate.ps1
+
+# Linux / macOS
+source .venv/bin/activate
 ```
 
 Install dependencies:
 
 ```bash
-pip install -r requirements.txt
+pip install -r backend/requirements.txt
+```
+
+Go to the backend folder:
+
+```bash
+cd backend
 ```
 
 Run the API server:

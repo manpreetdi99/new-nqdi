@@ -2,6 +2,11 @@
 __pycache__/
 *.py[cod]
 
+# Python virtual environments (ignore everything inside)
+.venv/
+venv/
+env/
+
 # Logs
 logs
 *.log
