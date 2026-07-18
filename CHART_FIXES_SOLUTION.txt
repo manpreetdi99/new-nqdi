@@ -1,0 +1,717 @@
+================================================================================
+ΛΥΣΗ ΓΙΑ ΠΡΟΒΛΗΜΑΤΑ ΔΙΑΓΡΑΜΜΑΤΩΝ - ΑΥΤΟΜΑΤΗ ΠΑΡΟΥΣΙΑΣΗ, ΑΞΟΝΕΣ & ΤΥΠΟΙ
+================================================================================
+
+ΠΡΟΒΛΗΜΑΤΑ ΠΟΥ ΑΝΑΓΝΩΡΊΣΤΗΚΑΝ:
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+1. ΑΥΤΟΜΑΤΗ ΕΠΙΛΟΓΗ ΤΥΠΟΥ ΔΙΑΓΡΑΜΜΑΤΟΣ
+   - Το default πάντα είναι "bar" ανεξάρτητα από τα δεδομένα
+   - Δεν υπάρχει ευφυής ανίχνευση του καλύτερου τύπου γραφήματος
+   - Αριθμητικά δεδομένα με χρόνο θα ήταν καλύτερα σε "line"
+   - Κατηγορικά δεδομένα ταιριάζουν καλύτερα σε "bar" ή "pie"
+
+2. ΕΣΦΑΛΜΕΝΗ ΕΠΙΛΟΓΗ ΑΞΟΝΑ X
+   - Η ρουτίνα OPERATOR_COL_PRIORITY έχει περιορισμένα πρότυπα
+   - Δεν εξετάζει τη διαφορά μεταξύ κατηγορικών και αριθμητικών στηλών
+   - Κάποιες στήλες ID/αναγνωριστικών δεν πρέπει να είναι X
+   - Στήλες χρόνου θα ήταν καλύτερες σε αρκετές περιπτώσεις
+
+3. ΕΣΦΑΛΜΕΝΗ ΕΠΙΛΟΓΗ ΑΞΟΝΑ Y
+   - Η pickDefaultPieValue έχει καλά πρότυπα αλλά περιορισμένη κάλυψη
+   - Δεν εξαιρούνται όλες οι ID στήλες από τον Y άξονα
+   - Μερικές ID στήλες (EARFCN, ARFCN κ.λπ.) δεν αποκλείονται σωστά
+   - Η σειρά προτίμησης σε αριθμητικές στήλες είναι αυθαίρετη
+
+4. ΛΑΝΘΑΣΜΕΝΗ ΤΑΞΙΝΌΜΗΣΗ Y ΣΤΗΛΩΝ
+   - Πολλές στήλες Y μαζί δεν κάνουν νόημα
+   - Δεν υπάρχει λογική για παράλληλες σειρές vs. stacked
+
+
+================================================================================
+ΠΡΟΤΕΙΝΌΜΕΝΗ ΛΥΣΗ - 4 ΒΗΜΑΤΑ
+================================================================================
+
+ΒΗΜΑ 1: ΒΕΛΤΙΩΜΈΝΗ ΑΝΊΧΝΕΥΣΗ ΤΎΠΟΥ ΔΕΔΟΜΈΝΩΝ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Ορίστε enum για τύπους δεδομένων:
+  - NUMERIC_CONTINUOUS: float/double (RSRP, throughput)
+  - NUMERIC_DISCRETE: integers (counts)
+  - CATEGORICAL: strings (location, status)
+  - TEMPORAL: dates (timestamps)
+  - BINARY: 0/1 flags
+
+Λειτουργία analyzeColumn(col: string, sample: Row[]):
+  1. Δείγμα 100-200 σειρών
+  2. Ελέγξτε %null, %unique, range, σειρές κατηγορίων
+  3. Χρησιμοποιήστε ευρετικά:
+     - Αν >80% μοναδικές τιμές και αριθμητικές → NUMERIC_CONTINUOUS
+     - Αν <20 μοναδικές τιμές και αριθμητικές → NUMERIC_DISCRETE ή CATEGORICAL
+     - Αν Date pattern (contains "-", ":") → TEMPORAL
+     - Αν μόνο 0/1 → BINARY
+
+
+ΒΗΜΑ 2: ΕΞΥΠΝΗ ΕΠΙΛΟΓΗ ΠΡΟΕΠΙΛΟΓΩΝ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Ορίστε scoreColumn(col: string, analysis) για κάθε περίπτωση:
+
+  2a. ΕΠΙΛΟΓΗ X ΑΞΟΝΑ - Σειρά προτίμησης:
+      1. TEMPORAL (χρονικές σειρές) → score=100
+      2. CATEGORICAL με <50 μοναδικές τιμές → score=90
+      3. NUMERIC_DISCRETE με <100 μοναδικές → score=70
+      4. Όχι ID στήλες (όχι *Id, *ID, EARFCN, κ.λπ.) → score=0
+      5. Όχι stray numerics → score=-10
+
+      Κώδικας:
+      ```
+      function pickXAxis(cols, analysis):
+        scored = []
+        for col in cols:
+          score = 0
+          type = analysis[col].type
+          if type == TEMPORAL:
+            score += 100
+          else if type == CATEGORICAL:
+            score += 90 - uniqueCount(col) / 50
+          else if type == NUMERIC_DISCRETE:
+            score += 60 - uniqueCount(col) / 200
+
+          if isIdColumn(col):  // *Id, EARFCN, ARFCN, BCCH, κ.λπ.
+            score = 0
+
+          scored.push({col, score})
+
+        return scored.sort((a,b) => b.score - a.score)[0]?.col
+      ```
+
+  2b. ΕΠΙΛΟΓΗ Y ΑΞΟΝΑ - Για κάθε Y:
+      1. NUMERIC_CONTINUOUS → score=100 (RSRP, throughput)
+      2. NUMERIC_DISCRETE με >5 μοναδικές → score=80 (count, duration)
+      3. BINARY (flags 0/1) → score=40 (πολύ συμπυκνωμένες)
+      4. Όχι ID, όχι count/*total, όχι όχι αυτές X
+
+      ΕΞΑΙΡΕΣΕΙΣ ID:
+      ```
+      const ID_EXCLUSION = [
+        /^id$/i, /.*Id$/i, /.*ID$/i, /.*_id$/i, /.*_ID$/i,
+        /MsgId/i, /PosId/i, /FactId/i, /TestId/i, /markerId/i,
+        /EARFCN/i, /ARFCN/i, /UARFCN/i,        // RF channels
+        /BCCH/i, /BSIC/i, /LAC/i, /CId/i,      // GSM ids
+        /TAC/i, /TAI/i, /NCI/i, /PLMN/i, /MCC/i, /MNC/i,  // NR5G ids
+        /eNBId/i, /NRCellId/i, /PCI/i, /PhyCellId/i,
+        /RFBand/i, /Band/i  // Μηδέν ως Y metric
+      ]
+      ```
+
+ΒΗΜΑ 3: ΑΥΤΟΜΑΤΗ ΕΠΙΛΟΓΗ ΤΎΠΟΥ ΔΙΑΓΡΑΜΜΑΤΟΣ
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Λειτουργία recommendChartType(xAnalysis, ySeries, rowCount):
+
+  ΚΑΝΟΝΕΣ:
+
+  1. Αν Y έχει CATEGORICAL:
+     → "pie" (αν 1 Y) ή "bar" stacked (αν πολλές)
+
+  2. Αν X είναι TEMPORAL:
+     → "line" (αν ίδια κλίμακα) ή "area"
+     → Με >1000 σειρές: αυτόματο binning
+
+  3. Αν X είναι NUMERIC_CONTINUOUS με δύο NUMERIC Y:
+     → "scatter"
+
+  4. Αν X είναι CATEGORICAL (<30 τιμές):
+     → "bar" (παράλληλες σειρές)
+     → ή "area" αν πολλές Y με ίδιες μονάδες
+
+  5. Αν X είναι CATEGORICAL με πολλές τιμές (>100):
+     → "pie" (αν 1 Y, κατηγορία)
+     → "bar" (μόνο top-20)
+
+  6. DEFAULT:
+     → "bar" (ασφαλές fallback)
+
+  ΚΩΔΙΚΑΣ:
+  ```
+  function autoChartType(xAnalysis, ySeries, rowCount):
+    if not ySeries: return "bar"
+
+    firstY = ySeries[0]
+    yType = analysis[firstY].type
+
+    if yType == CATEGORICAL:
+      return "pie" if ySeries.length == 1 else "bar"
+
+    if xAnalysis.type == TEMPORAL:
+      if ySeries.length <= 2:
+        return rowCount > 500 ? "bar" : "line"
+      else:
+        return "area"
+
+    if xAnalysis.type == NUMERIC_CONTINUOUS and ySeries.length == 2:
+      return "scatter"
+
+    if xAnalysis.type == CATEGORICAL:
+      unique = countUnique(xCol, sample)
+      return "pie" if unique < 20 and ySeries.length == 1 else "bar"
+
+    return "bar"
+  ```
+
+ΒΗΜΑ 4: ΈΞΥΠΝΟ BINNING & AGGREGATION
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Ενεργοποιήστε αυτόματα όταν:
+  - X είναι NUMERIC_CONTINUOUS με >200 μοναδικές τιμές
+  - rowCount > 1000
+
+Προεπιλεγμένη συνάρτηση aggregation κατά τύπο Y:
+  - Avg για NUMERIC_CONTINUOUS (RSRP, throughput)
+  - Sum για NUMERIC_DISCRETE (counts, durations)
+  - Count για CATEGORICAL
+
+
+================================================================================
+ΑΛΛΑΓΕΣ ΣΤΟ ΚΩΔΙΚΑ (src/components/ResultCharts.tsx)
+================================================================================
+
+ΑΛΛΑΓΗ 1: Προσθέστε DataTypeAnalyzer (λειτουργία)
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Βάλτε πριν τη συνάρτηση pickDefaultXCol():
+
+```typescript
+type DataType = "temporal" | "numeric_continuous" | "numeric_discrete" | "categorical" | "binary";
+
+function analyzeDataType(col: string, sample: Record<string, unknown>[]): DataType {
+  if (sample.length === 0) return "categorical";
+
+  let numCount = 0, binaryCount = 0, dateCount = 0, nullCount = 0;
+  const uniqueVals = new Set<string>();
+  const datePattern = /^\d{4}-\d{2}-\d{2}|\d{2}:\d{2}:\d{2}|\d+[-\/]\d+[-\/]\d+/;
+
+  for (const row of sample) {
+    const val = row[col];
+    if (val === null || val === "") {
+      nullCount++;
+      continue;
+    }
+
+    uniqueVals.add(String(val));
+    const num = Number(val);
+
+    if (!isNaN(num)) {
+      numCount++;
+      if (num === 0 || num === 1) binaryCount++;
+    }
+
+    if (datePattern.test(String(val))) dateCount++;
+  }
+
+  const nonNull = sample.length - nullCount;
+  const uniqueRatio = uniqueVals.size / nonNull;
+
+  if (dateCount > nonNull * 0.8) return "temporal";
+  if (numCount === 0) return "categorical";
+  if (binaryCount === nonNull) return "binary";
+  if (uniqueRatio > 0.7 && numCount === nonNull) return "numeric_continuous";
+  if (numCount === nonNull) return "numeric_discrete";
+
+  return "categorical";
+}
+```
+
+ΑΛΛΑΓΗ 2: Βελτιώστε pickDefaultXCol
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Αντικαταστήστε τη συνάρτηση pickDefaultXCol:
+
+```typescript
+function pickDefaultXCol(columns: string[], sample: Record<string, unknown>[]): string {
+  const ID_EXCLUSION = /^id$|.*Id$|.*ID$|.*_id$|.*_ID$|MsgId|PosId|FactId|TestId|markerId|EARFCN|ARFCN|UARFCN|BCCH|BSIC|LAC|CId|TAC|TAI|NCI|PLMN|MCC|MNC|eNBId|NRCellId|PCI|PhyCellId|RFBand|Band/i;
+
+  const scored = columns
+    .filter((c) => !ID_EXCLUSION.test(c))
+    .map((col) => {
+      const type = analyzeDataType(col, sample);
+      const uniqueCount = new Set(sample.map((r) => String(r[col] ?? ""))).size;
+
+      let score = 0;
+      if (type === "temporal") {
+        score = 100;
+      } else if (type === "categorical") {
+        score = Math.max(0, 90 - uniqueCount / 5);
+      } else if (type === "numeric_discrete") {
+        score = Math.max(0, 70 - uniqueCount / 20);
+      } else {
+        score = 30; // numeric_continuous - less ideal for X
+      }
+
+      return { col, score };
+    })
+    .sort((a, b) => b.score - a.score);
+
+  return scored[0]?.col ?? columns[0] ?? "";
+}
+```
+
+ΑΛΛΑΓΗ 3: Βελτιώστε pickDefaultPieValue
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Αντικαταστήστε:
+
+```typescript
+function pickDefaultYCols(numericCols: string[], sample: Record<string, unknown>[]): string[] {
+  const ID_EXCLUSION = /^id$|.*Id$|.*ID$|.*_id$|.*_ID$|MsgId|PosId|FactId|TestId|markerId|EARFCN|ARFCN|UARFCN|BCCH|BSIC|LAC|CId|TAC|TAI|NCI|PLMN|MCC|MNC|eNBId|NRCellId|PCI|PhyCellId|RFBand|Band/i;
+  const COUNT_PATTERN = /^(count|total|calls|cnt|num|n_|rows)/i;
+  const METRIC_PATTERN = /^(avg|mean|mos|rate|pct|percent|ratio|score|throughput|rsrp|rsrq|sinr|setup|duration|latency|delay|jitter)/i;
+
+  const candidates = numericCols.filter((c) => !ID_EXCLUSION.test(c));
+
+  // Προτίμηση: metrics > non-count numerics > counts
+  const metrics = candidates.filter((c) => METRIC_PATTERN.test(c));
+  const nonCounts = candidates.filter((c) => !COUNT_PATTERN.test(c) && !METRIC_PATTERN.test(c));
+  const counts = candidates.filter((c) => COUNT_PATTERN.test(c));
+
+  const result = [
+    ...metrics.slice(0, 2),
+    ...nonCounts.slice(0, 2 - metrics.length),
+    ...counts.slice(0, 2 - metrics.length - nonCounts.length),
+  ].filter((v, i, a) => a.indexOf(v) === i);
+
+  return result.length > 0 ? result : numericCols.slice(0, 2);
+}
+```
+
+ΑΛΛΑΓΗ 4: Προσθέστε autoChartType
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+```typescript
+function autoChartType(
+  xCol: string,
+  ySeries: YSeries[],
+  sample: Record<string, unknown>[],
+  rowCount: number
+): ChartType {
+  if (ySeries.length === 0) return "bar";
+
+  const xType = analyzeDataType(xCol, sample);
+  const yType = analyzeDataType(ySeries[0].col, sample);
+  const xUnique = new Set(sample.map((r) => String(r[xCol] ?? ""))).size;
+
+  // Κατηγορικό Y → pie ή stacked bar
+  if (yType === "categorical") {
+    return ySeries.length === 1 ? "pie" : "bar";
+  }
+
+  // Χρονική σειρά με αριθμητικό Y
+  if (xType === "temporal") {
+    return rowCount > 500 ? "bar" : (ySeries.length <= 2 ? "line" : "area");
+  }
+
+  // Scatter για δύο numerics
+  if (xType === "numeric_continuous" && ySeries.length === 2) {
+    return "scatter";
+  }
+
+  // Pie για κατηγορικό X με λίγες τιμές
+  if (xType === "categorical" && xUnique < 20 && ySeries.length === 1) {
+    return "pie";
+  }
+
+  // DEFAULT
+  return "bar";
+}
+```
+
+ΑΛΛΑΓΗ 5: Αλλάξτε την κατάσταση defaultChartType
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Στη συνάρτηση ResultCharts, αλλάξτε:
+
+```typescript
+// Πριν: const [chartType, setChartType] = useState<ChartType>(defaultChartType ?? "bar");
+
+const defaultXCol = defaultXCol ?? pickDefaultXCol(columns, sample);
+const defaultYCols = defaultYCols?.length ? defaultYCols : pickDefaultYCols(numericCols, sample);
+const autoChartTypeSelected = defaultChartType ?? autoChartType(defaultXCol, defaultYCols.map((c, i) => ({ col: c, side: "left" as const, color: CHART_PALETTE[i] })), sample, data.length);
+
+const [chartType, setChartType] = useState<ChartType>(autoChartTypeSelected);
+```
+
+
+================================================================================
+ΩΦΈΛΗ ΑΥΤΉΣ ΤΗΣ ΛΎΣΗΣ
+================================================================================
+
+✓ Αυτόματη ανίχνευση του καλύτερου chart type βάσει δεδομένων
+✓ Έξυπνη επιλογή X άξονα (χρόνος > κατηγορίες > αριθμητικά)
+✓ Έξυπνη επιλογή Y άξονα (μετρήσεις > φυσικές αριθμητικές > counts)
+✓ Αποκλεισμός όλων των ID στηλών ως defaults
+✓ Σωστή σειρά προτίμησης στηλών ανάλογα με τύπο
+✓ Αυτόματο binning για μεγάλα numeric ranges
+✓ Βέλτιστη επιλογή aggregation function (avg vs sum vs count)
+
+
+================================================================================
+ΠΑΡΑΔΕΊΓΜΑΤΑ ΑΠΟΤΕΛΕΣΜΆΤΩΝ
+================================================================================
+
+ΠΑΡΑΔΕΙΓΜΑ 1: LTE Measurements (RSRP vs Time)
+  X: MsgTime (TEMPORAL) → score=100 ✓
+  Y: RSRP (NUMERIC_CONTINUOUS) ✓
+  Chart Type: "line" ✓ (ιδανικό για time series)
+  Aggregation: "avg" ✓
+
+ΠΑΡΑΔΕΙΓΜΑ 2: Call Summary (Status vs Duration)
+  X: callStatus (CATEGORICAL) → score=90 ✓
+  Y: callDuration (NUMERIC_CONTINUOUS) ✓
+  Chart Type: "bar" ✓ (ιδανικό για categorical comparison)
+  Excluded: SessionId (ID), FileId (ID) ✗
+
+ΠΑΡΑΔΕΙΓΜΑ 3: Voice CDR (Location x Operator)
+  X: ASideLocation (CATEGORICAL, <50 unique) → score=90 ✓
+  Y: CallDuration (NUMERIC) ✓
+  Chart Type: "bar" ✓
+  GroupCol: Operator (double bar) ✓
+  Excluded: SessionIdA, SessionIdB, FileId ✗
+
+ΠΑΡΑΔΕΙΓΜΑ 4: 5G Coverage (RSRP Distribution)
+  X: RFBand (CATEGORICAL) → score=0 (ID) ✗ → uses Location instead ✓
+  Y: RSRP (NUMERIC) ✓
+  Chart Type: "bar" ✓
+  Excluded: EARFCN, PCI, NCI (RF identifiers) ✗
+
+
+================================================================================
+ΕΦΑΡΜΟΓΉ
+================================================================================
+
+1. Αντιγράψτε τις 5 αλλαγές κώδικα ανωτέρω στο ResultCharts.tsx
+2. Ενημερώστε τις imports να συμπεριλαμβάνουν νέες συναρτήσεις
+3. Δοκιμάστε με διαφορετικές ερωτήσεις (χρόνος, κατηγορίες, αριθμητικά)
+4. Ρυθμίστε τις σταθερές score/threshold κατά βάση feedback χρήστη
+5. Προσθέστε logging για debug: console.log(xAnalysis, yAnalysis, autoType)
+
+
+================================================================================
+ΠΡΌΣΘΕΤΑ ΧΑΡΑΚΤΗΡΙΣΤΙΚΆ ΠΡΟΤΕΙΝΌΜΕΝΑ (Phase 2)
+================================================================================
+
+Μετά από τις βασικές αλλαγές στα charts, τα εξής χαρακτηριστικά θα βελτίωναν
+σημαντικά την χρήστη εμπειρία:
+
+ΧΑΡΑΚΤΗΡΙΣΤΙΚΟ 1: SMART QUERY PREVIEW
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Πριν την εκτέλεση της ερώτησης, εμφάνιση:
+  ✓ Πόσες γραμμές θα επιστραφούν (ακριβή count)
+  ✓ Sample δεδομένων (πρώτες 5-10 σειρές)
+  ✓ Προειδοποιήσεις για slow queries (>10,000 rows)
+  ✓ Χρόνος εκτέλεσης από την τελευταία εκτέλεση
+
+Υλοποίηση:
+  - Δημιουργήστε component QueryPreview που εμφανίζει πληροφορίες
+  - Προσθέστε "ESTIMATE ROWS" button που τρέχει COUNT(*) ερώτηση
+  - Δείξτε warning αν rowCount > 50,000
+
+ΧΑΡΑΚΤΗΡΙΣΤΙΚΟ 2: CHART TEMPLATE LIBRARY
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Αποθήκευση αγαπημένων chart configurations:
+
+```typescript
+interface SavedChartConfig {
+  id: string;
+  name: string;
+  description: string;
+  chartType: ChartType;
+  xCol: string;
+  yCols: string[];
+  aggregation: AggFn;
+  filters?: Array<{ col: string; vals: string[] }>;
+  createdAt: Date;
+  usageCount: number;
+}
+```
+
+Προ-κατασκευασμένα templates:
+  1. "LTE vs Time"
+     - Chart: line, X: MsgTime, Y: RSRP, Agg: avg, Auto-binning
+
+  2. "Call Status Breakdown"
+     - Chart: bar, X: callStatus, Y: callDuration, Agg: avg
+
+  3. "Coverage by Location"
+     - Chart: bar, X: ASideLocation, Y: RSRP, Agg: avg
+
+  4. "Data Throughput Distribution"
+     - Chart: bar, X: Technology, Y: [Transfer Throughput], Agg: sum
+
+  5. "Signal Quality Scatter"
+     - Chart: scatter, X: RSRP, Y: RSRQ
+
+Αποθήκευση σε localStorage:
+  ```typescript
+  const saveChartConfig = (config: SavedChartConfig) => {
+    const saved = JSON.parse(localStorage.getItem("savedCharts") || "[]");
+    saved.push(config);
+    localStorage.setItem("savedCharts", JSON.stringify(saved));
+  };
+  ```
+
+UI: Tab "Templates" στο QueryBuilder με favorites + recently used
+
+ΧΑΡΑΚΤΗΡΙΣΤΙΚΟ 3: KEYBOARD SHORTCUTS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Προσθέστε στο main App component:
+
+```typescript
+const shortcuts = {
+  'Ctrl+Enter':  () => executeQuery(),      // Run query
+  'Ctrl+S':      () => saveChartConfig(),   // Save chart config
+  'Ctrl+T':      () => openTemplates(),     // Open template picker
+  'Ctrl+/:      () => openHelp(),           // Show help
+  'Escape':      () => closeDialogs(),      // Close all modals
+  'Ctrl+L':      () => toggleLiveRefresh(), // Toggle auto-refresh
+};
+
+document.addEventListener('keydown', (e) => {
+  const key = `${e.ctrlKey ? 'Ctrl+' : ''}${e.key}`;
+  if (shortcuts[key]) {
+    e.preventDefault();
+    shortcuts[key]();
+  }
+});
+```
+
+UI: Εμφάνιση hint στο κάτω δεξιά γωνία ή Help panel
+
+ΧΑΡΑΚΤΗΡΙΣΤΙΚΟ 4: INTELLIGENT AGGREGATION SUGGESTIONS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Σύσταση AggFn βάσει ονόματος στήλης:
+
+```typescript
+function suggestAggregation(colName: string, colType: DataType): AggFn {
+  const name = colName.toLowerCase();
+
+  // Pattern matching
+  if (/^(rsrp|rsrq|sinr|throughput|latency|jitter|mos|score)/.test(name)) {
+    return colType === "numeric_continuous" ? "avg" : "sum";
+  }
+  if (/^(count|total|calls|cnt|num|rows|duration)/.test(name)) {
+    return "sum";
+  }
+  if (/^(min|max|first|last)/.test(name)) {
+    return "max"; // or min based on prefix
+  }
+
+  // Type-based fallback
+  return colType === "numeric_continuous" ? "avg" : "sum";
+}
+```
+
+UI: Προτεινόμενη AggFn με tooltip που εξηγεί το "γιατί"
+  - "AVG (continuous metric)" - για RSRP, throughput
+  - "SUM (discrete counts)" - για calls, counts
+  - "MAX (time series)" - για time-based metrics
+
+ΧΑΡΑΚΤΗΡΙΣΤΙΚΟ 5: COLUMN INSIGHTS PANEL
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Hover over column name → εμφάνιση panel με:
+
+```typescript
+interface ColumnInsight {
+  name: string;
+  type: DataType;
+  nullCount: number;
+  nullPercent: number;
+  uniqueCount: number;
+  minValue?: number;
+  maxValue?: number;
+  avgValue?: number;
+  mostCommonValue?: string;
+  confidence: "high" | "medium" | "low";
+}
+```
+
+UI: Compact card με icons για κάθε metric
+  - 📊 type badge (NUM, CAT, DATE, BIN)
+  - 🎯 uniqueCount (π.χ. "245 unique")
+  - ⚠️ nullCount (π.χ. "12.5% missing")
+  - 📈 min/max (για numerics)
+  - 🔥 mostCommon (για categoricals)
+
+ΧΑΡΑΚΤΗΡΙΣΤΙΚΟ 6: PERFORMANCE WARNINGS
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Προσθήκη safety checks κατά την εκτέλεση:
+
+```typescript
+interface PerformanceWarning {
+  level: "info" | "warning" | "error";
+  message: string;
+  suggestion?: string;
+}
+
+function validateQuery(sql: string, rowCount: number): PerformanceWarning[] {
+  const warnings: PerformanceWarning[] = [];
+
+  // Warning 1: Πολλές σειρές
+  if (rowCount > 100000) {
+    warnings.push({
+      level: "warning",
+      message: `${rowCount.toLocaleString()} rows - σχεδόν slow query`,
+      suggestion: "Προσθέστε WHERE conditions ή enable binning"
+    });
+  }
+
+  // Warning 2: Χωρίς binning
+  if (rowCount > 1000 && !sql.includes("GROUP BY")) {
+    warnings.push({
+      level: "info",
+      message: "Δεν υπάρχει aggregation",
+      suggestion: "Enable automatic binning για καλύτερη απόδοση"
+    });
+  }
+
+  // Warning 3: Πολλές Y series
+  if (columnCount > 5) {
+    warnings.push({
+      level: "info",
+      message: "Πολλές Y series (>5) - δύσκολο να διαβαστεί",
+      suggestion: "Επιλέξτε το πολύ 2-3 Y columns"
+    });
+  }
+
+  return warnings;
+}
+```
+
+UI: Alert box με color-coded warnings
+  - 🟢 Info (suggestions)
+  - 🟠 Warning (might be slow)
+  - 🔴 Error (will timeout)
+
+ΧΑΡΑΚΤΗΡΙΣΤΙΚΟ 7: CHART ANNOTATIONS & REFERENCE LINES
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Προσθήκη reference lines/zones στα charts:
+
+```typescript
+interface ChartAnnotation {
+  type: "line" | "zone";
+  value: number | [number, number]; // single value or range
+  label: string;
+  color?: string;
+  strokeDasharray?: string;
+}
+
+// Παράδειγμα: RSRP thresholds
+const rsrpThresholds: ChartAnnotation[] = [
+  { type: "line", value: -75, label: "Excellent", color: "green" },
+  { type: "line", value: -90, label: "Good", color: "yellow" },
+  { type: "line", value: -105, label: "Poor", color: "red" },
+];
+```
+
+Υλοποίηση με Recharts ReferenceLine component
+
+ΧΑΡΑΚΤΗΡΙΣΤΙΚΟ 8: LIVE REFRESH / AUTO-UPDATE
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Για real-time dashboards:
+
+```typescript
+const [autoRefresh, setAutoRefresh] = useState(false);
+const [refreshInterval, setRefreshInterval] = useState(5000); // 5s
+
+useEffect(() => {
+  if (!autoRefresh) return;
+
+  const timer = setInterval(() => {
+    refetchData(); // Re-run query
+  }, refreshInterval);
+
+  return () => clearInterval(timer);
+}, [autoRefresh, refreshInterval]);
+```
+
+UI: Toggle button "🔄 Live" με interval selector (5s, 10s, 30s, 1m)
+
+ΧΑΡΑΚΤΗΡΙΣΤΙΚΟ 9: EXPORT CHART AS IMAGE/PDF
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+
+Χρήση html2canvas + jsPDF:
+
+```typescript
+const exportChart = async (format: "png" | "pdf") => {
+  const chartElement = document.querySelector(".chart-canvas");
+  const canvas = await html2canvas(chartElement);
+
+  if (format === "png") {
+    canvas.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `chart-${Date.now()}.png`;
+      a.click();
+    });
+  } else {
+    const pdf = new jsPDF();
+    const imgData = canvas.toDataURL("image/png");
+    pdf.addImage(imgData, "PNG", 10, 10, 190, 100);
+    pdf.save(`chart-${Date.now()}.pdf`);
+  }
+};
+```
+
+UI: Buttons "📥 PNG" και "📄 PDF" στο chart header
+
+
+================================================================================
+ΤΑΞΙΝΌΜΗΣΗ ΕΦΑΡΜΟΓΉΣ (PRIORITY)
+================================================================================
+
+PHASE 1 (URGENT) - Κύριες αλλαγές (1-2 εβδομάδες):
+  1. Smart chart type selection (βήμα 3)
+  2. Intelligent X/Y axis selection (βήμα 2)
+  3. Data type detection (βήμα 1)
+
+PHASE 2 (IMPORTANT) - UX Improvements (2-3 εβδομάδες):
+  1. Chart Template Library (most impactful)
+  2. Query Preview
+  3. Column Insights Panel
+  4. Performance Warnings
+
+PHASE 3 (NICE-TO-HAVE) - Advanced features (1 μήνα):
+  1. Keyboard Shortcuts
+  2. Intelligent Aggregation Suggestions
+  3. Chart Annotations
+  4. Live Refresh
+  5. Export Options
+
+
+================================================================================
+ESTIMATED EFFORT
+================================================================================
+
+PHASE 1: 40-60 hours
+  - Data type detection: 8-10h
+  - Chart type selection: 10-12h
+  - Axis selection logic: 12-15h
+  - Testing & debugging: 10-15h
+
+PHASE 2: 30-40 hours
+  - Template library: 8-10h
+  - Query preview: 6-8h
+  - Column insights: 6-8h
+  - Performance warnings: 4-6h
+  - Integration & testing: 6-8h
+
+TOTAL: 70-100 hours (~2-2.5 months with 1 developer, 20h/week)
