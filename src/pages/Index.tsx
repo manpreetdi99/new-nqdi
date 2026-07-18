@@ -1562,7 +1562,23 @@ const Index = () => {
 
           <TabsContent value="detail">
             {selectedCall ? (
-              <CallDetail call={selectedCall} database={selectedDatabase} onBack={() => setActiveTab("calls")} />
+              <CallDetail
+                call={selectedCall}
+                database={selectedDatabase}
+                onBack={() => setActiveTab("calls")}
+                onNavigateToCall={(sessionId) => {
+                  const record = callRecords.find((c) => String(c.callId) === String(sessionId));
+                  if (record) {
+                    setSelectedCall(record);
+                  } else {
+                    toast({
+                      title: "Η κλήση δεν βρέθηκε",
+                      description: `Το session ${sessionId} δεν υπάρχει στην τρέχουσα λίστα κλήσεων (φίλτρα collection/location).`,
+                      variant: "destructive",
+                    });
+                  }
+                }}
+              />
             ) : (
               <div className="flex flex-col items-center justify-center py-20 text-center">
                 <Phone className="h-10 w-10 text-muted-foreground mb-3" />

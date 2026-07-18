@@ -210,6 +210,19 @@ export async function fetchCallKpiTile(
   return requestJson(`/api/call_kpi_tile?${params.toString()}`);
 }
 
+export interface CallNeighbors {
+  prevSessionId: number | null;
+  nextSessionId: number | null;
+}
+
+export async function fetchCallNeighbors(
+  database: string,
+  session_id: string
+): Promise<CallNeighbors> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/call_neighbors?${params.toString()}`);
+}
+
 export async function fetchGsmValuesBSide(
   database: string,
   session_id: string

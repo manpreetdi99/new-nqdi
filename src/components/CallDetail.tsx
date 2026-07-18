@@ -2,7 +2,7 @@ import { useState, useEffect, useMemo } from "react";
 import { motion } from "framer-motion";
 import {
   ArrowLeft, Signal, Activity, Gauge, ArrowDown, ArrowUp,
-  Wifi, Timer, Save, Edit2, Flag
+  Wifi, Timer, Save, Edit2, Flag, ChevronLeft, ChevronRight
 } from "lucide-react";
 import L from "leaflet";
 import { MapContainer, TileLayer, CircleMarker, Marker, Polyline, useMap, Tooltip as LeafletTooltip } from "react-leaflet";
@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchTechnologyTimeline, fetchVoiceCodec, fetchMarkers, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchTechnologyTimeline, fetchVoiceCodec, fetchMarkers, fetchCallNeighbors, type CallNeighbors, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE } from "@/lib/chartStyles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -27,6 +27,8 @@ interface CallDetailProps {
   call: CallRecord;
   database: string;
   onBack: () => void;
+  /** Πλοήγηση σε άλλη κλήση (Prev/Next Call) — δίνει το SessionId της κλήσης-στόχου */
+  onNavigateToCall?: (sessionId: string) => void;
 }
 
 /**
@@ -118,7 +120,7 @@ function formatDateTime(iso: string): string {
   });
 }
 
-const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
+const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProps) => {
   // LTE/GSM radio measurement rows (A-side and B-side, for the "Radio Measurements" table + chart)
   const [radioValues, setRadioValues] = useState<any[]>([]);
   const [gsmValues, setGsmValues] = useState<any[]>([]);
@@ -169,6 +171,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
   const [voiceCodec, setVoiceCodec] = useState<VoiceCodecRow[]>([]);
   // User-placed annotations during the session, merged into the TraceLog panel as timeline events
   const [markers, setMarkers] = useState<MarkerRow[]>([]);
+  // Prev/Next call SessionIds για τα κουμπιά πλοήγησης (null → δεν υπάρχει → disabled)
+  const [neighbors, setNeighbors] = useState<CallNeighbors | null>(null);
 
   // True when the active table/chart should show GSM columns instead of LTE:
   // CS calls are always GSM; SRVCC calls let the user toggle between LTE and GSM.
@@ -404,6 +408,8 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
     }
     // Reset all UI selections and stale data back to defaults before loading the newly selected call
     if (call.callId && database) {
+      setCommentText(call.comment || "");
+      setIsEditingComment(false);
       setSelectedLteSide("A");
       setSrvccNetwork("LTE");
       setLteMeasComp(null);
@@ -421,6 +427,16 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
       loadRadio();
     }
   }, [database, call.callId, call.callMode]);
+
+  // Prev/Next call: ρωτάμε το backend ποιο SessionId είναι η προηγούμενη/επόμενη κλήση
+  // (στόχος ±2, σειριακός έλεγχος και του ±1) — null σημαίνει δεν υπάρχει → disabled κουμπί
+  useEffect(() => {
+    setNeighbors(null);
+    if (!call.callId || !database) return;
+    fetchCallNeighbors(database, String(call.callId))
+      .then(setNeighbors)
+      .catch(() => setNeighbors(null));
+  }, [database, call.callId]);
 
   // For LTE calls (A-side), fetch LTE scanner samples per contiguous serving-CGI segment so the
   // "LTE Scanner" chart line / "RSRP Scanner" column can cross-check the UE's own measurements
@@ -1205,6 +1221,37 @@ const CallDetail = ({ call, database, onBack }: CallDetailProps) => {
                 )}
               </div>
             )}
+          </div>
+
+          {/* Middle: Prev/Next call navigation — στο κενό ανάμεσα στο call info και το σχόλιο.
+              Disabled όταν το backend επιστρέψει null (δεν υπάρχει γειτονική κλήση). */}
+          <div className="flex items-center gap-1.5 flex-shrink-0 self-center">
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs px-2"
+              disabled={!onNavigateToCall || !neighbors?.prevSessionId}
+              onClick={() => {
+                if (neighbors?.prevSessionId && onNavigateToCall) onNavigateToCall(String(neighbors.prevSessionId));
+              }}
+              title={neighbors?.prevSessionId ? `Session ${neighbors.prevSessionId}` : "Δεν υπάρχει προηγούμενη κλήση"}
+            >
+              <ChevronLeft className="h-3.5 w-3.5 mr-1" />
+              Prev Call
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-7 text-xs px-2"
+              disabled={!onNavigateToCall || !neighbors?.nextSessionId}
+              onClick={() => {
+                if (neighbors?.nextSessionId && onNavigateToCall) onNavigateToCall(String(neighbors.nextSessionId));
+              }}
+              title={neighbors?.nextSessionId ? `Session ${neighbors.nextSessionId}` : "Δεν υπάρχει επόμενη κλήση"}
+            >
+              Next Call
+              <ChevronRight className="h-3.5 w-3.5 ml-1" />
+            </Button>
           </div>
 
           {/* Right: Comment */}
