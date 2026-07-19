@@ -359,48 +359,6 @@
             letter-spacing: 0.5px;
         }
 
-        .step {
-            margin-bottom: 1.5rem;
-        }
-
-        .step-number {
-            display: inline-block;
-            background-color: var(--accent-primary);
-            color: var(--bg-primary);
-            width: 28px;
-            height: 28px;
-            border-radius: 50%;
-            text-align: center;
-            line-height: 28px;
-            font-weight: 600;
-            margin-right: 0.75rem;
-            font-size: 0.9rem;
-        }
-
-        .step-content {
-            display: inline-block;
-            vertical-align: top;
-            width: calc(100% - 40px);
-        }
-
-        footer {
-            margin-top: 4rem;
-            padding-top: 2rem;
-            border-top: 1px solid var(--border-color);
-            text-align: center;
-            color: var(--text-secondary);
-            font-size: 0.9rem;
-        }
-
-        .highlight-line {
-            display: block;
-            background-color: rgba(249, 115, 22, 0.1);
-            border-left: 3px solid var(--accent-primary);
-            padding-left: 0.75rem;
-            margin: 0 -1rem;
-            padding: 0 1rem;
-        }
-
         .comparison {
             display: grid;
             grid-template-columns: 1fr 1fr;
@@ -419,8 +377,13 @@
             margin-top: 0;
         }
 
-        .hidden {
-            display: none;
+        footer {
+            margin-top: 4rem;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border-color);
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
         }
 
         @media (max-width: 768px) {
@@ -455,251 +418,528 @@
         <button class="lang-btn active" data-lang="en">English</button>
         <button class="lang-btn" data-lang="el">Ελληνικά</button>
     </div>
-    <h1 data-en="Advanced Git: Rebase, History Rewriting & Beyond" data-el="Advanced Git: Rebase, Ξαναγραφή Ιστορίας & Πέραν">Advanced Git: Rebase, History Rewriting & Beyond</h1>
+    <h1>Advanced Git: Rebase, History Rewriting & Beyond</h1>
     <p class="subtitle" data-en="Comprehensive guide to professional Git workflows, dangerous operations, and recovery techniques" data-el="Περιεκτικός οδηγός για επαγγελματικές Git ροές εργασίας, επικίνδυνες λειτουργίες και τεχνικές ανάκτησης">Comprehensive guide to professional Git workflows, dangerous operations, and recovery techniques</p>
 </header>
 
 <nav class="toc">
     <h3 data-en="Table of Contents" data-el="Περιεχόμενα">Table of Contents</h3>
     <ul>
-        <li><a href="#rebase" data-en="Advanced Rebase Workflows" data-el="Προχωρημένες Ροές Εργασίας Rebase">Advanced Rebase Workflows</a></li>
-        <li><a href="#delete" data-en="Deleting Commits" data-el="Διαγραφή Commits">Deleting Commits</a></li>
-        <li><a href="#stash" data-en="Stash Advanced Techniques" data-el="Stash Προχωρημένες Τεχνικές">Stash Advanced Techniques</a></li>
-        <li><a href="#interactive" data-en="Interactive Rebase Deep Dive" data-el="Interactive Rebase Βαθιά Ανάλυση">Interactive Rebase Deep Dive</a></li>
-        <li><a href="#cherry-pick" data-en="Cherry-pick & Selective History" data-el="Cherry-pick & Επιλεκτική Ιστορία">Cherry-pick & Selective History</a></li>
-        <li><a href="#reflog" data-en="Reflog & Recovery" data-el="Reflog & Ανάκτηση">Reflog & Recovery</a></li>
-        <li><a href="#rewriting" data-en="Rewriting History Safely" data-el="Ξαναγραφή Ιστορίας με Ασφάλεια">Rewriting History Safely</a></li>
-        <li><a href="#bisect" data-en="Debugging with Bisect" data-el="Debugging με Bisect">Debugging with Bisect</a></li>
-        <li><a href="#worktrees" data-en="Git Worktrees" data-el="Git Worktrees">Git Worktrees</a></li>
-        <li><a href="#merge-strategies" data-en="Advanced Merging" data-el="Προχωρημένη Συγχώνευση">Advanced Merging</a></li>
+        <li><a href="#rebase">Advanced Rebase Workflows</a></li>
+        <li><a href="#delete">Deleting Commits</a></li>
+        <li><a href="#stash">Stash Advanced Techniques</a></li>
+        <li><a href="#interactive">Interactive Rebase Deep Dive</a></li>
+        <li><a href="#cherry-pick">Cherry-pick & Selective History</a></li>
+        <li><a href="#reflog">Reflog & Recovery</a></li>
+        <li><a href="#rewriting">Rewriting History Safely</a></li>
+        <li><a href="#bisect">Debugging with Bisect</a></li>
+        <li><a href="#worktrees">Git Worktrees</a></li>
+        <li><a href="#merge-strategies">Advanced Merging</a></li>
     </ul>
 </nav>
 
 <section class="section" id="rebase">
-    <h2 data-en="Advanced Rebase Workflows" data-el="Προχωρημένες Ροές Εργασίας Rebase">Advanced Rebase Workflows</h2>
+    <h2>Advanced Rebase Workflows</h2>
 
     <h3 data-en="Understanding Rebase vs Merge" data-el="Κατανόηση Rebase vs Merge">Understanding Rebase vs Merge</h3>
-    <p data-en="Rebase replays commits from one branch onto another, creating a linear history. Unlike merge, which creates a merge commit, rebase rewrites your branch's history." data-el="Το Rebase επαναφέρει commits από ένα branch σε ένα άλλο, δημιουργώντας ένα γραμμική ιστορία. Σε αντίθεση με τη συγχώνευση που δημιουργεί ένα merge commit, το rebase ξαναγράφει την ιστορία του branch σας.">Rebase replays commits from one branch onto another, creating a linear history. Unlike merge, which creates a merge commit, rebase rewrites your branch's history.</p>
+    <p data-en="Rebase replays commits from one branch onto another, creating a linear history. Unlike merge, which creates a merge commit, rebase rewrites your branch's history." data-el="Το Rebase επαναφέρει commits από ένα branch σε ένα άλλο, δημιουργώντας γραμμική ιστορία. Σε αντίθεση με τη συγχώνευση που δημιουργεί merge commit, το rebase ξαναγράφει την ιστορία του branch σας.">Rebase replays commits from one branch onto another, creating a linear history. Unlike merge, which creates a merge commit, rebase rewrites your branch's history.</p>
 
     <div class="info-box">
-        <strong data-en="Golden Rule:" data-el="Χρυσός Κανόνας:">Golden Rule:</strong> <span data-en="Never rebase commits that have been pushed to a shared repository, unless you coordinate with your team. Rebase rewrites history, which will cause conflicts for anyone who has pulled those commits." data-el="Ποτέ μην κάνετε rebase commits που έχουν ωθηθεί σε ένα κοινό αποθετήριο, εκτός αν συντονιστείτε με την ομάδα σας. Το rebase ξαναγράφει την ιστορία, η οποία θα προκαλέσει συγκρούσεις για οποιονδήποτε έχει κάνει pull αυτά τα commits.">Never rebase commits that have been pushed to a shared repository, unless you coordinate with your team. Rebase rewrites history, which will cause conflicts for anyone who has pulled those commits.</span></div>
+        <strong data-en="Golden Rule:" data-el="Χρυσός Κανόνας:">Golden Rule:</strong> <span data-en="Never rebase commits that have been pushed to a shared repository, unless you coordinate with your team. Rebase rewrites history, which will cause conflicts for anyone who has pulled those commits." data-el="Ποτέ μην κάνετε rebase commits που έχουν ωθηθεί σε κοινό αποθετήριο, εκτός αν συντονιστείτε με την ομάδα. Το rebase ξαναγράφει την ιστορία.">Never rebase commits that have been pushed to a shared repository, unless you coordinate with your team. Rebase rewrites history, which will cause conflicts for anyone who has pulled those commits.</span></div>
 
     <h3 data-en="Basic Rebase: Linear History" data-el="Βασικό Rebase: Γραμμική Ιστορία">Basic Rebase: Linear History</h3>
     <pre><code><span class="command">$ git rebase main</span>
 
-<span class="output" data-en="# Replays current branch's commits on top of main
-# Before:
-#   main:     A---B---C
-#   feature:           D---E
-
-# After:
-#   main:     A---B---C
-#   feature:           A---B---C---D'---E'" data-el="# Επαναφέρει τα commits του τρέχοντος branch στο main
-# Πριν:
-#   main:     A---B---C
-#   feature:           D---E
-
-# Μετά:
-#   main:     A---B---C
-#   feature:           A---B---C---D'---E'">
-# Replays current branch's commits on top of main
-# Before:
-#   main:     A---B---C
-#   feature:           D---E
-
-# After:
-#   main:     A---B---C
-#   feature:           A---B---C---D'---E'</span></code></pre>
+<span class="output"># Replays current branch's commits on top of main</span></code></pre>
 
     <h3 data-en="Interactive Rebase (rebase -i)" data-el="Interactive Rebase (rebase -i)">Interactive Rebase (rebase -i)</h3>
-    <p data-en="The most powerful Git command for rewriting history. Allows you to reorder, squash, edit, or delete commits." data-el="Η πιο ισχυρή εντολή Git για ξαναγραφή ιστορίας. Σας επιτρέπει να αναδιατάξετε, συγχωνεύσετε, επεξεργαστείτε ή διαγράψετε commits.">The most powerful Git command for rewriting history. Allows you to reorder, squash, edit, or delete commits.</p>
+    <p data-en="The most powerful Git command for rewriting history. Allows you to reorder, squash, edit, or delete commits." data-el="Η πιο ισχυρή εντολή Git για ξαναγραφή ιστορίας. Σας επιτρέπει να αναδιατάξετε, συγχωνεύσετε ή διαγράψετε commits.">The most powerful Git command for rewriting history. Allows you to reorder, squash, edit, or delete commits.</p>
 
-    <div class="example-section">
-        <div class="example-title" data-en="Scenario: Clean up last 5 commits" data-el="Σενάριο: Καθαρίστε τα τελευταία 5 commits">Scenario: Clean up last 5 commits</div>
-        <pre><code><span class="command">$ git rebase -i HEAD~5</span>
+    <pre><code><span class="command">$ git rebase -i HEAD~5</span>
 
-<span class="output" data-en="# Opens editor with:
-pick a1b2c3d Fix typo
-pick b2c3d4e Add validation
-pick c3d4e5f Refactor parser
-pick d4e5f6g WIP: debugging
-pick e5f6g7h Fix edge case
-
-# Change to:
-pick a1b2c3d Fix typo
+<span class="output">pick a1b2c3d Fix typo
 squash b2c3d4e Add validation
-squash c3d4e5f Refactor parser
+fixup c3d4e5f Refactor parser
 reword d4e5f6g WIP: debugging
-fixup e5f6g7h Fix edge case" data-el="# Ανοίγει τον επεξεργαστή με:
-pick a1b2c3d Fix typo
-pick b2c3d4e Add validation
-pick c3d4e5f Refactor parser
-pick d4e5f6g WIP: debugging
-pick e5f6g7h Fix edge case
-
-# Αλλάξτε σε:
-pick a1b2c3d Fix typo
-squash b2c3d4e Add validation
-squash c3d4e5f Refactor parser
-reword d4e5f6g WIP: debugging
-fixup e5f6g7h Fix edge case">
-# Opens editor with:
-pick a1b2c3d Fix typo
-pick b2c3d4e Add validation
-pick c3d4e5f Refactor parser
-pick d4e5f6g WIP: debugging
-pick e5f6g7h Fix edge case
-
-# Change to:
-pick a1b2c3d Fix typo
-squash b2c3d4e Add validation
-squash c3d4e5f Refactor parser
-reword d4e5f6g WIP: debugging
-fixup e5f6g7h Fix edge case</span></code></pre>
-    </div>
+drop e5f6g7h Old commit</span></code></pre>
 
     <h3 data-en="Interactive Rebase Commands" data-el="Εντολές Interactive Rebase">Interactive Rebase Commands</h3>
     <table>
         <thead>
             <tr>
-                <th data-en="Command" data-el="Εντολή">Command</th>
+                <th>Command</th>
                 <th data-en="Effect" data-el="Αποτέλεσμα">Effect</th>
-                <th data-en="Use Case" data-el="Περίπτωση Χρήσης">Use Case</th>
+                <th data-en="Use Case" data-el="Χρήση">Use Case</th>
             </tr>
         </thead>
         <tbody>
             <tr>
                 <td><code>pick</code></td>
-                <td data-en="Keep commit as-is" data-el="Διατήρηση commit ως έχει">Keep commit as-is</td>
-                <td data-en="Default, commits you want to keep" data-el="Προεπιλογή, commits που θέλετε να διατηρήσετε">Default, commits you want to keep</td>
+                <td>Keep commit as-is</td>
+                <td>Default</td>
             </tr>
             <tr>
                 <td><code>reword</code></td>
-                <td data-en="Keep commit, edit message" data-el="Διατήρηση commit, επεξεργασία μηνύματος">Keep commit, edit message</td>
-                <td data-en="Fix typos in commit messages" data-el="Διόρθωση τυπογραφικών σφαλμάτων στα μηνύματα commits">Fix typos in commit messages</td>
-            </tr>
-            <tr>
-                <td><code>edit</code></td>
-                <td data-en="Pause, let you amend commit" data-el="Παύση, σας επιτρέπει να τροποποιήσετε commit">Pause, let you amend commit</td>
-                <td data-en="Split commits, add files, change content" data-el="Διαχωρισμός commits, προσθήκη αρχείων, αλλαγή περιεχομένου">Split commits, add files, change content</td>
+                <td>Keep commit, edit message</td>
+                <td>Fix typos</td>
             </tr>
             <tr>
                 <td><code>squash</code></td>
-                <td data-en="Meld into previous commit" data-el="Συγχώνευση στο προηγούμενο commit">Meld into previous commit</td>
-                <td data-en="Combine related commits, preserve messages" data-el="Συνδυασμός σχετικών commits, διατήρηση μηνυμάτων">Combine related commits, preserve messages</td>
+                <td>Merge into previous</td>
+                <td>Combine commits</td>
             </tr>
             <tr>
                 <td><code>fixup</code></td>
-                <td data-en="Squash, discard message" data-el="Squash, απόρριψη μηνύματος">Squash, discard message</td>
-                <td data-en="Combine WIP or debug commits" data-el="Συνδυασμός WIP ή debug commits">Combine WIP or debug commits</td>
-            </tr>
-            <tr>
-                <td><code>break</code></td>
-                <td data-en="Pause rebase at this point" data-el="Παύση rebase σε αυτό το σημείο">Pause rebase at this point</td>
-                <td data-en="Manual testing between commits" data-el="Χειροκίνητη δοκιμή μεταξύ commits">Manual testing between commits</td>
+                <td>Squash, discard message</td>
+                <td>WIP commits</td>
             </tr>
             <tr>
                 <td><code>drop</code></td>
-                <td data-en="Delete commit entirely" data-el="Διαγραφή commit εντελώς">Delete commit entirely</td>
-                <td data-en="Remove WIP or bad commits" data-el="Αφαίρεση WIP ή κακών commits">Remove WIP or bad commits</td>
+                <td>Delete entirely</td>
+                <td>Remove bad commits</td>
             </tr>
             <tr>
                 <td><code>exec</code></td>
-                <td data-en="Run shell command" data-el="Εκτέλεση εντολής shell">Run shell command</td>
-                <td data-en="Verify each commit passes tests" data-el="Επαλήθευση ότι κάθε commit περνά τις δοκιμές">Verify each commit passes tests</td>
+                <td>Run shell command</td>
+                <td>Test each commit</td>
             </tr>
         </tbody>
     </table>
 
-    <h3 data-en="Advanced: Rebase with --onto" data-el="Προχωρημένο: Rebase με --onto">Advanced: Rebase with --onto</h3>
-    <p data-en="Rebase a branch onto a different base than its merge-base. Extremely useful for moving branches or extracting commits." data-el="Κάντε rebase ένα branch σε διαφορετική βάση από το merge-base του. Εξαιρετικά χρήσιμο για μετακίνηση branches ή εξαγωγή commits.">Rebase a branch onto a different base than its merge-base. Extremely useful for moving branches or extracting commits.</p>
+    <h3 data-en="Rebase with --onto" data-el="Rebase με --onto">Rebase with --onto</h3>
+    <p data-en="Rebase a branch onto a different base. Useful for moving branches or extracting commits." data-el="Κάντε rebase σε διαφορετική βάση. Χρήσιμο για μετακίνηση branches.">Rebase a branch onto a different base. Useful for moving branches or extracting commits.</p>
 
-    <div class="example-section">
-        <div class="example-title" data-en="Move commits to different base" data-el="Μετακίνηση commits σε διαφορετική βάση">Move commits to different base</div>
-        <pre><code><span class="command">$ git rebase --onto main feature~2 feature</span>
+    <pre><code><span class="command">$ git rebase --onto main feature~2 feature</span>
 
-<span class="output" data-en="# Takes the last 2 commits of feature
-# (from feature~2 to feature)
-# and replays them on top of main
+<span class="output"># Takes last 2 commits of feature and replays on main</span></code></pre>
+</section>
 
-# Before:
-#   main:     A---B---C
-#   feature:        D---E---F
+<section class="section" id="delete">
+    <h2 data-en="Deleting Commits: The Definitive Guide" data-el="Διαγραφή Commits: Ο Οριστικός Οδηγός">Deleting Commits: The Definitive Guide</h2>
 
-# After:
-#   main:     A---B---C
-#   feature:           A---B---C---E'---F'
-#   (D' is left behind)" data-el="# Λαμβάνει τα τελευταία 2 commits του feature
-# (από feature~2 σε feature)
-# και τα επαναφέρει στο main
+    <h3 data-en="Delete the Last Commit" data-el="Διαγράψτε το Τελευταίο Commit">Delete the Last Commit</h3>
 
-# Πριν:
-#   main:     A---B---C
-#   feature:        D---E---F
+    <h4 data-en="Option 1: Soft Reset (Keep Changes)" data-el="Επιλογή 1: Soft Reset">Option 1: Soft Reset (Keep Changes)</h4>
+    <pre><code><span class="command">$ git reset --soft HEAD~1</span>
 
-# Μετά:
-#   main:     A---B---C
-#   feature:           A---B---C---E'---F'
-#   (D' μένει πίσω)">
-# Takes the last 2 commits of feature
-# (from feature~2 to feature)
-# and replays them on top of main
+<span class="output"># Removes commit, keeps staged changes</span></code></pre>
 
-# Before:
-#   main:     A---B---C
-#   feature:        D---E---F
+    <h4 data-en="Option 2: Mixed Reset (Default)" data-el="Επιλογή 2: Mixed Reset">Option 2: Mixed Reset (Default)</h4>
+    <pre><code><span class="command">$ git reset HEAD~1</span>
 
-# After:
-#   main:     A---B---C
-#   feature:           A---B---C---E'---F'
-#   (D' is left behind)</span></code></pre>
-    </div>
+<span class="output"># Removes commit, unstages changes</span></code></pre>
 
-    <h3 data-en="Rebase with Autostash" data-el="Rebase με Autostash">Rebase with Autostash</h3>
-    <pre><code><span class="command">$ git rebase --autostash main</span>
+    <h4 data-en="Option 3: Hard Reset (Discard Everything)" data-el="Επιλογή 3: Hard Reset">Option 3: Hard Reset (Discard Everything)</h4>
+    <pre><code><span class="command">$ git reset --hard HEAD~1</span>
 
-<span class="output" data-en="# Automatically stashes uncommitted changes
-# Applies them after rebase completes
-# No need to manually stash beforehand" data-el="# Αυτόματα αποθηκεύει τις μη δεσμευμένες αλλαγές
-# Τις εφαρμόζει μετά την ολοκλήρωση του rebase
-# Δεν χρειάζεται χειροκίνητη αποθήκευση">
-# Automatically stashes uncommitted changes
-# Applies them after rebase completes
-# No need to manually stash beforehand</span></code></pre>
-
-    <h3 data-en="Handling Conflicts During Rebase" data-el="Χειρισμός Συγκρούσεων Κατά το Rebase">Handling Conflicts During Rebase</h3>
-    <pre><code><span class="command">$ git rebase main</span>
-<span class="output">CONFLICT (content): Merge conflict in app.js
-# Edit files to resolve...
-$ git add app.js
-$ git rebase --continue
-
-<span class="danger" data-en="# OR abort entirely" data-el="# ΟΣΤε ακύρωση εντελώς"># OR abort entirely</span></span>
-<span class="command">$ git rebase --abort</span></code></pre>
+<span class="output"># ⚠️ DANGEROUS: Discards all changes!</span></code></pre>
 
     <div class="warning-box">
-        <strong data-en="Be Careful:" data-el="Προσοχή:">Be Careful:</strong> <span data-en="<code>git rebase --continue</code> will continue with the next commit. If there are still conflicts, you'll be prompted again. Use <code>git status</code> to see what's unresolved." data-el="Το <code>git rebase --continue</code> θα συνεχίσει με το επόμενο commit. Εάν υπάρχουν ακόμα συγκρούσεις, θα σας ζητηθεί ξανά. Χρησιμοποιήστε <code>git status</code> για να δείτε τι δεν έχει επιλυθεί."><code>git rebase --continue</code> will continue with the next commit. If there are still conflicts, you'll be prompted again. Use <code>git status</code> to see what's unresolved.</span></div>
+        <strong data-en="Recovery Possible:" data-el="Ανάκτηση Δυνατή:">Recovery Possible:</strong> <span data-en="Unpushed commits live in reflog for ~30 days. See the Reflog section." data-el="Τα commits ζουν στο reflog για ~30 μέρες.">Unpushed commits live in reflog for ~30 days. See the Reflog section.</span></div>
 
+    <h3 data-en="Delete Multiple Recent Commits" data-el="Πολλαπλά Commits">Delete Multiple Recent Commits</h3>
+    <pre><code><span class="command">$ git reset --soft HEAD~3</span>
+
+<span class="output"># Removes last 3 commits, keeps changes</span></code></pre>
+
+    <h3 data-en="Delete a Commit in the Middle" data-el="Commit στη Μέση">Delete a Commit in the Middle</h3>
+    <pre><code><span class="command">$ git rebase -i HEAD~3</span>
+
+<span class="output"># Mark commit as "drop" to delete it</span></code></pre>
+
+    <h3 data-en="Delete Using Filter-branch" data-el="Filter-branch">Delete Using Filter-branch</h3>
+    <pre><code><span class="command">$ git filter-branch --tree-filter 'rm -f secret-key.txt' HEAD</span>
+
+<span class="output"># Removes secret-key.txt from entire history</span></code></pre>
+</section>
+
+<section class="section" id="stash">
+    <h2 data-en="Stash: Advanced Techniques" data-el="Stash: Προχωρημένες Τεχνικές">Stash: Advanced Techniques</h2>
+
+    <h3 data-en="Why Stash Matters" data-el="Σημασία Stash">Why Stash Matters</h3>
+    <p data-en="Stash temporarily saves uncommitted changes without committing them. Essential for switching branches without losing work." data-el="Το Stash αποθηκεύει προσωρινά αλλαγές. Απαραίτητο για εναλλαγή branches.">Stash temporarily saves uncommitted changes without committing them. Essential for switching branches without losing work.</p>
+
+    <h3 data-en="Basic Stash Operations" data-el="Βασικές Λειτουργίες">Basic Stash Operations</h3>
+    <pre><code><span class="command">$ git stash</span>
+<span class="output"># Saves all changes</span>
+
+<span class="command">$ git stash list</span>
+<span class="output">stash@{0}: WIP on feature/auth: a1b2c3d</span>
+
+<span class="command">$ git stash pop</span>
+<span class="output"># Restores and removes from list</span>
+
+<span class="command">$ git stash apply</span>
+<span class="output"># Restores but keeps in list</span></code></pre>
+
+    <h3 data-en="Stash with Meaningful Names" data-el="Stash με Ονόματα">Stash with Meaningful Names</h3>
+    <pre><code><span class="command">$ git stash push -m "WIP: API refactoring"</span>
+
+<span class="command">$ git stash list</span>
+<span class="output">stash@{0}: WIP: API refactoring</span></code></pre>
+
+    <h3 data-en="Partial Stash: Save Only Some Files" data-el="Μερικό Stash">Partial Stash: Save Only Some Files</h3>
+    <pre><code><span class="command">$ git stash push src/api.js src/utils.js -m "API changes"</span>
+
+<span class="output"># Only stashes specified files</span></code></pre>
+
+    <h3 data-en="Stash Untracked Files" data-el="Untracked Αρχεία">Stash Untracked Files</h3>
+    <pre><code><span class="command">$ git stash -u</span>
+
+<span class="output"># -u = --include-untracked</span></code></pre>
+
+    <h3 data-en="Stash Only Staged Changes" data-el="Μόνο Staged">Stash Only Staged Changes</h3>
+    <pre><code><span class="command">$ git stash --staged</span>
+
+<span class="output"># Stashes only git add'ed changes</span></code></pre>
+
+    <h3 data-en="Interactive Stash Selection" data-el="Interactive Stash">Interactive Stash Selection</h3>
+    <pre><code><span class="command">$ git stash push -p</span>
+
+<span class="output"># -p = --patch: asks for each hunk</span></code></pre>
+
+    <h3 data-en="View Stash Content" data-el="Προβολή">View Stash Content</h3>
+    <pre><code><span class="command">$ git stash show -p stash@{0}</span>
+
+<span class="output"># Shows full diff of the stash</span></code></pre>
+</section>
+
+<section class="section" id="interactive">
+    <h2 data-en="Interactive Rebase: Deep Dive" data-el="Interactive Rebase: Βαθιά Ανάλυση">Interactive Rebase: Deep Dive</h2>
+
+    <h3 data-en="Setup and Workflow" data-el="Ρύθμιση">Setup and Workflow</h3>
+    <pre><code><span class="command">$ git rebase -i HEAD~5</span>
+
+<span class="output"># Opens editor with last 5 commits</span></code></pre>
+
+    <h3 data-en="Example: Clean Messy History" data-el="Παράδειγμα: Καθαρισμός">Example: Clean Messy History</h3>
+    <div class="example-section">
+        <div class="example-title" data-en="Scenario: Clean messy feature branch" data-el="Σενάριο: Καθαρισμός feature">Scenario: Clean messy feature branch</div>
+        <pre><code><span class="command">Before:</span>
+<span class="output">a1b2c3d Add form validation
+b2c3d4e Fix typo
+c3d4e5f WIP: debugging
+d4e5f6g More debugging
+e5f6g7h Refactor form
+f6g7h8i More fixes
+
+After rebase -i:
+pick a1b2c3d Add form validation
+fixup b2c3d4e Fix typo
+fixup c3d4e5f WIP: debugging
+fixup d4e5f6g More debugging
+pick e5f6g7h Refactor form
+fixup f6g7h8i More fixes
+
+Result: 2 clean commits instead of 6</span></code></pre>
+    </div>
+
+    <h3 data-en="Editing Commit Content During Rebase" data-el="Επεξεργασία κατά Rebase">Editing Commit Content During Rebase</h3>
+    <pre><code><span class="command">$ git rebase -i HEAD~3</span>
+
+<span class="output"># Mark as "edit"
+edit a1b2c3d Partial feature
+
+# Rebase stops at a1b2c3d
+$ git reset --soft HEAD~1
+$ git add src/api.js
+$ git commit -m "API changes only"
+$ git rebase --continue</span></code></pre>
+
+    <h3 data-en="Reorder Commits" data-el="Αναδιάταξη">Reorder Commits</h3>
+    <p data-en="Change commit order by moving lines in the editor." data-el="Αλλάξτε τη σειρά των commits.">Change commit order by moving lines in the editor.</p>
+
+    <pre><code><span class="command">$ git rebase -i HEAD~4</span>
+
+<span class="output"># Before: pick A, pick B, pick C, pick D
+# After: pick B, pick A, pick D, pick C (reordered)</span></code></pre>
+
+    <h3 data-en="Using exec During Rebase" data-el="Χρήση exec">Using exec During Rebase</h3>
+    <p>Run tests at each commit to ensure nothing breaks.</p>
+
+    <pre><code><span class="command">$ git rebase -i HEAD~4</span>
+
+<span class="output">pick a1b2c3d Add validation
+exec npm test
+pick b2c3d4e Add form
+exec npm test</span></code></pre>
+</section>
+
+<section class="section" id="cherry-pick">
+    <h2 data-en="Cherry-pick & Selective History" data-el="Cherry-pick & Επιλεκτική">Cherry-pick & Selective History</h2>
+
+    <h3 data-en="Basic Cherry-pick" data-el="Βασικό">Basic Cherry-pick</h3>
+    <p data-en="Apply a specific commit from one branch to another." data-el="Εφαρμόστε ένα commit σε άλλο branch.">Apply a specific commit from one branch to another.</p>
+
+    <pre><code><span class="command">$ git cherry-pick a1b2c3d</span>
+
+<span class="output"># Applies commit a1b2c3d to current branch</span></code></pre>
+
+    <h3 data-en="Cherry-pick Multiple Commits" data-el="Πολλαπλά">Cherry-pick Multiple Commits</h3>
+    <pre><code><span class="command">$ git cherry-pick a1b2c3d b2c3d4e c3d4e5f</span>
+
+<span class="output"># Applies three commits in order</span></code></pre>
+
+    <h3 data-en="Cherry-pick Range" data-el="Εύρος">Cherry-pick Range</h3>
+    <pre><code><span class="command">$ git cherry-pick a1b2c3d..c3d4e5f</span>
+
+<span class="output"># From a1b2c3d up to c3d4e5f (excludes a1b2c3d)
+
+$ git cherry-pick a1b2c3d^..c3d4e5f</span>
+<span class="output"># Includes a1b2c3d (add ^)</span></code></pre>
+
+    <h3 data-en="Cherry-pick with Conflicts" data-el="με Συγκρούσεις">Cherry-pick with Conflicts</h3>
+    <pre><code><span class="command">$ git cherry-pick a1b2c3d</span>
+<span class="output">CONFLICT (content): Merge conflict in app.js
+
+$ git add app.js
+$ git cherry-pick --continue
+
+# OR abort
+$ git cherry-pick --abort</span></code></pre>
+
+    <h3 data-en="Cherry-pick Without Committing" data-el="χωρίς Commit">Cherry-pick Without Committing</h3>
+    <pre><code><span class="command">$ git cherry-pick -n a1b2c3d</span>
+
+<span class="output"># -n = --no-commit: applies but doesn't commit</span></code></pre>
+</section>
+
+<section class="section" id="reflog">
+    <h2 data-en="Reflog & Recovery: Undo Almost Anything" data-el="Reflog & Ανάκτηση">Reflog & Recovery: Undo Almost Anything</h2>
+
+    <h3 data-en="What is Reflog?" data-el="Τι είναι;">What is Reflog?</h3>
+    <p data-en="The reference log records every HEAD change. Deleted commits are recoverable for ~30 days." data-el="Το reflog καταγράφει κάθε αλλαγή. Διαγραμμένα commits είναι ανακτήσιμα για ~30 μέρες.">The reference log records every HEAD change. Deleted commits are recoverable for ~30 days.</p>
+
+    <h3 data-en="View Reflog" data-el="Προβολή">View Reflog</h3>
+    <pre><code><span class="command">$ git reflog</span>
+
+<span class="output">a1b2c3d HEAD@{0}: rebase finished: returning to main
+b2c3d4e HEAD@{1}: rebase: Fix typo
+c3d4e5f HEAD@{2}: rebase: Add validation
+d4e5f6g HEAD@{3}: checkout: moving from feature to main</span></code></pre>
+
+    <h3 data-en="Recover Lost Commits" data-el="Ανάκτηση">Recover Lost Commits</h3>
+    <div class="example-section">
+        <div class="example-title" data-en="Scenario: Accidentally hard reset" data-el="Σενάριο: Τυχαίο reset">Scenario: Accidentally hard reset</div>
+        <pre><code><span class="command">$ git reset --hard HEAD~3</span>
+<span class="output"># Oops! Lost 3 commits
+
+$ git reflog</span>
+<span class="output">a1b2c3d HEAD@{0}: reset: moving to HEAD~3
+b2c3d4e HEAD@{1}: commit: Important fix
+c3d4e5f HEAD@{2}: commit: Feature X
+d4e5f6g HEAD@{3}: commit: Initial feature
+
+$ git reset --hard HEAD@{3}</span>
+
+<span class="success">✓ Recovered all lost commits!</span></code></pre>
+    </div>
+
+    <h3 data-en="Recover Deleted Branch" data-el="Ανάκτηση Branch">Recover Deleted Branch</h3>
+    <pre><code><span class="command">$ git branch -D feature-branch</span>
+<span class="output"># Oops! Deleted by mistake
+
+$ git reflog</span>
+<span class="output">a1b2c3d HEAD@{5}: checkout: moving from feature-branch to main
+
+$ git checkout -b feature-branch a1b2c3d</span>
+
+<span class="success">✓ Branch recovered!</span></code></pre>
+    </div>
+
+    <h3 data-en="Track Specific Branch Reflog" data-el="Branch Reflog">Track Specific Branch Reflog</h3>
+    <pre><code><span class="command">$ git reflog feature</span>
+
+<span class="output"># Shows reflog for feature branch only</span></code></pre>
+</section>
+
+<section class="section" id="rewriting">
+    <h2 data-en="Rewriting History Safely" data-el="Ξαναγραφή με Ασφάλεια">Rewriting History Safely</h2>
+
+    <h3 data-en="The Sacred Rule" data-el="Ο Ιερός Κανόνας">The Sacred Rule</h3>
+    <div class="warning-box">
+        <strong data-en="NEVER rewrite history on shared branches." data-el="ΠΟΤΕ ξαναγράφετε ιστορία σε κοινά branches.">NEVER rewrite history on shared branches.</strong> <span data-en="Only rewrite on branches you own, before pushing or with team coordination." data-el="Ξαναγράφετε μόνο σε branches που ελέγχετε.">Only rewrite on branches you own, before pushing or with team coordination.</span></div>
+
+    <h3 data-en="Changing Commit Messages" data-el="Αλλαγή Μηνυμάτων">Changing Commit Messages</h3>
+
+    <h4 data-en="Last Commit Message" data-el="Τελευταίο Μήνυμα">Last Commit Message</h4>
+    <pre><code><span class="command">$ git commit --amend -m "Correct message"</span>
+
+<span class="output"># Changes the message of the last commit</span></code></pre>
+
+    <h4 data-en="Older Commit Message" data-el="Παλαιότερο">Older Commit Message</h4>
+    <pre><code><span class="command">$ git rebase -i HEAD~3</span>
+
+<span class="output">reword a1b2c3d Fix typo
+pick b2c3d4e Next
+pick c3d4e5f Final
+
+# Editor opens for each reword</span></code></pre>
+
+    <h3 data-en="Amend Last Commit (Add Files)" data-el="Προσθήκη Αρχείων">Amend Last Commit (Add Files)</h3>
+    <pre><code><span class="command">$ git add forgotten-file.js</span>
+<span class="command">$ git commit --amend --no-edit</span>
+
+<span class="output"># Adds file to last commit, keeps message</span></code></pre>
+
+    <h3 data-en="Splitting a Commit" data-el="Διαχωρισμός">Splitting a Commit</h3>
+    <div class="example-section">
+        <div class="example-title" data-en="Split commit into two" data-el="Διαχωρισμός σε δύο">Split commit into two</div>
+        <pre><code><span class="command">$ git rebase -i HEAD~1</span>
+
+<span class="output">edit a1b2c3d Add feature + refactoring
+
+$ git reset --soft HEAD~1
+$ git add feature-files.js
+$ git commit -m "Add feature"
+$ git add refactoring-files.js
+$ git commit -m "Refactor"
+$ git rebase --continue</span></code></pre>
+    </div>
+</section>
+
+<section class="section" id="bisect">
+    <h2 data-en="Debugging with Bisect" data-el="Debugging με Bisect">Debugging with Bisect</h2>
+
+    <h3 data-en="Finding Bad Commits" data-el="Εύρεση Κακών">Finding Bad Commits</h3>
+    <p data-en="<code>git bisect</code> does binary search to find which commit introduced a bug." data-el="Το <code>git bisect</code> κάνει δυαδική αναζήτηση."><code>git bisect</code> does binary search to find which commit introduced a bug.</p>
+
+    <h3 data-en="Basic Bisect Workflow" data-el="Βασική Ροή">Basic Bisect Workflow</h3>
+    <div class="example-section">
+        <div class="example-title" data-en="Find which commit broke tests" data-el="Ποιο commit έσπασε τις δοκιμές">Find which commit broke tests</div>
+        <pre><code><span class="command">$ git bisect start</span>
+
+<span class="command">$ git bisect bad</span>
+<span class="output"># Current commit is broken
+
+$ git bisect good v1.0</span>
+<span class="output"># v1.0 was working
+
+# Git jumps to middle commit
+$ npm test
+$ git bisect bad  # or good
+
+# Repeat until converged
+
+$ git bisect reset</span>
+
+<span class="success">✓ Found the culprit commit!</span></code></pre>
+    </div>
+
+    <h3 data-en="Automated Bisect" data-el="Αυτοματοποιημένο">Automated Bisect</h3>
+    <pre><code><span class="command">$ git bisect start</span>
+<span class="command">$ git bisect bad HEAD</span>
+<span class="command">$ git bisect good v1.0</span>
+<span class="command">$ git bisect run npm test</span>
+
+<span class="output"># Fully automated!
+# Exit 0 = good, exit 1 = bad</span></code></pre>
+</section>
+
+<section class="section" id="worktrees">
+    <h2 data-en="Git Worktrees: Multiple Branches Simultaneously" data-el="Git Worktrees: Πολλαπλά Branches">Git Worktrees: Multiple Branches Simultaneously</h2>
+
+    <h3 data-en="Why Worktrees?" data-el="Γιατί;">Why Worktrees?</h3>
+    <p data-en="Worktrees let you check out multiple branches simultaneously in different directories. Better than constantly switching." data-el="Τα Worktrees σας επιτρέπουν να έχετε πολλαπλά branches ταυτόχρονα.">Worktrees let you check out multiple branches simultaneously in different directories. Better than constantly switching.</p>
+
+    <h3 data-en="Create a Worktree" data-el="Δημιουργία">Create a Worktree</h3>
+    <pre><code><span class="command">$ git worktree add ../feature-branch feature</span>
+
+<span class="output"># Creates ../feature-branch directory
+# Checks out feature branch there
+# Your current directory still has main</span></code></pre>
+
+    <h3 data-en="List Worktrees" data-el="Λίστα">List Worktrees</h3>
+    <pre><code><span class="command">$ git worktree list</span>
+
+<span class="output">/project/main           a1b2c3d [main]
+/project/../feature     b2c3d4e [feature]
+/project/../bugfix      c3d4e5f [bugfix]</span></code></pre>
+
+    <h3 data-en="Create Worktree from New Branch" data-el="Νέο Branch">Create Worktree from New Branch</h3>
+    <pre><code><span class="command">$ git worktree add -b hotfix ../hotfix main</span>
+
+<span class="output"># Creates new branch 'hotfix' based on main
+# Creates worktree for it</span></code></pre>
+
+    <h3 data-en="Delete Worktree" data-el="Διαγραφή">Delete Worktree</h3>
+    <pre><code><span class="command">$ git worktree remove ../feature-branch</span>
+
+<span class="output"># Removes worktree and cleans up</span></code></pre>
+</section>
+
+<section class="section" id="merge-strategies">
+    <h2 data-en="Advanced Merging Strategies" data-el="Προχωρημένες Στρατηγικές">Advanced Merging Strategies</h2>
+
+    <h3 data-en="Merge Strategies Overview" data-el="Επισκόπηση">Merge Strategies Overview</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Strategy</th>
+                <th>Description</th>
+                <th data-en="When To Use" data-el="Πότε">When To Use</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>recursive</code></td>
+                <td>Standard 3-way merge (default)</td>
+                <td>Most cases</td>
+            </tr>
+            <tr>
+                <td><code>resolve</code></td>
+                <td>Simpler 3-way merge</td>
+                <td>Simple merges</td>
+            </tr>
+            <tr>
+                <td><code>ours</code></td>
+                <td>Always prefer current branch</td>
+                <td>Discarding changes</td>
+            </tr>
+            <tr>
+                <td><code>theirs</code></td>
+                <td>Always prefer other branch</td>
+                <td>Accept all changes</td>
+            </tr>
+            <tr>
+                <td><code>octopus</code></td>
+                <td>Merge multiple branches</td>
+                <td>3+ branches at once</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3 data-en="Merge with Specific Strategy" data-el="με Στρατηγική">Merge with Specific Strategy</h3>
+    <pre><code><span class="command">$ git merge -s ours feature</span>
+
+<span class="output"># Merges but always keeps current branch version</span></code></pre>
+
+    <h3 data-en="Recursive Merge Options" data-el="Επιλογές">Recursive Merge Options</h3>
+    <pre><code><span class="command">$ git merge -X theirs feature</span>
+
+<span class="output"># On conflicts, prefer feature's version</span></code></pre>
+
+    <h3 data-en="Squash Merge" data-el="Squash">Squash Merge</h3>
+    <pre><code><span class="command">$ git merge --squash feature</span>
+
+<span class="output"># Applies all changes but doesn't create merge commit
+# Changes are staged, ready to commit</span></code></pre>
+
+    <h3 data-en="No Fast-Forward Merge" data-el="No Fast-Forward">No Fast-Forward Merge</h3>
+    <pre><code><span class="command">$ git merge --no-ff feature</span>
+
+<span class="output"># Forces merge commit even if fast-forward possible
+# Preserves branch structure</span></code></pre>
 </section>
 
 <footer>
-    <p data-en="Advanced Git guide — Professional workflows for history management, recovery, and collaborative development" data-el="Οδηγός Advanced Git — Επαγγελματικές ροές εργασίας για διαχείριση ιστορίας, ανάκτηση και συνεργατική ανάπτυξη">Advanced Git guide — Professional workflows for history management, recovery, and collaborative development</p>
-    <p style="margin-top: 0.5rem;" data-en="Updated 2026 · All examples tested against Git 2.40+" data-el="Ενημερώθηκε 2026 · Όλα τα παραδείγματα δοκιμάστηκαν έναντι Git 2.40+">Updated 2026 · All examples tested against Git 2.40+</p>
+    <p data-en="Advanced Git guide — Professional workflows for history management, recovery, and collaborative development" data-el="Οδηγός Advanced Git — Επαγγελματικές ροές εργασίας για διαχείριση ιστορίας">Advanced Git guide — Professional workflows for history management, recovery, and collaborative development</p>
+    <p style="margin-top: 0.5rem;" data-en="Updated 2026 · All examples tested against Git 2.40+" data-el="Ενημερώθηκε 2026 · Όλα τα παραδείγματα δοκιμάστηκαν με Git 2.40+">Updated 2026 · All examples tested against Git 2.40+</p>
 </footer>
 
 <script>
-    const translations = {
-        en: {
-            // Τα αγγλικά είναι στο HTML ως default
-        },
-        el: {
-            // Όλες οι μεταφράσεις είναι ήδη στα data-el attributes
-        }
-    };
-
     let currentLang = localStorage.getItem('lang') || 'en';
 
-    // Εφαρμόστε τη σωθείσα γλώσσα
     document.addEventListener('DOMContentLoaded', () => {
         setLanguage(currentLang);
         updateActiveButton();
@@ -717,17 +957,7 @@ $ git rebase --continue
             }
         });
 
-        document.querySelectorAll('a[data-en][data-el]').forEach(element => {
-            if (lang === 'el') {
-                element.textContent = element.getAttribute('data-el');
-            } else {
-                element.textContent = element.getAttribute('data-en');
-            }
-        });
-
-        // Για HTML elements που έχουν ήδη ένα aria-label ή κάποια ιδιότητα
         document.documentElement.lang = lang;
-
         updateActiveButton();
     }
 
@@ -738,7 +968,6 @@ $ git rebase --continue
         document.querySelector(`[data-lang="${currentLang}"]`).classList.add('active');
     }
 
-    // Event listeners για τα κουμπιά
     document.querySelectorAll('.lang-btn').forEach(btn => {
         btn.addEventListener('click', () => {
             const lang = btn.getAttribute('data-lang');
