@@ -21,29 +21,22 @@ def update_call_comment(req: CommentRequest):
         conn = get_connection(req.database)
         cursor = conn.cursor()
 
-        # Check if comment already exists in AnalysisComment
-        cursor.execute("SELECT commentID FROM AnalysisComment WHERE Comment = ?", (req.comment,))
-        row = cursor.fetchone()
-
-        if row:
-            comment_id = row[0]
-        else:
-            try:
-                # We must insert it. In SQL Server OUTPUT INSERTED is supported.
-                cursor.execute("INSERT INTO AnalysisComment (Comment) OUTPUT INSERTED.commentID VALUES (?)", (req.comment,))
-                comment_id = cursor.fetchone()[0]
-            except Exception as e:
-                # Fallback if OUTPUT INSERTED is not supported or identity fails
-                cursor.execute("INSERT INTO AnalysisComment (Comment) VALUES (?)", (req.comment,))
-                cursor.execute("SELECT @@IDENTITY")
-                comment_id = cursor.fetchone()[0]
-
-        # check if it exists in bridge
-        cursor.execute("SELECT sessionID FROM AnalysisCommentSessionsBridge WHERE sessionID = ?", (req.session_id,))
+        # Upsert: DwAnalysisCommentToSessionMapping holds one row per SessionId
+        # (SessionId, Comment) — no separate comment table / bridge needed.
+        cursor.execute(
+            "SELECT 1 FROM DwAnalysisCommentToSessionMapping WHERE SessionId = ?",
+            (req.session_id,),
+        )
         if cursor.fetchone():
-            cursor.execute("UPDATE AnalysisCommentSessionsBridge SET commentId = ? WHERE sessionID = ?", (comment_id, req.session_id))
+            cursor.execute(
+                "UPDATE DwAnalysisCommentToSessionMapping SET Comment = ? WHERE SessionId = ?",
+                (req.comment, req.session_id),
+            )
         else:
-            cursor.execute("INSERT INTO AnalysisCommentSessionsBridge (sessionID, commentId) VALUES (?, ?)", (req.session_id, comment_id))
+            cursor.execute(
+                "INSERT INTO DwAnalysisCommentToSessionMapping (SessionId, Comment) VALUES (?, ?)",
+                (req.session_id, req.comment),
+            )
 
         # If comment starts with 'fake' or 'FAKE', set session as invalid (Valid = 0), otherwise Valid = 1
         if req.comment and req.comment.lower().startswith("fake"):
@@ -56,7 +49,7 @@ def update_call_comment(req: CommentRequest):
 
         return {"message": "Comment updated successfully"}
     except Exception as e:
-        print(f"Error in update_call_comment bridge update: {e}")
+        print(f"Error in update_call_comment mapping upsert: {e}")
         # If the above fails because of missing table, fallback to updating Sessions.InvalidReason
         try:
             conn = get_connection(req.database)
