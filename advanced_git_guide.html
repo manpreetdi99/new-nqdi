@@ -1,0 +1,751 @@
+<!doctype html>
+<html lang="el">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Advanced Git: Rebase, History Rewriting & Beyond</title>
+    <style>
+        :root {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-code: #e6edf3;
+            --accent-primary: #f97316;
+            --accent-secondary: #fbbf24;
+            --success: #3fb950;
+            --danger: #f85149;
+            --warning: #d29922;
+            --info: #58a6ff;
+            --border-color: #30363d;
+        }
+
+        @media (prefers-color-scheme: light) {
+            :root {
+                --bg-primary: #ffffff;
+                --bg-secondary: #f6f8fa;
+                --bg-tertiary: #eaeef2;
+                --text-primary: #24292f;
+                --text-secondary: #57606a;
+                --text-code: #24292f;
+                --accent-primary: #f97316;
+                --accent-secondary: #fb923c;
+                --success: #1a7f37;
+                --danger: #cf222e;
+                --warning: #9e6a03;
+                --info: #0969da;
+                --border-color: #d0d7de;
+            }
+        }
+
+        :root[data-theme="dark"] {
+            --bg-primary: #0d1117;
+            --bg-secondary: #161b22;
+            --bg-tertiary: #21262d;
+            --text-primary: #e6edf3;
+            --text-secondary: #8b949e;
+            --text-code: #e6edf3;
+            --accent-primary: #f97316;
+            --accent-secondary: #fbbf24;
+            --success: #3fb950;
+            --danger: #f85149;
+            --warning: #d29922;
+            --info: #58a6ff;
+            --border-color: #30363d;
+        }
+
+        :root[data-theme="light"] {
+            --bg-primary: #ffffff;
+            --bg-secondary: #f6f8fa;
+            --bg-tertiary: #eaeef2;
+            --text-primary: #24292f;
+            --text-secondary: #57606a;
+            --text-code: #24292f;
+            --accent-primary: #f97316;
+            --accent-secondary: #fb923c;
+            --success: #1a7f37;
+            --danger: #cf222e;
+            --warning: #9e6a03;
+            --info: #0969da;
+            --border-color: #d0d7de;
+        }
+
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        html, body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+            background-color: var(--bg-primary);
+            color: var(--text-primary);
+            line-height: 1.6;
+            font-size: 16px;
+        }
+
+        body {
+            padding: 2rem;
+            max-width: 900px;
+            margin: 0 auto;
+        }
+
+        header {
+            margin-bottom: 3rem;
+            border-bottom: 2px solid var(--accent-primary);
+            padding-bottom: 2rem;
+            position: relative;
+        }
+
+        .lang-toggle {
+            position: absolute;
+            top: 0;
+            right: 0;
+            background: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 0;
+            display: flex;
+            gap: 0;
+        }
+
+        .lang-btn {
+            background: none;
+            border: none;
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 0.5rem 1rem;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s;
+            border-right: 1px solid var(--border-color);
+        }
+
+        .lang-btn:last-child {
+            border-right: none;
+        }
+
+        .lang-btn.active {
+            background-color: var(--accent-primary);
+            color: var(--bg-primary);
+        }
+
+        .lang-btn:hover:not(.active) {
+            color: var(--accent-primary);
+        }
+
+        h1 {
+            font-size: 2.5rem;
+            font-weight: 700;
+            margin-bottom: 0.5rem;
+            background: linear-gradient(135deg, var(--accent-primary), var(--accent-secondary));
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            background-clip: text;
+            line-height: 1.2;
+            text-wrap: balance;
+        }
+
+        .subtitle {
+            font-size: 1.1rem;
+            color: var(--text-secondary);
+            font-weight: 500;
+            margin-top: 0.5rem;
+        }
+
+        nav.toc {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin: 2rem 0;
+        }
+
+        nav.toc h3 {
+            font-size: 0.9rem;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+            margin-bottom: 1rem;
+        }
+
+        nav.toc ul {
+            list-style: none;
+        }
+
+        nav.toc li {
+            margin: 0.5rem 0;
+        }
+
+        nav.toc a {
+            color: var(--info);
+            text-decoration: none;
+            font-size: 0.95rem;
+            transition: color 0.2s;
+        }
+
+        nav.toc a:hover {
+            color: var(--accent-primary);
+        }
+
+        .section {
+            margin: 3rem 0;
+        }
+
+        h2 {
+            font-size: 2rem;
+            font-weight: 700;
+            margin-bottom: 1rem;
+            color: var(--accent-primary);
+            padding-bottom: 0.5rem;
+            border-bottom: 1px solid var(--border-color);
+            text-wrap: balance;
+        }
+
+        h3 {
+            font-size: 1.3rem;
+            font-weight: 600;
+            margin: 1.5rem 0 0.8rem 0;
+            color: var(--text-primary);
+        }
+
+        h4 {
+            font-size: 1.05rem;
+            font-weight: 600;
+            margin: 1.2rem 0 0.6rem 0;
+            color: var(--text-secondary);
+        }
+
+        p {
+            margin-bottom: 1rem;
+            line-height: 1.7;
+            color: var(--text-primary);
+            max-width: 65ch;
+        }
+
+        ul, ol {
+            margin-left: 1.5rem;
+            margin-bottom: 1rem;
+        }
+
+        li {
+            margin-bottom: 0.5rem;
+            line-height: 1.6;
+        }
+
+        strong {
+            color: var(--accent-primary);
+            font-weight: 600;
+        }
+
+        code {
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            background-color: var(--bg-tertiary);
+            padding: 0.2em 0.4em;
+            border-radius: 3px;
+            font-size: 0.9em;
+            color: var(--accent-secondary);
+        }
+
+        pre {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 1rem;
+            overflow-x: auto;
+            margin: 1rem 0;
+            font-family: 'Monaco', 'Menlo', 'Ubuntu Mono', monospace;
+            font-size: 0.9rem;
+            line-height: 1.4;
+        }
+
+        pre code {
+            background: none;
+            padding: 0;
+            color: var(--text-code);
+        }
+
+        .command {
+            color: var(--accent-secondary);
+            font-weight: 600;
+        }
+
+        .output {
+            color: var(--text-secondary);
+        }
+
+        .danger {
+            color: var(--danger);
+        }
+
+        .success {
+            color: var(--success);
+        }
+
+        .info-box {
+            background-color: var(--bg-secondary);
+            border-left: 4px solid var(--accent-primary);
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 4px;
+        }
+
+        .warning-box {
+            background-color: var(--bg-secondary);
+            border-left: 4px solid var(--danger);
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 4px;
+        }
+
+        .success-box {
+            background-color: var(--bg-secondary);
+            border-left: 4px solid var(--success);
+            padding: 1rem;
+            margin: 1rem 0;
+            border-radius: 4px;
+        }
+
+        .info-box strong::before {
+            content: "ℹ ";
+        }
+
+        .warning-box strong::before {
+            content: "⚠ ";
+        }
+
+        .success-box strong::before {
+            content: "✓ ";
+        }
+
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+            font-size: 0.95rem;
+        }
+
+        th, td {
+            text-align: left;
+            padding: 0.75rem;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        th {
+            background-color: var(--bg-secondary);
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        tr:hover {
+            background-color: var(--bg-secondary);
+        }
+
+        .example-section {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            padding: 1.5rem;
+            margin: 1.5rem 0;
+        }
+
+        .example-title {
+            font-weight: 600;
+            color: var(--accent-primary);
+            margin-bottom: 1rem;
+            font-size: 0.95rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .step {
+            margin-bottom: 1.5rem;
+        }
+
+        .step-number {
+            display: inline-block;
+            background-color: var(--accent-primary);
+            color: var(--bg-primary);
+            width: 28px;
+            height: 28px;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 28px;
+            font-weight: 600;
+            margin-right: 0.75rem;
+            font-size: 0.9rem;
+        }
+
+        .step-content {
+            display: inline-block;
+            vertical-align: top;
+            width: calc(100% - 40px);
+        }
+
+        footer {
+            margin-top: 4rem;
+            padding-top: 2rem;
+            border-top: 1px solid var(--border-color);
+            text-align: center;
+            color: var(--text-secondary);
+            font-size: 0.9rem;
+        }
+
+        .highlight-line {
+            display: block;
+            background-color: rgba(249, 115, 22, 0.1);
+            border-left: 3px solid var(--accent-primary);
+            padding-left: 0.75rem;
+            margin: 0 -1rem;
+            padding: 0 1rem;
+        }
+
+        .comparison {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 1rem;
+            margin: 1.5rem 0;
+        }
+
+        .comparison-item {
+            background-color: var(--bg-secondary);
+            border: 1px solid var(--border-color);
+            padding: 1rem;
+            border-radius: 6px;
+        }
+
+        .comparison-item h4 {
+            margin-top: 0;
+        }
+
+        .hidden {
+            display: none;
+        }
+
+        @media (max-width: 768px) {
+            body {
+                padding: 1rem;
+            }
+
+            h1 {
+                font-size: 1.8rem;
+            }
+
+            h2 {
+                font-size: 1.5rem;
+            }
+
+            .comparison {
+                grid-template-columns: 1fr;
+            }
+
+            .lang-toggle {
+                position: static;
+                margin-top: 1rem;
+                margin-bottom: 1rem;
+            }
+        }
+    </style>
+</head>
+<body>
+
+<header>
+    <div class="lang-toggle">
+        <button class="lang-btn active" data-lang="en">English</button>
+        <button class="lang-btn" data-lang="el">Ελληνικά</button>
+    </div>
+    <h1 data-en="Advanced Git: Rebase, History Rewriting & Beyond" data-el="Advanced Git: Rebase, Ξαναγραφή Ιστορίας & Πέραν">Advanced Git: Rebase, History Rewriting & Beyond</h1>
+    <p class="subtitle" data-en="Comprehensive guide to professional Git workflows, dangerous operations, and recovery techniques" data-el="Περιεκτικός οδηγός για επαγγελματικές Git ροές εργασίας, επικίνδυνες λειτουργίες και τεχνικές ανάκτησης">Comprehensive guide to professional Git workflows, dangerous operations, and recovery techniques</p>
+</header>
+
+<nav class="toc">
+    <h3 data-en="Table of Contents" data-el="Περιεχόμενα">Table of Contents</h3>
+    <ul>
+        <li><a href="#rebase" data-en="Advanced Rebase Workflows" data-el="Προχωρημένες Ροές Εργασίας Rebase">Advanced Rebase Workflows</a></li>
+        <li><a href="#delete" data-en="Deleting Commits" data-el="Διαγραφή Commits">Deleting Commits</a></li>
+        <li><a href="#stash" data-en="Stash Advanced Techniques" data-el="Stash Προχωρημένες Τεχνικές">Stash Advanced Techniques</a></li>
+        <li><a href="#interactive" data-en="Interactive Rebase Deep Dive" data-el="Interactive Rebase Βαθιά Ανάλυση">Interactive Rebase Deep Dive</a></li>
+        <li><a href="#cherry-pick" data-en="Cherry-pick & Selective History" data-el="Cherry-pick & Επιλεκτική Ιστορία">Cherry-pick & Selective History</a></li>
+        <li><a href="#reflog" data-en="Reflog & Recovery" data-el="Reflog & Ανάκτηση">Reflog & Recovery</a></li>
+        <li><a href="#rewriting" data-en="Rewriting History Safely" data-el="Ξαναγραφή Ιστορίας με Ασφάλεια">Rewriting History Safely</a></li>
+        <li><a href="#bisect" data-en="Debugging with Bisect" data-el="Debugging με Bisect">Debugging with Bisect</a></li>
+        <li><a href="#worktrees" data-en="Git Worktrees" data-el="Git Worktrees">Git Worktrees</a></li>
+        <li><a href="#merge-strategies" data-en="Advanced Merging" data-el="Προχωρημένη Συγχώνευση">Advanced Merging</a></li>
+    </ul>
+</nav>
+
+<section class="section" id="rebase">
+    <h2 data-en="Advanced Rebase Workflows" data-el="Προχωρημένες Ροές Εργασίας Rebase">Advanced Rebase Workflows</h2>
+
+    <h3 data-en="Understanding Rebase vs Merge" data-el="Κατανόηση Rebase vs Merge">Understanding Rebase vs Merge</h3>
+    <p data-en="Rebase replays commits from one branch onto another, creating a linear history. Unlike merge, which creates a merge commit, rebase rewrites your branch's history." data-el="Το Rebase επαναφέρει commits από ένα branch σε ένα άλλο, δημιουργώντας ένα γραμμική ιστορία. Σε αντίθεση με τη συγχώνευση που δημιουργεί ένα merge commit, το rebase ξαναγράφει την ιστορία του branch σας.">Rebase replays commits from one branch onto another, creating a linear history. Unlike merge, which creates a merge commit, rebase rewrites your branch's history.</p>
+
+    <div class="info-box">
+        <strong data-en="Golden Rule:" data-el="Χρυσός Κανόνας:">Golden Rule:</strong> <span data-en="Never rebase commits that have been pushed to a shared repository, unless you coordinate with your team. Rebase rewrites history, which will cause conflicts for anyone who has pulled those commits." data-el="Ποτέ μην κάνετε rebase commits που έχουν ωθηθεί σε ένα κοινό αποθετήριο, εκτός αν συντονιστείτε με την ομάδα σας. Το rebase ξαναγράφει την ιστορία, η οποία θα προκαλέσει συγκρούσεις για οποιονδήποτε έχει κάνει pull αυτά τα commits.">Never rebase commits that have been pushed to a shared repository, unless you coordinate with your team. Rebase rewrites history, which will cause conflicts for anyone who has pulled those commits.</span></div>
+
+    <h3 data-en="Basic Rebase: Linear History" data-el="Βασικό Rebase: Γραμμική Ιστορία">Basic Rebase: Linear History</h3>
+    <pre><code><span class="command">$ git rebase main</span>
+
+<span class="output" data-en="# Replays current branch's commits on top of main
+# Before:
+#   main:     A---B---C
+#   feature:           D---E
+
+# After:
+#   main:     A---B---C
+#   feature:           A---B---C---D'---E'" data-el="# Επαναφέρει τα commits του τρέχοντος branch στο main
+# Πριν:
+#   main:     A---B---C
+#   feature:           D---E
+
+# Μετά:
+#   main:     A---B---C
+#   feature:           A---B---C---D'---E'">
+# Replays current branch's commits on top of main
+# Before:
+#   main:     A---B---C
+#   feature:           D---E
+
+# After:
+#   main:     A---B---C
+#   feature:           A---B---C---D'---E'</span></code></pre>
+
+    <h3 data-en="Interactive Rebase (rebase -i)" data-el="Interactive Rebase (rebase -i)">Interactive Rebase (rebase -i)</h3>
+    <p data-en="The most powerful Git command for rewriting history. Allows you to reorder, squash, edit, or delete commits." data-el="Η πιο ισχυρή εντολή Git για ξαναγραφή ιστορίας. Σας επιτρέπει να αναδιατάξετε, συγχωνεύσετε, επεξεργαστείτε ή διαγράψετε commits.">The most powerful Git command for rewriting history. Allows you to reorder, squash, edit, or delete commits.</p>
+
+    <div class="example-section">
+        <div class="example-title" data-en="Scenario: Clean up last 5 commits" data-el="Σενάριο: Καθαρίστε τα τελευταία 5 commits">Scenario: Clean up last 5 commits</div>
+        <pre><code><span class="command">$ git rebase -i HEAD~5</span>
+
+<span class="output" data-en="# Opens editor with:
+pick a1b2c3d Fix typo
+pick b2c3d4e Add validation
+pick c3d4e5f Refactor parser
+pick d4e5f6g WIP: debugging
+pick e5f6g7h Fix edge case
+
+# Change to:
+pick a1b2c3d Fix typo
+squash b2c3d4e Add validation
+squash c3d4e5f Refactor parser
+reword d4e5f6g WIP: debugging
+fixup e5f6g7h Fix edge case" data-el="# Ανοίγει τον επεξεργαστή με:
+pick a1b2c3d Fix typo
+pick b2c3d4e Add validation
+pick c3d4e5f Refactor parser
+pick d4e5f6g WIP: debugging
+pick e5f6g7h Fix edge case
+
+# Αλλάξτε σε:
+pick a1b2c3d Fix typo
+squash b2c3d4e Add validation
+squash c3d4e5f Refactor parser
+reword d4e5f6g WIP: debugging
+fixup e5f6g7h Fix edge case">
+# Opens editor with:
+pick a1b2c3d Fix typo
+pick b2c3d4e Add validation
+pick c3d4e5f Refactor parser
+pick d4e5f6g WIP: debugging
+pick e5f6g7h Fix edge case
+
+# Change to:
+pick a1b2c3d Fix typo
+squash b2c3d4e Add validation
+squash c3d4e5f Refactor parser
+reword d4e5f6g WIP: debugging
+fixup e5f6g7h Fix edge case</span></code></pre>
+    </div>
+
+    <h3 data-en="Interactive Rebase Commands" data-el="Εντολές Interactive Rebase">Interactive Rebase Commands</h3>
+    <table>
+        <thead>
+            <tr>
+                <th data-en="Command" data-el="Εντολή">Command</th>
+                <th data-en="Effect" data-el="Αποτέλεσμα">Effect</th>
+                <th data-en="Use Case" data-el="Περίπτωση Χρήσης">Use Case</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td><code>pick</code></td>
+                <td data-en="Keep commit as-is" data-el="Διατήρηση commit ως έχει">Keep commit as-is</td>
+                <td data-en="Default, commits you want to keep" data-el="Προεπιλογή, commits που θέλετε να διατηρήσετε">Default, commits you want to keep</td>
+            </tr>
+            <tr>
+                <td><code>reword</code></td>
+                <td data-en="Keep commit, edit message" data-el="Διατήρηση commit, επεξεργασία μηνύματος">Keep commit, edit message</td>
+                <td data-en="Fix typos in commit messages" data-el="Διόρθωση τυπογραφικών σφαλμάτων στα μηνύματα commits">Fix typos in commit messages</td>
+            </tr>
+            <tr>
+                <td><code>edit</code></td>
+                <td data-en="Pause, let you amend commit" data-el="Παύση, σας επιτρέπει να τροποποιήσετε commit">Pause, let you amend commit</td>
+                <td data-en="Split commits, add files, change content" data-el="Διαχωρισμός commits, προσθήκη αρχείων, αλλαγή περιεχομένου">Split commits, add files, change content</td>
+            </tr>
+            <tr>
+                <td><code>squash</code></td>
+                <td data-en="Meld into previous commit" data-el="Συγχώνευση στο προηγούμενο commit">Meld into previous commit</td>
+                <td data-en="Combine related commits, preserve messages" data-el="Συνδυασμός σχετικών commits, διατήρηση μηνυμάτων">Combine related commits, preserve messages</td>
+            </tr>
+            <tr>
+                <td><code>fixup</code></td>
+                <td data-en="Squash, discard message" data-el="Squash, απόρριψη μηνύματος">Squash, discard message</td>
+                <td data-en="Combine WIP or debug commits" data-el="Συνδυασμός WIP ή debug commits">Combine WIP or debug commits</td>
+            </tr>
+            <tr>
+                <td><code>break</code></td>
+                <td data-en="Pause rebase at this point" data-el="Παύση rebase σε αυτό το σημείο">Pause rebase at this point</td>
+                <td data-en="Manual testing between commits" data-el="Χειροκίνητη δοκιμή μεταξύ commits">Manual testing between commits</td>
+            </tr>
+            <tr>
+                <td><code>drop</code></td>
+                <td data-en="Delete commit entirely" data-el="Διαγραφή commit εντελώς">Delete commit entirely</td>
+                <td data-en="Remove WIP or bad commits" data-el="Αφαίρεση WIP ή κακών commits">Remove WIP or bad commits</td>
+            </tr>
+            <tr>
+                <td><code>exec</code></td>
+                <td data-en="Run shell command" data-el="Εκτέλεση εντολής shell">Run shell command</td>
+                <td data-en="Verify each commit passes tests" data-el="Επαλήθευση ότι κάθε commit περνά τις δοκιμές">Verify each commit passes tests</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3 data-en="Advanced: Rebase with --onto" data-el="Προχωρημένο: Rebase με --onto">Advanced: Rebase with --onto</h3>
+    <p data-en="Rebase a branch onto a different base than its merge-base. Extremely useful for moving branches or extracting commits." data-el="Κάντε rebase ένα branch σε διαφορετική βάση από το merge-base του. Εξαιρετικά χρήσιμο για μετακίνηση branches ή εξαγωγή commits.">Rebase a branch onto a different base than its merge-base. Extremely useful for moving branches or extracting commits.</p>
+
+    <div class="example-section">
+        <div class="example-title" data-en="Move commits to different base" data-el="Μετακίνηση commits σε διαφορετική βάση">Move commits to different base</div>
+        <pre><code><span class="command">$ git rebase --onto main feature~2 feature</span>
+
+<span class="output" data-en="# Takes the last 2 commits of feature
+# (from feature~2 to feature)
+# and replays them on top of main
+
+# Before:
+#   main:     A---B---C
+#   feature:        D---E---F
+
+# After:
+#   main:     A---B---C
+#   feature:           A---B---C---E'---F'
+#   (D' is left behind)" data-el="# Λαμβάνει τα τελευταία 2 commits του feature
+# (από feature~2 σε feature)
+# και τα επαναφέρει στο main
+
+# Πριν:
+#   main:     A---B---C
+#   feature:        D---E---F
+
+# Μετά:
+#   main:     A---B---C
+#   feature:           A---B---C---E'---F'
+#   (D' μένει πίσω)">
+# Takes the last 2 commits of feature
+# (from feature~2 to feature)
+# and replays them on top of main
+
+# Before:
+#   main:     A---B---C
+#   feature:        D---E---F
+
+# After:
+#   main:     A---B---C
+#   feature:           A---B---C---E'---F'
+#   (D' is left behind)</span></code></pre>
+    </div>
+
+    <h3 data-en="Rebase with Autostash" data-el="Rebase με Autostash">Rebase with Autostash</h3>
+    <pre><code><span class="command">$ git rebase --autostash main</span>
+
+<span class="output" data-en="# Automatically stashes uncommitted changes
+# Applies them after rebase completes
+# No need to manually stash beforehand" data-el="# Αυτόματα αποθηκεύει τις μη δεσμευμένες αλλαγές
+# Τις εφαρμόζει μετά την ολοκλήρωση του rebase
+# Δεν χρειάζεται χειροκίνητη αποθήκευση">
+# Automatically stashes uncommitted changes
+# Applies them after rebase completes
+# No need to manually stash beforehand</span></code></pre>
+
+    <h3 data-en="Handling Conflicts During Rebase" data-el="Χειρισμός Συγκρούσεων Κατά το Rebase">Handling Conflicts During Rebase</h3>
+    <pre><code><span class="command">$ git rebase main</span>
+<span class="output">CONFLICT (content): Merge conflict in app.js
+# Edit files to resolve...
+$ git add app.js
+$ git rebase --continue
+
+<span class="danger" data-en="# OR abort entirely" data-el="# ΟΣΤε ακύρωση εντελώς"># OR abort entirely</span></span>
+<span class="command">$ git rebase --abort</span></code></pre>
+
+    <div class="warning-box">
+        <strong data-en="Be Careful:" data-el="Προσοχή:">Be Careful:</strong> <span data-en="<code>git rebase --continue</code> will continue with the next commit. If there are still conflicts, you'll be prompted again. Use <code>git status</code> to see what's unresolved." data-el="Το <code>git rebase --continue</code> θα συνεχίσει με το επόμενο commit. Εάν υπάρχουν ακόμα συγκρούσεις, θα σας ζητηθεί ξανά. Χρησιμοποιήστε <code>git status</code> για να δείτε τι δεν έχει επιλυθεί."><code>git rebase --continue</code> will continue with the next commit. If there are still conflicts, you'll be prompted again. Use <code>git status</code> to see what's unresolved.</span></div>
+
+</section>
+
+<footer>
+    <p data-en="Advanced Git guide — Professional workflows for history management, recovery, and collaborative development" data-el="Οδηγός Advanced Git — Επαγγελματικές ροές εργασίας για διαχείριση ιστορίας, ανάκτηση και συνεργατική ανάπτυξη">Advanced Git guide — Professional workflows for history management, recovery, and collaborative development</p>
+    <p style="margin-top: 0.5rem;" data-en="Updated 2026 · All examples tested against Git 2.40+" data-el="Ενημερώθηκε 2026 · Όλα τα παραδείγματα δοκιμάστηκαν έναντι Git 2.40+">Updated 2026 · All examples tested against Git 2.40+</p>
+</footer>
+
+<script>
+    const translations = {
+        en: {
+            // Τα αγγλικά είναι στο HTML ως default
+        },
+        el: {
+            // Όλες οι μεταφράσεις είναι ήδη στα data-el attributes
+        }
+    };
+
+    let currentLang = localStorage.getItem('lang') || 'en';
+
+    // Εφαρμόστε τη σωθείσα γλώσσα
+    document.addEventListener('DOMContentLoaded', () => {
+        setLanguage(currentLang);
+        updateActiveButton();
+    });
+
+    function setLanguage(lang) {
+        currentLang = lang;
+        localStorage.setItem('lang', lang);
+
+        document.querySelectorAll('[data-en][data-el]').forEach(element => {
+            if (lang === 'el') {
+                element.textContent = element.getAttribute('data-el');
+            } else {
+                element.textContent = element.getAttribute('data-en');
+            }
+        });
+
+        document.querySelectorAll('a[data-en][data-el]').forEach(element => {
+            if (lang === 'el') {
+                element.textContent = element.getAttribute('data-el');
+            } else {
+                element.textContent = element.getAttribute('data-en');
+            }
+        });
+
+        // Για HTML elements που έχουν ήδη ένα aria-label ή κάποια ιδιότητα
+        document.documentElement.lang = lang;
+
+        updateActiveButton();
+    }
+
+    function updateActiveButton() {
+        document.querySelectorAll('.lang-btn').forEach(btn => {
+            btn.classList.remove('active');
+        });
+        document.querySelector(`[data-lang="${currentLang}"]`).classList.add('active');
+    }
+
+    // Event listeners για τα κουμπιά
+    document.querySelectorAll('.lang-btn').forEach(btn => {
+        btn.addEventListener('click', () => {
+            const lang = btn.getAttribute('data-lang');
+            setLanguage(lang);
+        });
+    });
+</script>
+
+</body>
+</html>
