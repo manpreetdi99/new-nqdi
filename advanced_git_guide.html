@@ -436,6 +436,7 @@
         <li><a href="#worktrees">Git Worktrees</a></li>
         <li><a href="#merge-strategies">Advanced Merging</a></li>
         <li><a href="#vs-control">VS / VS Code Integration</a></li>
+        <li><a href="#publish-issues">Published Code + Local Changes</a></li>
     </ul>
 </nav>
 
@@ -1082,6 +1083,208 @@ $ git bisect reset</span>
 
     <div class="info-box">
         <strong data-en="Pro Tip:" data-el="Pro Tip:">Pro Tip:</strong> <span data-en="The integrated terminal in VS Code (Ctrl+`) gives you the best of both worlds — Git UI for visual operations and terminal for advanced commands, all in one window!" data-el="Το ενσωματωμένο terminal σε VS Code (Ctrl+`) σας δίνει τα καλύτερα από τα δύο κόσμια — Git UI για visual λειτουργίες και terminal για προχωρημένες εντολές!">The integrated terminal in VS Code (Ctrl+`) gives you the best of both worlds — Git UI for visual operations and terminal for advanced commands, all in one window!</span></div>
+</section>
+
+<section class="section" id="publish-issues">
+    <h2 data-en="Troubleshooting: Published Code + Local Changes = Git Chaos" data-el="Troubleshooting: Δημοσιευμένος Κώδικας + Local Αλλαγές = Git Χάος">Troubleshooting: Published Code + Local Changes = Git Chaos</h2>
+
+    <h3 data-en="The Common Problem" data-el="Το Κοινό Πρόβλημα">The Common Problem</h3>
+    <p data-en="You publish commits to remote (push), then make local changes. Now VS Code shows diverged history, conflicts, or your changes are 'behind' the remote. This is a common scenario that breaks many workflows." data-el="Δημοσιεύετε commits στο remote (push), μετά κάνετε local αλλαγές. Τώρα το VS Code δείχνει diverged history, conflicts ή οι αλλαγές σας είναι 'behind' το remote.">You publish commits to remote (push), then make local changes. Now VS Code shows diverged history, conflicts, or your changes are 'behind' the remote. This is a common scenario that breaks many workflows.</p>
+
+    <div class="warning-box">
+        <strong data-en="Key Rule:" data-el="Κύριος Κανόνας:">Key Rule:</strong> <span data-en="Once code is published (pushed), DO NOT rewrite history with rebase, amend, or reset. Use forward-moving operations only: new commits, merge, cherry-pick." data-el="Όταν ο κώδικας δημοσιευθεί (pushed), ΜΗΝ ξαναγράψετε την ιστορία με rebase, amend ή reset. Χρησιμοποιήστε μόνο forward-moving λειτουργίες: νέα commits, merge, cherry-pick.">Once code is published (pushed), DO NOT rewrite history with rebase, amend, or reset. Use forward-moving operations only: new commits, merge, cherry-pick.</span></div>
+
+    <h3 data-en="Scenario 1: Amended/Rebased After Push" data-el="Σενάριο 1: Amended/Rebased μετά Push">Scenario 1: Amended/Rebased After Push (Fix It)</h3>
+    <div class="example-section">
+        <div class="example-title" data-en="Accidentally amended a published commit" data-el="Τυχαία amended ένα published commit">Accidentally amended a published commit</div>
+        <pre><code><span class="command">$ git commit --amend -m "New message"</span>
+<span class="output"># Oops! Now local differs from remote</span>
+
+<span class="danger">❌ WRONG: Don't force push to fix this!</span>
+<span class="command">$ git push -f origin main  # Don't do this!</span>
+
+<span class="success">✓ CORRECT: Create a new commit instead</span>
+<span class="command">$ git reset --soft HEAD~1</span>
+<span class="command">$ git commit -m "Fix: corrected message via new commit"</span>
+<span class="command">$ git push origin main</span></code></pre>
+    </div>
+
+    <h3 data-en="Scenario 2: Local Changes Are 'Behind' Remote" data-el="Σενάριο 2: Local Changes 'Behind' Remote">Scenario 2: Local Changes Are 'Behind' Remote</h3>
+    <div class="example-section">
+        <div class="example-title" data-en="You made local commits but they're not showing on remote" data-el="Κάνατε local commits αλλά δεν εμφανίζονται">You made local commits but they're not showing on remote</div>
+        <pre><code><span class="command">$ git log --oneline</span>
+<span class="output">a1b2c3d Your new commit (LOCAL ONLY)
+b2c3d4e Remote commit
+c3d4e5f Old commit</span>
+
+<span class="success">✓ Solution: Simply push your changes</span>
+<span class="command">$ git push origin main</span>
+
+<span class="output"># If it says "rejected", you have diverged history
+# Someone else pushed while you were working</span>
+
+<span class="command">$ git pull --no-ff origin main</span>
+<span class="output"># This creates a merge commit combining both histories
+# Now you can push safely</span></code></pre>
+    </div>
+
+    <h3 data-en="Scenario 3: Diverged History (Both Sides Have Changes)" data-el="Σενάριο 3: Diverged History">Scenario 3: Diverged History (Both Sides Have Changes)</h3>
+    <div class="example-section">
+        <div class="example-title" data-en="Remote has new commits, local also has new commits" data-el="Remote έχει νέα commits, local επίσης έχει νέα">Remote has new commits, local also has new commits</div>
+        <pre><code><span class="output">Remote:  A---B---C
+Local:   A---B---X---Y
+
+VS Code shows: "Your branch and 'origin/main' have diverged"</span>
+
+<span class="success">✓ Solution 1: Merge (Safest for published code)</span>
+<span class="command">$ git pull --no-ff origin main</span>
+<span class="output"># Creates merge commit
+# Remote A---B---C---M(merge)
+# Local        X---Y---/
+# Result: Linear, no history rewrite</span>
+
+<span class="success">✓ Solution 2: Rebase (Only if not yet pushed)</span>
+<span class="command">$ git fetch origin</span>
+<span class="command">$ git rebase origin/main</span>
+<span class="output"># Replays X and Y on top of C
+# Result: A---B---C---X'---Y'
+# ⚠️ Only safe if X,Y not yet pushed!</span></code></pre>
+    </div>
+
+    <h3 data-en="Scenario 4: VS Code Shows Conflicted State" data-el="Σενάριο 4: VS Code Conflicted State">Scenario 4: VS Code Shows Conflicted State</h3>
+    <div class="example-section">
+        <div class="example-title" data-en="Source Control panel shows merge/rebase in progress" data-el="Source Control δείχνει merge/rebase in progress">Source Control panel shows merge/rebase in progress</div>
+        <pre><code><span class="command">$ git status</span>
+<span class="output">On branch main
+You are currently rebasing.
+(use "git rebase --continue" to continue)
+(use "git rebase --abort" to cancel)</span>
+
+<span class="danger">❌ Option 1: Abort if things are broken</span>
+<span class="command">$ git rebase --abort</span>
+<span class="output"># Returns to before the rebase
+# Everything goes back to normal</span>
+
+<span class="success">✓ Option 2: Fix conflicts and continue</span>
+<span class="output"># VS Code shows conflicted files
+# Edit each file, resolve conflicts manually</span>
+<span class="command">$ git add file1.js file2.js</span>
+<span class="command">$ git rebase --continue</span>
+
+<span class="success">✓ Option 3: Use merge instead</span>
+<span class="command">$ git rebase --abort</span>
+<span class="command">$ git pull --no-ff origin main</span></code></pre>
+    </div>
+
+    <h3 data-en="Scenario 5: Undo Push (Recover Before Merge)" data-el="Σενάριο 5: Undo Push">Scenario 5: Undo Push (Recover Before Merge)</h3>
+    <div class="example-section">
+        <div class="example-title" data-en="Pushed bad commits, nobody else pulled yet (Time Window)" data-el="Pushed κακά commits, κανείς δεν έκανε pull ακόμα">Pushed bad commits, nobody else pulled yet (Time Window)</div>
+        <pre><code><span class="command">$ git log --oneline</span>
+<span class="output">a1b2c3d Bad commit (needs to be undone)
+b2c3d4e Previous good commit</span>
+
+<span class="danger">⚠️ DANGEROUS: Only if your team hasn't pulled yet!</span>
+<span class="command">$ git reset --soft HEAD~1</span>
+<span class="command">$ git push -f origin main</span>
+
+<span class="output"># If others HAVE pulled, do NOT force push!
+# Instead, create a revert commit:</span>
+
+<span class="success">✓ SAFE: Revert the bad commit (anyone can handle this)</span>
+<span class="command">$ git revert a1b2c3d</span>
+<span class="command">$ git push origin main</span>
+
+<span class="output"># This creates a NEW commit that undoes the bad one
+# No history rewrite, everyone can pull safely</span></code></pre>
+    </div>
+
+    <h3 data-en="Scenario 6: VS Code Sync Loop (Git Hung Up)" data-el="Σενάριο 6: VS Code Sync Loop">Scenario 6: VS Code Sync Loop (Git Hung Up)</h3>
+    <div class="example-section">
+        <div class="example-title" data-en="VS Code keeps syncing, shows errors, feels stuck" data-el="VS Code κρατάει syncing, δείχνει errors, νιώθει stuck">VS Code keeps syncing, shows errors, feels stuck</div>
+        <pre><code><span class="command">$ git status</span>
+<span class="output">Your branch is behind by 1 commit, and ahead by 1 commit
+(use "git pull" to merge the remote branch into the local one)</span>
+
+<span class="danger">✗ Problem: Continuous pull/push loop in VS Code</span>
+
+<span class="success">✓ Solution 1: Disable auto-sync in VS Code</span>
+<span class="output">VS Code → Settings → Search "Git: Autorefresh"
+→ Uncheck to disable auto-refresh
+→ Manually sync with Ctrl+Shift+G</span>
+
+<span class="success">✓ Solution 2: Clear the divergence</span>
+<span class="command">$ git fetch origin</span>
+<span class="command">$ git merge --no-ff origin/main</span>
+<span class="command">$ git push origin main</span>
+
+<span class="success">✓ Solution 3: Clean terminal intervention</span>
+<span class="command">$ git log --oneline</span>
+<span class="command">$ git pull --no-ff</span>
+<span class="command">$ git push</span></code></pre>
+    </div>
+
+    <h3 data-en="Prevention: Best Practices for Published Code" data-el="Πρόληψη: Best Practices">Prevention: Best Practices for Published Code</h3>
+    <table>
+        <thead>
+            <tr>
+                <th data-en="Rule" data-el="Κανόνας">Rule</th>
+                <th data-en="Reason" data-el="Λόγος">Reason</th>
+                <th data-en="What to Do Instead" data-el="Τι Κάνετε Αντί Αυτού">What to Do Instead</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td data-en="Don't amend published commits" data-el="Μη τροποποιείτε published">Don't amend published commits</td>
+                <td>Breaks syncing for everyone</td>
+                <td data-en="Create new commit with 'fix: ...'" data-el="Δημιουργήστε νέο commit">Create new commit with 'fix: ...'</td>
+            </tr>
+            <tr>
+                <td data-en="Don't rebase after push" data-el="Μη κάνετε rebase μετά push">Don't rebase after push</td>
+                <td>Rewrites history, causes conflicts</td>
+                <td data-en="Use merge with --no-ff" data-el="Χρησιμοποιήστε merge">Use merge with --no-ff</td>
+            </tr>
+            <tr>
+                <td data-en="Don't hard reset published" data-el="Μη κάνετε hard reset">Don't hard reset published</td>
+                <td>Deletes commits remotely</td>
+                <td data-en="Use git revert instead" data-el="Χρησιμοποιήστε git revert">Use git revert instead</td>
+            </tr>
+            <tr>
+                <td data-en="Don't force push" data-el="Μη κάνετε force push">Don't force push</td>
+                <td>Overwrites team's work</td>
+                <td data-en="Always merge or revert" data-el="Πάντα merge ή revert">Always merge or revert</td>
+            </tr>
+            <tr>
+                <td data-en="Pull before starting work" data-el="Pull πριν ξεκινήσετε">Pull before starting work</td>
+                <td>Prevents diverged history</td>
+                <td><code>git pull origin main</code></td>
+            </tr>
+            <tr>
+                <td data-en="Use feature branches" data-el="Χρησιμοποιήστε feature branches">Use feature branches</td>
+                <td>Isolates work from main</td>
+                <td data-en="main → feature/my-work" data-el="main → feature/my-work">main → feature/my-work</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3 data-en="Emergency: Git in Really Bad State?" data-el="Έκτακτο: Git σε Πολύ Κακή Κατάσταση">Emergency: Git in Really Bad State?</h3>
+    <div class="warning-box">
+        <strong data-en="Last Resort Actions:" data-el="Τελευταία Λύση:">Last Resort Actions:</strong>
+        <pre><code><span class="command">$ git reflog</span>
+<span class="output"># Find any good commit SHA</span>
+
+<span class="command">$ git reset --hard a1b2c3d</span>
+<span class="output"># Go back to that point</span>
+
+<span class="command">$ git pull origin main</span>
+<span class="output"># Sync with remote (safe point of truth)</span>
+
+<span class="danger"># If still broken:
+# Delete local branch, re-clone</span>
+<span class="command">$ git clone https://github.com/user/repo.git</span></code></pre>
+    </div>
+
+    <div class="success-box">
+        <strong data-en="Remember:" data-el="Θυμηθείτε:">Remember:</strong> <span data-en="The remote (GitHub/GitLab) is the source of truth. When in doubt, reset to remote and start fresh. Your work is never lost if you commit locally first." data-el="Το remote (GitHub/GitLab) είναι η πηγή της αλήθειας. Όταν είστε αβέβαιοι, reset στο remote. Η εργασία σας δεν χάνεται ποτέ αν κάνετε commit τοπικά πρώτα.">The remote (GitHub/GitLab) is the source of truth. When in doubt, reset to remote and start fresh. Your work is never lost if you commit locally first.</span></div>
 </section>
 
 <footer>
