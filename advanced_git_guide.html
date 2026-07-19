@@ -435,6 +435,7 @@
         <li><a href="#bisect">Debugging with Bisect</a></li>
         <li><a href="#worktrees">Git Worktrees</a></li>
         <li><a href="#merge-strategies">Advanced Merging</a></li>
+        <li><a href="#vs-control">VS / VS Code Integration</a></li>
     </ul>
 </nav>
 
@@ -930,6 +931,157 @@ $ git bisect reset</span>
 
 <span class="output"># Forces merge commit even if fast-forward possible
 # Preserves branch structure</span></code></pre>
+</section>
+
+<section class="section" id="vs-control">
+    <h2 data-en="VS / VS Code: Source Control Integration" data-el="VS / VS Code: Ενσωμάτωση Source Control">VS / VS Code: Source Control Integration</h2>
+
+    <h3 data-en="Advanced Git Operations in VS Code vs Terminal" data-el="Advanced Git Operations σε VS Code vs Terminal">Advanced Git Operations in VS Code vs Terminal</h3>
+    <p data-en="Not all advanced Git operations are available in the Visual Studio UI. Here's the mapping of commands to IDE features:" data-el="Όχι όλες οι advanced Git λειτουργίες είναι διαθέσιμες στο UI του Visual Studio. Ο χάρτης των εντολών σε χαρακτηριστικά IDE:">Not all advanced Git operations are available in the Visual Studio UI. Here's the mapping of commands to IDE features:</p>
+
+    <table>
+        <thead>
+            <tr>
+                <th data-en="Operation" data-el="Λειτουργία">Operation</th>
+                <th data-en="Terminal Command" data-el="Εντολή Terminal">Terminal Command</th>
+                <th data-en="VS / VS Code" data-el="VS / VS Code">VS / VS Code UI</th>
+            </tr>
+        </thead>
+        <tbody>
+            <tr>
+                <td data-en="Rebase" data-el="Rebase">Rebase</td>
+                <td><code>git rebase main</code></td>
+                <td>Git Graph extension, Source Control (Rebase option)</td>
+            </tr>
+            <tr>
+                <td data-en="Interactive Rebase" data-el="Interactive Rebase">Interactive Rebase</td>
+                <td><code>git rebase -i HEAD~5</code></td>
+                <td><span class="danger">❌ Terminal only</span></td>
+            </tr>
+            <tr>
+                <td data-en="Delete Last Commit" data-el="Διαγραφή Last">Delete Last Commit</td>
+                <td><code>git reset --soft HEAD~1</code></td>
+                <td>Source Control → Commit history → Undo Commit</td>
+            </tr>
+            <tr>
+                <td data-en="Hard Reset" data-el="Hard Reset">Hard Reset</td>
+                <td><code>git reset --hard HEAD~1</code></td>
+                <td><span class="danger">❌ Risky (terminal only)</span></td>
+            </tr>
+            <tr>
+                <td data-en="Stash Changes" data-el="Stash Changes">Stash Changes</td>
+                <td><code>git stash</code></td>
+                <td>Source Control panel → "Stash" from menu</td>
+            </tr>
+            <tr>
+                <td data-en="Stash with Name" data-el="Stash με Όνομα">Stash with Name</td>
+                <td><code>git stash push -m "name"</code></td>
+                <td><span class="danger">❌ Terminal only</span></td>
+            </tr>
+            <tr>
+                <td data-en="Apply Stash" data-el="Apply Stash">Apply Stash</td>
+                <td><code>git stash pop</code></td>
+                <td>Source Control → Stashes → Apply / Pop</td>
+            </tr>
+            <tr>
+                <td data-en="Cherry-pick" data-el="Cherry-pick">Cherry-pick</td>
+                <td><code>git cherry-pick a1b2c3d</code></td>
+                <td>Git History → Right-click commit → Cherry-pick</td>
+            </tr>
+            <tr>
+                <td data-en="Merge Branch" data-el="Merge Branch">Merge Branch</td>
+                <td><code>git merge feature</code></td>
+                <td>Source Control → Branches → Right-click → Merge</td>
+            </tr>
+            <tr>
+                <td data-en="Merge with Strategy" data-el="Merge με Στρατηγική">Merge with Strategy</td>
+                <td><code>git merge -X ours feature</code></td>
+                <td><span class="danger">❌ Terminal only</span></td>
+            </tr>
+            <tr>
+                <td data-en="View History" data-el="Προβολή History">View History</td>
+                <td><code>git log</code></td>
+                <td>Git History extension / Timeline view</td>
+            </tr>
+            <tr>
+                <td data-en="View Reflog" data-el="Προβολή Reflog">View Reflog</td>
+                <td><code>git reflog</code></td>
+                <td><span class="danger">❌ Terminal only</span></td>
+            </tr>
+            <tr>
+                <td data-en="Recover Commit" data-el="Ανάκτηση Commit">Recover Commit</td>
+                <td><code>git reset --hard HEAD@{3}</code></td>
+                <td>Git Graph → Find commit → Reset</td>
+            </tr>
+            <tr>
+                <td data-en="Bisect Debug" data-el="Bisect Debug">Bisect Debug</td>
+                <td><code>git bisect start</code></td>
+                <td><span class="danger">❌ Terminal only</span></td>
+            </tr>
+            <tr>
+                <td data-en="Worktrees" data-el="Worktrees">Worktrees</td>
+                <td><code>git worktree add</code></td>
+                <td><span class="danger">❌ Terminal only</span></td>
+            </tr>
+            <tr>
+                <td data-en="Amend Commit" data-el="Amend Commit">Amend Commit</td>
+                <td><code>git commit --amend</code></td>
+                <td>Source Control → Commit checkbox (Amend)</td>
+            </tr>
+            <tr>
+                <td data-en="Rename Branch" data-el="Rename Branch">Rename Branch</td>
+                <td><code>git branch -m old new</code></td>
+                <td>Source Control → Branches → Right-click → Rename</td>
+            </tr>
+            <tr>
+                <td data-en="Delete Branch" data-el="Delete Branch">Delete Branch</td>
+                <td><code>git branch -d branch</code></td>
+                <td>Source Control → Branches → Right-click → Delete</td>
+            </tr>
+        </tbody>
+    </table>
+
+    <h3 data-en="Recommended VS Code Extensions" data-el="Προτεινόμενες VS Code Extensions">Recommended VS Code Extensions</h3>
+    <p data-en="These extensions enhance Git capabilities in VS Code:" data-el="Αυτές οι επεκτάσεις βελτιώνουν τις δυνατότητες Git σε VS Code:">These extensions enhance Git capabilities in VS Code:</p>
+
+    <div class="example-section">
+        <div class="example-title" data-en="Essential Git Extensions" data-el="Βασικές Git Extensions">Essential Git Extensions</div>
+        <ul>
+            <li><strong data-en="GitLens" data-el="GitLens">GitLens</strong> — Best git blame, history, reflog viewer, commit details</li>
+            <li><strong data-en="Git Graph" data-el="Git Graph">Git Graph</strong> — Visual commit graph, cherry-pick, rebase UI</li>
+            <li><strong data-en="Git History" data-el="Git History">Git History</strong> — View & search git log with full diff</li>
+            <li><strong data-en="Conventional Commits" data-el="Conventional Commits">Conventional Commits</strong> — Semantic commit message templates</li>
+            <li><strong data-en="Git Ignore" data-el="Git Ignore">Git Ignore</strong> — Generate .gitignore files</li>
+        </ul>
+    </div>
+
+    <h3 data-en="When to Use Terminal vs UI" data-el="Πότε Terminal vs UI">When to Use Terminal vs UI</h3>
+    <div class="comparison">
+        <div class="comparison-item">
+            <h4 data-en="Use VS Code UI When:" data-el="Χρησιμοποιήστε VS Code UI όταν:">Use VS Code UI When:</h4>
+            <ul>
+                <li data-en="Simple merge/rebase" data-el="Απλή συγχώνευση">Simple merge/rebase operations</li>
+                <li data-en="Committing changes" data-el="Κάνετε commit">Committing and amending</li>
+                <li data-en="Switching branches" data-el="Εναλλαγή branches">Switching branches</li>
+                <li data-en="Viewing history" data-el="Προβολή ιστορίας">Viewing history and diffs</li>
+                <li data-en="Stashing work" data-el="Stashing εργασίας">Stashing work temporarily</li>
+            </ul>
+        </div>
+        <div class="comparison-item">
+            <h4 data-en="Use Terminal When:" data-el="Χρησιμοποιήστε Terminal όταν:">Use Terminal When:</h4>
+            <ul>
+                <li data-en="Interactive rebase" data-el="Interactive rebase">Interactive rebase (-i)</li>
+                <li data-en="Advanced rebase" data-el="Προχωρημένο rebase">Advanced rebase (--onto, etc.)</li>
+                <li data-en="Named stashes" data-el="Ονοματισμένα stashes">Named stashes with messages</li>
+                <li data-en="Bisecting" data-el="Bisecting">Bisecting to find bugs</li>
+                <li data-en="Worktrees" data-el="Worktrees">Worktrees and complex workflows</li>
+                <li data-en="Reflog recovery" data-el="Reflog ανάκτηση">Reflog recovery operations</li>
+            </ul>
+        </div>
+    </div>
+
+    <div class="info-box">
+        <strong data-en="Pro Tip:" data-el="Pro Tip:">Pro Tip:</strong> <span data-en="The integrated terminal in VS Code (Ctrl+`) gives you the best of both worlds — Git UI for visual operations and terminal for advanced commands, all in one window!" data-el="Το ενσωματωμένο terminal σε VS Code (Ctrl+`) σας δίνει τα καλύτερα από τα δύο κόσμια — Git UI για visual λειτουργίες και terminal για προχωρημένες εντολές!">The integrated terminal in VS Code (Ctrl+`) gives you the best of both worlds — Git UI for visual operations and terminal for advanced commands, all in one window!</span></div>
 </section>
 
 <footer>
