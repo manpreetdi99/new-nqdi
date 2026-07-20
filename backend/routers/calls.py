@@ -21,22 +21,74 @@ def update_call_comment(req: CommentRequest):
         conn = get_connection(req.database)
         cursor = conn.cursor()
 
-        # Upsert: DwAnalysisCommentToSessionMapping holds one row per SessionId
-        # (SessionId, Comment) — no separate comment table / bridge needed.
-        cursor.execute(
-            "SELECT 1 FROM DwAnalysisCommentToSessionMapping WHERE SessionId = ?",
-            (req.session_id,),
-        )
-        if cursor.fetchone():
+        wrote_old = False
+        wrote_dw = False
+
+        # Old way: AnalysisComment (comment text, deduped) + AnalysisCommentSessionsBridge
+        # (SessionId -> commentId). Kept alongside the newer mapping table so both
+        # get the write.
+        try:
+            cursor.execute("SELECT commentID FROM AnalysisComment WHERE Comment = ?", (req.comment,))
+            row = cursor.fetchone()
+
+            if row:
+                comment_id = row[0]
+            else:
+                try:
+                    # We must insert it. In SQL Server OUTPUT INSERTED is supported.
+                    cursor.execute("INSERT INTO AnalysisComment (Comment) OUTPUT INSERTED.commentID VALUES (?)", (req.comment,))
+                    comment_id = cursor.fetchone()[0]
+                except Exception:
+                    # Fallback if OUTPUT INSERTED is not supported or identity fails
+                    cursor.execute("INSERT INTO AnalysisComment (Comment) VALUES (?)", (req.comment,))
+                    cursor.execute("SELECT @@IDENTITY")
+                    comment_id = cursor.fetchone()[0]
+
+            # check if it exists in bridge
+            cursor.execute("SELECT sessionID FROM AnalysisCommentSessionsBridge WHERE sessionID = ?", (req.session_id,))
+            if cursor.fetchone():
+                cursor.execute("UPDATE AnalysisCommentSessionsBridge SET commentId = ? WHERE sessionID = ?", (comment_id, req.session_id))
+            else:
+                cursor.execute("INSERT INTO AnalysisCommentSessionsBridge (sessionID, commentId) VALUES (?, ?)", (req.session_id, comment_id))
+
+            wrote_old = True
+        except Exception as e:
+            print(f"Error in update_call_comment old-way bridge update (continuing): {e}")
+            # Reset the transaction (some ODBC drivers abort the whole txn on error)
+            # so the mapping-table write below isn't blocked by this failure.
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+        # New way: DwAnalysisCommentToSessionMapping holds one row per SessionId
+        # (SessionId, Comment) — upsert it too.
+        try:
             cursor.execute(
-                "UPDATE DwAnalysisCommentToSessionMapping SET Comment = ? WHERE SessionId = ?",
-                (req.comment, req.session_id),
+                "SELECT 1 FROM DwAnalysisCommentToSessionMapping WHERE SessionId = ?",
+                (req.session_id,),
             )
-        else:
-            cursor.execute(
-                "INSERT INTO DwAnalysisCommentToSessionMapping (SessionId, Comment) VALUES (?, ?)",
-                (req.session_id, req.comment),
-            )
+            if cursor.fetchone():
+                cursor.execute(
+                    "UPDATE DwAnalysisCommentToSessionMapping SET Comment = ? WHERE SessionId = ?",
+                    (req.comment, req.session_id),
+                )
+            else:
+                cursor.execute(
+                    "INSERT INTO DwAnalysisCommentToSessionMapping (SessionId, Comment) VALUES (?, ?)",
+                    (req.session_id, req.comment),
+                )
+
+            wrote_dw = True
+        except Exception as e:
+            print(f"Error in update_call_comment mapping upsert (continuing): {e}")
+            try:
+                conn.rollback()
+            except Exception:
+                pass
+
+        if not wrote_old and not wrote_dw:
+            raise Exception("Could not write comment to AnalysisComment/bridge or DwAnalysisCommentToSessionMapping")
 
         # If comment starts with 'fake' or 'FAKE', set session as invalid (Valid = 0), otherwise Valid = 1
         if req.comment and req.comment.lower().startswith("fake"):
