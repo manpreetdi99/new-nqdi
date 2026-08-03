@@ -1022,10 +1022,14 @@ const Index = () => {
 
           <TabsContent value="Summary">
             <SummaryTab
+              allCallsRows={filteredAllCallsRows}
+              dataCallsRows={dataCallsRows}
               locationSummary={locationSummary}
               locationSummaryTotals={locationSummaryTotals}
               dataLocationSummary={dataLocationSummary}
               dataLocationSummaryTotals={dataLocationSummaryTotals}
+              database={selectedDatabase}
+              collections={selectedCallsCollections}
             />
           </TabsContent>
 
