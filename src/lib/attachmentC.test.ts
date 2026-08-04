@@ -119,6 +119,35 @@ describe("voice KPIs", () => {
     expect(stats.afr).toBeCloseTo(0.011627906976744186, 12);
   });
 
+  it("recomputes the rates with the system releases out of the base", () => {
+    // 84 normal + 1 dropped + 1 failed + 4 system releases = 90 attempts.
+    const stats = buildVoiceStats([
+      ...rows,
+      ...Array.from({ length: 4 }, () => call({ Location: "Vodafone Free A", status: "System Realase" })),
+    ]);
+
+    expect(stats.attempts).toBe(90);
+    expect(stats.sysRelease).toBe(4);
+    expect(stats.csr).toBeCloseTo(84 / 90, 12);
+    expect(stats.dcr).toBeCloseTo(1 / 89, 12);
+    expect(stats.srr).toBeCloseTo(4 / 89, 12);
+
+    // Χωρίς system releases: 86 attempts, 85 total calls — όπως το σκέτο σενάριο.
+    expect(stats.withoutSysRelease.attempts).toBe(86);
+    expect(stats.withoutSysRelease.connections).toBe(85);
+    expect(stats.withoutSysRelease.csr).toBeCloseTo(84 / 86, 12);
+    expect(stats.withoutSysRelease.dcr).toBeCloseTo(1 / 85, 12);
+    expect(stats.withoutSysRelease.afr).toBeCloseTo(1 / 86, 12);
+  });
+
+  it("leaves the rates untouched when there are no system releases", () => {
+    const stats = buildVoiceStats(rows);
+
+    expect(stats.withoutSysRelease.csr).toBe(stats.csr);
+    expect(stats.withoutSysRelease.dcr).toBe(stats.dcr);
+    expect(stats.withoutSysRelease.afr).toBe(stats.afr);
+  });
+
   it("splits setup time into MOC (A->B) and MTC (B->A)", () => {
     const stats = buildVoiceStats([
       call({ callDir: "A->B", setupTime: 3 }),

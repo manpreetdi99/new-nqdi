@@ -24,14 +24,15 @@ export interface OperatorMeta {
 }
 
 /**
- * Σταθερά χρώματα ανά operator (dataviz categorical slots 1-3, validated
- * all-pairs για dark surface). Το χρώμα ακολουθεί την οντότητα: ένα φίλτρο που
- * κόβει operator δεν ξαναβάφει τους υπόλοιπους.
+ * Σταθερά χρώματα ανά operator, στα brand χρώματα (πράσινο / κόκκινο / μαύρο).
+ * Το χρώμα ακολουθεί την οντότητα: ένα φίλτρο που κόβει operator δεν ξαναβάφει
+ * τους υπόλοιπους. Το μαύρο της NOVA πατάει πάνω σε dark surface, οπότε τα
+ * swatches/bars το τυπώνουν με λεπτό φωτεινό περίγραμμα για να διαβάζεται.
  */
 const OPERATOR_SLOTS: { key: string; label: string; color: string; match: RegExp }[] = [
-  { key: "COSMOTE", label: "COSMOTE", color: "#3987e5", match: /cosmote/i },
-  { key: "VODAFONE", label: "VODAFONE", color: "#d95926", match: /vodafone/i },
-  { key: "NOVA", label: "NOVA", color: "#199e70", match: /nova|wind/i },
+  { key: "COSMOTE", label: "COSMOTE", color: "#3ab54a", match: /cosmote/i },
+  { key: "VODAFONE", label: "VODAFONE", color: "#e60000", match: /vodafone/i },
+  { key: "NOVA", label: "NOVA", color: "#111318", match: /nova|wind/i },
 ];
 
 /** Ό,τι δεν αναγνωρίζεται μένει ουδέτερο — δεν παράγουμε νέα hues. */
@@ -126,6 +127,20 @@ const numeric = (value: number | null | undefined): number | null =>
 
 /* ────────────────────────── TABLE 20 / 21 — Voice ────────────────────────── */
 
+/**
+ * Οι βάσεις και τα rates ενός σεναρίου υπολογισμού. Το VoiceStats ικανοποιεί
+ * το ίδιο σχήμα, οπότε "με" και "χωρίς" system releases διαβάζονται ίδια.
+ */
+export interface VoiceRates {
+  /** Βάση των CSR / AFR */
+  attempts: number;
+  /** Βάση του DCR */
+  connections: number;
+  csr: number | null;
+  dcr: number | null;
+  afr: number | null;
+}
+
 export interface VoiceStats {
   /** Total Nbr. of Call Attempts */
   attempts: number;
@@ -145,6 +160,11 @@ export interface VoiceStats {
   afr: number | null;
   /** System Release Rate = system releases / connections */
   srr: number | null;
+  /**
+   * Τα ίδια rates με τα system releases εντελώς έξω από τη βάση: οι κλήσεις που
+   * έκλεισε το σύστημα δεν χρεώνονται ούτε ως επιτυχία ούτε ως αποτυχία.
+   */
+  withoutSysRelease: VoiceRates;
   mos: Sample;
   /** Low Speech Quality Calls (POLQA < 2.2) */
   lowQualityCalls: number;
@@ -170,6 +190,7 @@ export const EMPTY_VOICE_STATS: VoiceStats = {
   dcr: null,
   afr: null,
   srr: null,
+  withoutSysRelease: { attempts: 0, connections: 0, csr: null, dcr: null, afr: null },
   mos: EMPTY_SAMPLE,
   lowQualityCalls: 0,
   badQualityCalls: 0,
@@ -225,6 +246,11 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
   const attempts = rows.length;
   const connections = attempts - counts.failed;
 
+  // "Avoid system release": οι system releases φεύγουν και από τον αριθμητή
+  // (δεν είναι normal release ούτε drop) και από τις βάσεις.
+  const attemptsExcl = attempts - counts.sysRelease;
+  const connectionsExcl = attemptsExcl - counts.failed;
+
   return {
     attempts,
     completed: counts.completed,
@@ -236,6 +262,13 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
     dcr: ratio(counts.dropped, connections),
     afr: ratio(counts.failed, attempts),
     srr: ratio(counts.sysRelease, connections),
+    withoutSysRelease: {
+      attempts: attemptsExcl,
+      connections: connectionsExcl,
+      csr: ratio(counts.completed, attemptsExcl),
+      dcr: ratio(counts.dropped, connectionsExcl),
+      afr: ratio(counts.failed, attemptsExcl),
+    },
     mos: mean(mosValues),
     lowQualityCalls,
     badQualityCalls,

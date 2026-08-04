@@ -257,26 +257,37 @@ export function useSignallingHighlights(rows: L3Row[]): HighlightResult[] {
  * Presentation helpers — Tailwind classes matching the rest of CallDetail's table
  * =========================================================================*/
 
+/** Αριστερή λωρίδα + απαλό background της γραμμής του πίνακα. */
 export const SEV_ROW_CLASS: Record<Severity, string> = {
-  red: "border-l-2 border-destructive bg-destructive/5",
-  orange: "border-l-2 border-warning bg-warning/5",
-  yellow: "border-l-2 border-amber-400",
-  green: "border-l-2 border-success bg-success/5",
-  none: "border-l-2 border-transparent",
+  red: "border-l-2 border-l-destructive bg-destructive/5",
+  orange: "border-l-2 border-l-warning bg-warning/5",
+  yellow: "border-l-2 border-l-amber-400 bg-amber-400/5",
+  green: "border-l-2 border-l-success bg-success/5",
+  none: "border-l-2 border-l-transparent",
 };
 
+/** Pill του badge «Ειδοπ.» — background + κείμενο. */
 export const SEV_BADGE_CLASS: Record<Severity, string> = {
-  red: "text-destructive",
-  orange: "text-warning",
-  yellow: "text-amber-500",
-  green: "text-success",
+  red: "bg-destructive/15 text-destructive",
+  orange: "bg-warning/15 text-warning",
+  yellow: "bg-amber-400/15 text-amber-400",
+  green: "bg-success/15 text-success",
   none: "text-transparent",
+};
+
+/** Συμπαγές χρώμα (dot / tick του timeline). */
+export const SEV_DOT_COLOR: Record<Severity, string> = {
+  red: "bg-destructive",
+  orange: "bg-warning",
+  yellow: "bg-amber-400",
+  green: "bg-success",
+  none: "bg-muted-foreground",
 };
 
 export const SEV_LABEL: Record<Severity, string> = {
   red: "DROP/FAIL",
   orange: "ABNORMAL",
-  yellow: "",
+  yellow: "WATCH",
   green: "OK",
   none: "",
 };

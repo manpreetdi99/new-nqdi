@@ -15,7 +15,7 @@ import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSid
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE } from "@/lib/chartStyles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
-import { useSignallingHighlights, SEV_ROW_CLASS, SEV_BADGE_CLASS, SEV_LABEL } from "@/lib/signallingHighlights";
+import { L3SignalingPanel } from "@/components/L3SignalingPanel";
 //ReferenceLine για γραμμες στο διαγραμμα, πχ για thresholds. 
 /**
  * Interface για τα props του Component CallDetail.
@@ -153,7 +153,6 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // L3 signaling (RRC/NAS/SIP messages) for A-side and B-side
   const [l3Data, setL3Data] = useState<CallL3MessagesResponse | null>(null);
   const [l3DataBSide, setL3DataBSide] = useState<CallL3MessagesResponse | null>(null);
-  const [selectedL3Side, setSelectedL3Side] = useState<"A" | "B">("A");
   const [deviceInfo, setDeviceInfo] = useState<CallDeviceInfo | null>(null);
   // LTE-only measurement/scanner comparison stats and raw scanner samples (used to cross-check UE vs scanner)
   const [lteMeasComp, setLteMeasComp] = useState<{ aSide: LteMeasurementStat[]; bSide: LteMeasurementStat[] } | null>(null);
@@ -837,13 +836,6 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // Ο αριστερός άξονας (ισχύς) χρειάζεται και από τις scanner σειρές (yAxisId="left"), αλλιώς
   // η σύγκριση scanner με μόνο RxQual/RSRQ ενεργό δεν σχεδιάζεται (λείπει ο άξονάς τους).
   const showLeftAxis = showStrength || showScanner || showBScanner;
-
-  // Currently displayed L3 signalling side (A/B) + per-row anomaly classification for it
-  const activeL3Data = useMemo(
-    () => (selectedL3Side === "B" ? l3DataBSide : l3Data),
-    [selectedL3Side, l3Data, l3DataBSide]
-  );
-  const l3Highlights = useSignallingHighlights(activeL3Data?.l3Messages ?? []);
 
   // Aggregate min/max/avg RSRP & RSRQ for the B-side LTE leg (samples, avg, min, max)
   const bSideLteSummary = useMemo(() => {
@@ -2048,133 +2040,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       )}
 
       {/* ── L3 Signaling (RRC / NAS / SIP) ── */}
-      {(() => {
-        // A/B toggle mirrors the pattern used elsewhere: B-side button is disabled until B-side data exists
-        // (activeL3Data / l3Highlights are hoisted to component scope so useSignallingHighlights stays a top-level hook call)
-        const hasL3BSide = !!l3DataBSide?.callWindow;
-        if (!activeL3Data || !activeL3Data.callWindow) return null;
-        return (
-        <div className="bg-card border border-border rounded-lg p-3 space-y-3">
-          <div className="flex items-center justify-between flex-wrap gap-2">
-            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <Signal className="h-4 w-4 text-primary" />
-              L3 Signaling
-              <span className={`text-xs px-2 py-0.5 rounded font-medium ${activeL3Data.callWindow.callDir === "MO" ? "bg-primary/10 text-primary" : "bg-accent/10 text-accent"}`}>
-                {activeL3Data.callWindow.callDir ?? "—"}
-              </span>
-              <div className="inline-flex rounded-md border border-border overflow-hidden">
-                <button
-                  type="button"
-                  onClick={() => setSelectedL3Side("A")}
-                  className={`px-2 py-1 text-xs font-normal ${selectedL3Side === "A" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
-                >
-                  A-side
-                </button>
-                <button
-                  type="button"
-                  disabled={!hasL3BSide}
-                  onClick={() => hasL3BSide && setSelectedL3Side("B")}
-                  className={`px-2 py-1 text-xs font-normal border-l border-border ${selectedL3Side === "B" ? "bg-primary text-primary-foreground" : hasL3BSide ? "bg-muted text-foreground hover:bg-muted/80" : "bg-muted text-muted-foreground/40 cursor-not-allowed"}`}
-                >
-                  B-side
-                </button>
-              </div>
-            </h3>
-            {/* Summary badges — message count per phase, only rendered for phases that actually have messages */}
-            <div className="flex items-center gap-2 text-xs">
-              {(["before", "during", "after"] as const).map(phase => {
-                const count = activeL3Data.summary.byPhase[phase];
-                return count > 0 ? (
-                  <span key={phase} className="px-2 py-0.5 rounded border border-primary/30 bg-primary/5 font-mono">
-                    {phase} <b>{count}</b>
-                  </span>
-                ) : null;
-              })}
-              {activeL3Data.summary.total === 0 && (
-                <span className="text-muted-foreground">Δεν βρέθηκαν L3 messages</span>
-              )}
-            </div>
-          </div>
+      <L3SignalingPanel l3Data={l3Data} l3DataBSide={l3DataBSide} />
 
-          {/* Unified L3 message log — combines RRC/NAS/SIP messages from all layers/technologies into
-              one chronological table. PCI/ARFCN/SIP columns are only rendered when at least one row
-              actually has that data, so e.g. a pure-SIP call doesn't show empty PCI/ARFCN columns. */}
-          {activeL3Data.l3Messages.length > 0 && (() => {
-            const rows = activeL3Data.l3Messages;
-            const hasPci    = rows.some(r => r.PCI != null);
-            const hasArfcn  = rows.some(r => r.ARFCN != null);
-            const hasSip    = rows.some(r => r.SIPResponse != null || r.SIPCallId != null);
-
-            return (
-              <div className="overflow-x-auto max-h-[320px] overflow-y-auto rounded border border-border/50">
-                <table className="w-full text-xs">
-                  <thead className="sticky top-0 bg-muted border-b border-border z-10">
-                    <tr>
-                      <th className="px-2 py-1 font-semibold text-left">Φάση</th>
-                      <th className="px-2 py-1 font-semibold text-left">Ώρα</th>
-                      <th className="px-2 py-1 font-semibold text-left">Δευτ.</th>
-                      <th className="px-2 py-1 font-semibold text-left">Τεχνολογία</th>
-                      <th className="px-2 py-1 font-semibold text-left">Layer</th>
-                      <th className="px-2 py-1 font-semibold text-left">Dir</th>
-                      <th className="px-2 py-1 font-semibold text-left">Μήνυμα</th>
-                      {hasPci   && <th className="px-2 py-1 font-semibold text-left">PCI</th>}
-                      {hasArfcn && <th className="px-2 py-1 font-semibold text-left">ARFCN</th>}
-                      {hasSip   && <th className="px-2 py-1 font-semibold text-left">SIP</th>}
-                      <th className="px-2 py-1 font-semibold text-left">Λεπτομέρειες</th>
-                      <th className="px-2 py-1 font-semibold text-right">Ειδοπ.</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-border/50">
-                    {rows.map((r, i) => {
-                      // Same before/during/after color convention used throughout this component
-                      const phaseColor =
-                        r.Phase === "before" ? "text-amber-400" :
-                        r.Phase === "after"  ? "text-orange-400" :
-                        "text-primary";
-                      const h = l3Highlights[i] ?? { severity: "none" as const, reason: "" };
-                      // Paging is high-volume noise in the L3 log — render it dimmed
-                      const isPaging = /paging/i.test(r.SimpleMsgName || r.MsgName || "");
-                      return (
-                        <tr
-                          key={i}
-                          title={h.reason || undefined}
-                          className={`hover:bg-muted/40 transition-colors ${SEV_ROW_CLASS[h.severity]}${isPaging ? " opacity-50" : ""}`}
-                        >
-                          <td className={`px-2 py-0.5 font-semibold ${phaseColor}`}>{r.Phase}</td>
-                          <td className="px-2 py-0.5 font-mono whitespace-nowrap">
-                            {r.MsgTime ? new Date(r.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}
-                          </td>
-                          <td className="px-2 py-0.5 font-mono text-right">
-                            {r.SecondsFromCallStart != null ? `${r.SecondsFromCallStart > 0 ? "+" : ""}${r.SecondsFromCallStart.toFixed(1)}s` : "—"}
-                          </td>
-                          <td className="px-2 py-0.5 font-mono text-[10px] text-cyan-400">{r.Technology ?? "—"}</td>
-                          <td className="px-2 py-0.5 font-mono text-[10px]">{r.Layer ?? "—"}</td>
-                          <td className="px-2 py-0.5">{r.Direction ?? "—"}</td>
-                          {/* Prefer the richest available message label: combined SIP response name, then
-                              simplified name, then raw MsgName */}
-                          <td className="px-2 py-0.5 max-w-[200px] truncate" title={r.MsgName ?? ""}>{r.CombinedMsgNameSIPResponse || r.SimpleMsgName || r.MsgName || "—"}</td>
-                          {hasPci   && <td className="px-2 py-0.5 font-mono">{r.PCI ?? "—"}</td>}
-                          {hasArfcn && <td className="px-2 py-0.5 font-mono">{r.ARFCN ?? "—"}</td>}
-                          {hasSip   && <td className="px-2 py-0.5 font-mono text-[10px]">{r.SIPResponse ?? "—"}</td>}
-                          <td className="px-2 py-0.5 font-mono text-[10px] max-w-[320px] truncate" title={r.Message ?? ""}>{r.Message ?? "—"}</td>
-                          <td className={`px-2 py-0.5 text-right font-semibold text-[10px] whitespace-nowrap ${SEV_BADGE_CLASS[h.severity]}`}>
-                            {SEV_LABEL[h.severity]}
-                          </td>
-                        </tr>
-                      );
-                    })}
-                  </tbody>
-                </table>
-              </div>
-            );
-          })()}
-
-          {activeL3Data.summary.total === 0 && (
-            <p className="text-xs text-muted-foreground">Δεν βρέθηκαν L3 messages στο παράθυρο ±{activeL3Data.summary.windowBeforeSec}s.</p>
-          )}
-        </div>
-        );
-      })()}
       {/* ── Scanner / Device Info ── */}
       {deviceInfo && (
         <div className="bg-card border border-border rounded-lg p-3 space-y-3">

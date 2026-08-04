@@ -1,12 +1,11 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { ChevronDown, Database, MapPin, Phone, Radio, Signal, Wifi } from "lucide-react";
+import { Database, MapPin, Phone, Radio, Wifi } from "lucide-react";
 
 import type { AllCallsRow, DataCallRow } from "@/lib/api";
 import {
   BAD_QUALITY_MOS,
   buildDataSections,
   buildReportPeriod,
-  buildTechnologyMix,
   buildVoiceStats,
   buildVoiceTable,
   collectOperators,
@@ -16,40 +15,18 @@ import {
   formatNumber,
   formatPercent,
   LOW_QUALITY_MOS,
-  OTHER_TECHNOLOGY,
   resolveOperator,
-  TECHNOLOGY_BUCKETS,
   type DataTestSection,
   type DataTestStats,
   type OperatorMeta,
-  type TechnologyShare,
+  type VoiceRates,
   type VoiceStats,
   type VoiceTable,
 } from "@/lib/attachmentC";
 
-interface VoiceLocationRow {
-  location: string;
-  complete: number;
-  drop: number;
-  fail: number;
-  sysRelease: number;
-  total: number;
-}
-
-interface DataLocationRow {
-  location: string;
-  sessions: number;
-  pass: number;
-  fail: number;
-}
-
 interface SummaryTabProps {
   allCallsRows: AllCallsRow[];
   dataCallsRows: DataCallRow[];
-  locationSummary: VoiceLocationRow[];
-  locationSummaryTotals: Omit<VoiceLocationRow, "location">;
-  dataLocationSummary: DataLocationRow[];
-  dataLocationSummaryTotals: Omit<DataLocationRow, "location">;
   database?: string;
   collections?: string[];
 }
@@ -97,8 +74,12 @@ const OUTCOME_SEGMENTS = [
 
 /* ────────────────────────── Μικρά building blocks ────────────────────────── */
 
+/** Το περίγραμμα κρατάει ορατό το μαύρο της NOVA πάνω στο dark surface. */
 const OperatorSwatch = ({ color }: { color: string }) => (
-  <span className="inline-block h-2.5 w-2.5 shrink-0 rounded-full" style={{ backgroundColor: color }} />
+  <span
+    className="inline-block h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-inset ring-white/25"
+    style={{ backgroundColor: color }}
+  />
 );
 
 /** Meter: ένα ποσοστό απέναντι σε όριο. Το fill κουβαλάει τη σοβαρότητα. */
@@ -116,9 +97,9 @@ const RateMeter = ({ value, higherIsBetter }: { value: number | null; higherIsBe
 
 /** Μέγεθος σε σχέση με το max της γραμμής — χρώμα του operator (ταυτότητα). */
 const MagnitudeBar = ({ value, max, color }: { value: number; max: number; color: string }) => (
-  <div className="h-1 w-full rounded-full" style={{ backgroundColor: `${color}1f` }}>
+  <div className="h-1 w-full rounded-full bg-foreground/[0.08]">
     <div
-      className="h-full rounded-full transition-[width] duration-500"
+      className="h-full rounded-full ring-1 ring-inset ring-white/20 transition-[width] duration-500"
       style={{ width: `${max > 0 ? (value / max) * 100 : 0}%`, backgroundColor: color }}
     />
   </div>
@@ -157,9 +138,10 @@ const MetaChip = ({ icon: Icon, label, value }: { icon?: typeof Database; label:
 
 /* ────────────────────────── Γραμμές των KPI πινάκων ────────────────────────── */
 
+/** `alt`: η ίδια μέτρηση στο άλλο σενάριο (με ↔ χωρίς system releases). */
 type Cell =
-  | { kind: "rate"; value: number | null; higherIsBetter: boolean }
-  | { kind: "count"; value: number }
+  | { kind: "rate"; value: number | null; higherIsBetter: boolean; alt?: string }
+  | { kind: "count"; value: number; alt?: string }
   | { kind: "value"; value: number | null; decimals: number; unit?: string; samples?: number; higherIsBetter?: boolean }
   | { kind: "mix"; stats: VoiceStats };
 
@@ -192,32 +174,74 @@ const cellText = (cell: Cell): string => {
   return "";
 };
 
-const VOICE_ROWS: KpiRowSpec<VoiceStats>[] = [
+/** Ποιο σενάριο βάσης διαβάζουμε — το VoiceStats έχει ήδη το σχήμα του VoiceRates. */
+const ratesOf = (stats: VoiceStats, excludeSysRelease: boolean): VoiceRates =>
+  excludeSysRelease ? stats.withoutSysRelease : stats;
+
+/** Το δεύτερο, μικρό νούμερο κάτω από το κύριο: το άλλο σενάριο. */
+const altPercent = (value: number | null, excludeSysRelease: boolean): string | undefined =>
+  excludeSysRelease && value != null ? `incl. SR ${formatPercent(value, 2)}` : undefined;
+
+const altCount = (value: number, excludeSysRelease: boolean): string | undefined =>
+  excludeSysRelease ? `incl. SR ${formatCount(value)}` : undefined;
+
+const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
   {
     label: "Call Success Rate (%)",
-    hint: "Normal releases / call attempts",
+    hint: excludeSysRelease ? "Normal releases / attempts excl. system releases" : "Normal releases / call attempts",
     emphasis: true,
-    cell: (s) => ({ kind: "rate", value: s.csr, higherIsBetter: true }),
+    cell: (s) => ({
+      kind: "rate",
+      value: ratesOf(s, excludeSysRelease).csr,
+      higherIsBetter: true,
+      alt: altPercent(s.csr, excludeSysRelease),
+    }),
   },
   {
     label: "Dropped Call Rate (%)",
-    hint: "Dropped calls / total calls",
+    hint: excludeSysRelease ? "Dropped calls / total calls excl. system releases" : "Dropped calls / total calls",
     emphasis: true,
-    cell: (s) => ({ kind: "rate", value: s.dcr, higherIsBetter: false }),
+    cell: (s) => ({
+      kind: "rate",
+      value: ratesOf(s, excludeSysRelease).dcr,
+      higherIsBetter: false,
+      alt: altPercent(s.dcr, excludeSysRelease),
+    }),
   },
   {
     label: "Access Failure Rate (%)",
-    hint: "Unsuccessful attempts / call attempts",
+    hint: excludeSysRelease ? "Unsuccessful attempts / attempts excl. system releases" : "Unsuccessful attempts / call attempts",
     emphasis: true,
-    cell: (s) => ({ kind: "rate", value: s.afr, higherIsBetter: false }),
+    cell: (s) => ({
+      kind: "rate",
+      value: ratesOf(s, excludeSysRelease).afr,
+      higherIsBetter: false,
+      alt: altPercent(s.afr, excludeSysRelease),
+    }),
   },
   {
+    // Πάντα στην πλήρη βάση — αλλιώς ο δείκτης δεν θα είχε νόημα.
     label: "System Release Rate (%)",
-    hint: "System releases / total calls",
+    hint: "System releases / total calls (πάντα incl.)",
     cell: (s) => ({ kind: "rate", value: s.srr, higherIsBetter: false }),
   },
-  { label: "Call Attempts", cell: (s) => ({ kind: "count", value: s.attempts }) },
-  { label: "Total Calls", hint: "Attempts − unsuccessful attempts", cell: (s) => ({ kind: "count", value: s.connections }) },
+  {
+    label: excludeSysRelease ? "Call Attempts (excl. SR)" : "Call Attempts",
+    cell: (s) => ({
+      kind: "count",
+      value: ratesOf(s, excludeSysRelease).attempts,
+      alt: altCount(s.attempts, excludeSysRelease),
+    }),
+  },
+  {
+    label: excludeSysRelease ? "Total Calls (excl. SR)" : "Total Calls",
+    hint: "Attempts − unsuccessful attempts",
+    cell: (s) => ({
+      kind: "count",
+      value: ratesOf(s, excludeSysRelease).connections,
+      alt: altCount(s.connections, excludeSysRelease),
+    }),
+  },
   { label: "Unsuccessful Call Attempts", cell: (s) => ({ kind: "count", value: s.failed }) },
   { label: "Normal Releases", cell: (s) => ({ kind: "count", value: s.completed }) },
   { label: "Dropped Calls", cell: (s) => ({ kind: "count", value: s.dropped }) },
@@ -381,6 +405,14 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                                 n={formatCount(cell.samples)}
                               </span>
                             )}
+                            {(cell.kind === "rate" || cell.kind === "count") && cell.alt && (
+                              <span
+                                className="block text-[10px] leading-tight text-muted-foreground"
+                                title="Ίδιο KPI με τα system releases μέσα στη βάση"
+                              >
+                                {cell.alt}
+                              </span>
+                            )}
                           </span>
                         </div>
                       )}
@@ -450,25 +482,42 @@ const OutcomeLegend = () => (
   </div>
 );
 
-const OperatorTile = ({ operator, stats }: { operator: OperatorMeta; stats: VoiceStats }) => {
+const OperatorTile = ({
+  operator,
+  stats,
+  excludeSysRelease,
+}: {
+  operator: OperatorMeta;
+  stats: VoiceStats;
+  excludeSysRelease: boolean;
+}) => {
   const hasQualityData = stats.mos.samples > 0 || stats.setupAll.samples > 0;
+  const rates = ratesOf(stats, excludeSysRelease);
 
   return (
     <div className="rounded-xl border border-border bg-card p-4">
       <div className="flex items-center gap-2">
         <OperatorSwatch color={operator.color} />
         <span className="text-xs font-semibold tracking-wide text-foreground">{operator.label}</span>
-        <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground">Call success rate</span>
+        <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground">
+          Call success rate{excludeSysRelease && " (excl. SR)"}
+        </span>
       </div>
 
       <div className="mt-3 flex items-end justify-between gap-3">
-        <span className="text-3xl font-semibold leading-none text-foreground">{formatPercent(stats.csr, 1)}</span>
-        <span className="pb-0.5 text-[11px] text-muted-foreground">{formatCount(stats.attempts)} attempts</span>
+        <span className="text-3xl font-semibold leading-none text-foreground">{formatPercent(rates.csr, 1)}</span>
+        <span className="pb-0.5 text-[11px] text-muted-foreground">{formatCount(rates.attempts)} attempts</span>
       </div>
 
       <div className="mt-3">
-        <RateMeter value={stats.csr} higherIsBetter={true} />
+        <RateMeter value={rates.csr} higherIsBetter={true} />
       </div>
+
+      {excludeSysRelease && (
+        <p className="mt-2 text-[10px] text-muted-foreground">
+          incl. system releases {formatPercent(stats.csr, 1)} · {formatCount(stats.attempts)} attempts
+        </p>
+      )}
 
       <dl className="mt-3 grid grid-cols-3 gap-2 border-t border-border/60 pt-3">
         {[
@@ -499,98 +548,15 @@ const EmptyState = ({ message }: { message: string }) => (
   <p className="px-4 py-8 text-center text-xs text-muted-foreground">{message}</p>
 );
 
-/** Part-to-whole ανά operator: ποια τεχνολογία εξυπηρέτησε. */
-const TechnologyMixTable = ({
-  title,
-  operators,
-  mixFor,
-}: {
-  title: string;
-  operators: OperatorMeta[];
-  mixFor: (operatorKey: string) => TechnologyShare[];
-}) => {
-  const rows = operators
-    .map((operator) => ({ operator, mix: mixFor(operator.key) }))
-    .filter((row) => row.mix.length > 0);
-
-  if (rows.length === 0) return null;
-
-  const buckets = [...TECHNOLOGY_BUCKETS, OTHER_TECHNOLOGY].filter((bucket) =>
-    rows.some((row) => row.mix.some((share) => share.bucket === bucket.key)),
-  );
-
-  return (
-    <div>
-      <div className="bg-muted/20 px-4 py-2 text-xs font-semibold text-foreground">{title}</div>
-      <div className="overflow-x-auto">
-        <table className="w-full min-w-[560px] text-xs">
-          <thead>
-            <tr className="border-b border-border/60 text-[10px] uppercase tracking-wider text-muted-foreground">
-              <th className="px-4 py-2 text-left font-semibold">Operator</th>
-              {buckets.map((bucket) => (
-                <th key={bucket.key} className="px-3 py-2 text-right font-semibold">
-                  <span className="flex items-center justify-end gap-1.5">
-                    <span className="h-2 w-2 rounded-full" style={{ backgroundColor: bucket.color }} />
-                    {bucket.key}
-                  </span>
-                </th>
-              ))}
-              <th className="w-2/5 px-4 py-2 text-left font-semibold">Mix</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map(({ operator, mix }) => (
-              <tr key={operator.key} className="border-b border-border/40 last:border-b-0 hover:bg-muted/15">
-                <td className="px-4 py-2">
-                  <span className="flex items-center gap-2">
-                    <OperatorSwatch color={operator.color} />
-                    <span className="font-medium text-foreground">{operator.label}</span>
-                  </span>
-                </td>
-                {buckets.map((bucket) => {
-                  const share = mix.find((entry) => entry.bucket === bucket.key);
-                  return (
-                    <td key={bucket.key} className="px-3 py-2 text-right font-mono tabular-nums text-foreground/90">
-                      {share ? formatPercent(share.share, 1) : <span className="text-muted-foreground/40">—</span>}
-                    </td>
-                  );
-                })}
-                <td className="px-4 py-2">
-                  <div className="flex h-2 w-full gap-[2px]">
-                    {mix.map((share) => (
-                      <div
-                        key={share.bucket}
-                        className="first:rounded-l-full last:rounded-r-full"
-                        style={{ width: `${share.share * 100}%`, backgroundColor: share.color }}
-                        title={`${share.bucket}: ${formatCount(share.count)} (${formatPercent(share.share, 1)})`}
-                      />
-                    ))}
-                  </div>
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </div>
-    </div>
-  );
-};
-
 /* ────────────────────────── Το tab ────────────────────────── */
 
-const SummaryTab = ({
-  allCallsRows,
-  dataCallsRows,
-  locationSummary,
-  locationSummaryTotals,
-  dataLocationSummary,
-  dataLocationSummaryTotals,
-  database,
-  collections = [],
-}: SummaryTabProps) => {
+const SummaryTab = ({ allCallsRows, dataCallsRows, database, collections = [] }: SummaryTabProps) => {
   const [hideEmptyRows, setHideEmptyRows] = useState(false);
   const [markBest, setMarkBest] = useState(true);
-  const [showLocations, setShowLocations] = useState(false);
+  /** "Avoid system release": τα ποσοστά υπολογίζονται χωρίς τις κλήσεις που έκλεισε το σύστημα. */
+  const [excludeSysRelease, setExcludeSysRelease] = useState(false);
+
+  const rows = useMemo(() => voiceRows(excludeSysRelease), [excludeSysRelease]);
 
   const operators = useMemo(
     () => collectOperators([...allCallsRows.map((row) => row.Location), ...dataCallsRows.map((row) => row.Location)]),
@@ -614,21 +580,6 @@ const SummaryTab = ({
     }
     return new Map(Array.from(grouped, ([key, rows]) => [key, buildVoiceStats(rows)]));
   }, [allCallsRows]);
-
-  const technologyMix = useMemo(() => {
-    const build = (rows: { Location: string | null; technology: string | null }[]) => {
-      const grouped = new Map<string, (string | null)[]>();
-      for (const row of rows) {
-        const key = resolveOperator(row.Location).key;
-        const bucket = grouped.get(key);
-        if (bucket) bucket.push(row.technology);
-        else grouped.set(key, [row.technology]);
-      }
-      return new Map(Array.from(grouped, ([key, technologies]) => [key, buildTechnologyMix(technologies)]));
-    };
-
-    return { voice: build(allCallsRows), data: build(dataCallsRows) };
-  }, [allCallsRows, dataCallsRows]);
 
   const period = useMemo(
     () =>
@@ -682,13 +633,22 @@ const SummaryTab = ({
 
           {/* Hero: το ένα νούμερο που οδηγεί την αναφορά. */}
           <div className="min-w-[180px] text-right">
-            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Overall call success rate</div>
+            <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
+              Overall call success rate{excludeSysRelease && " (excl. SR)"}
+            </div>
             <div className="mt-1 text-5xl font-semibold leading-none tracking-tight text-foreground">
-              {formatPercent(overallStats.csr, 1)}
+              {formatPercent(ratesOf(overallStats, excludeSysRelease).csr, 1)}
             </div>
             <div className="mt-2 text-[11px] text-muted-foreground">
-              {formatCount(overallStats.completed)} normal releases / {formatCount(overallStats.attempts)} attempts
+              {formatCount(overallStats.completed)} normal releases /{" "}
+              {formatCount(ratesOf(overallStats, excludeSysRelease).attempts)} attempts
             </div>
+            {excludeSysRelease && (
+              <div className="mt-1 text-[11px] text-muted-foreground">
+                incl. system releases {formatPercent(overallStats.csr, 1)} · {formatCount(overallStats.sysRelease)} system
+                releases
+              </div>
+            )}
             <div className="mt-1 text-[11px] text-muted-foreground">{formatCount(dataCallsRows.length)} data tests</div>
           </div>
         </div>
@@ -705,6 +665,18 @@ const SummaryTab = ({
           ))}
 
           <div className="ml-auto flex items-center gap-4">
+            <label
+              className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground"
+              title="Τα ποσοστά υπολογίζονται χωρίς τις system release κλήσεις· η τιμή με αυτές μένει ορατή κάτω από κάθε νούμερο."
+            >
+              <input
+                type="checkbox"
+                checked={excludeSysRelease}
+                onChange={(event) => setExcludeSysRelease(event.target.checked)}
+                className="h-3 w-3 accent-[hsl(var(--primary))]"
+              />
+              Avoid system release
+            </label>
             <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground">
               <input
                 type="checkbox"
@@ -739,7 +711,14 @@ const SummaryTab = ({
           {operators.map((operator) => {
             const stats = voiceByOperator.get(operator.key);
             if (!stats || stats.attempts === 0) return null;
-            return <OperatorTile key={operator.key} operator={operator} stats={stats} />;
+            return (
+              <OperatorTile
+                key={operator.key}
+                operator={operator}
+                stats={stats}
+                excludeSysRelease={excludeSysRelease}
+              />
+            );
           })}
         </div>
       )}
@@ -755,7 +734,7 @@ const SummaryTab = ({
         >
           <KpiTable
             operators={operators.filter((operator) => (gsmTable.byOperator.get(operator.key)?.attempts ?? 0) > 0)}
-            rows={VOICE_ROWS}
+            rows={rows}
             hideEmptyRows={hideEmptyRows}
             markBest={markBest}
             {...voiceTableFor(gsmTable)}
@@ -774,7 +753,7 @@ const SummaryTab = ({
         >
           <KpiTable
             operators={operators.filter((operator) => (freeTable.byOperator.get(operator.key)?.attempts ?? 0) > 0)}
-            rows={VOICE_ROWS}
+            rows={rows}
             hideEmptyRows={hideEmptyRows}
             markBest={markBest}
             {...voiceTableFor(freeTable)}
@@ -804,182 +783,17 @@ const SummaryTab = ({
         </ReportCard>
       )}
 
-      {/* ── Technology mix (Attachment C: "Technology Time (%)") ── */}
-      {(technologyMix.voice.size > 0 || technologyMix.data.size > 0) && (
-        <ReportCard
-          eyebrow="Serving technology"
-          title="Technology mix"
-          subtitle="Ποσοστό επί του πλήθους — 2G → 5G"
-          icon={Signal}
-        >
-          <div className="divide-y divide-border/60">
-            <TechnologyMixTable
-              title="Voice calls"
-              operators={operators}
-              mixFor={(operatorKey) => technologyMix.voice.get(operatorKey) ?? []}
-            />
-            <TechnologyMixTable
-              title="Data tests"
-              operators={operators}
-              mixFor={(operatorKey) => technologyMix.data.get(operatorKey) ?? []}
-            />
-          </div>
-        </ReportCard>
-      )}
-
-      {/* ── Ανά τοποθεσία (το παλιό summary, διατηρημένο) ── */}
-      {(locationSummary.length > 0 || dataLocationSummary.length > 0) && (
-        <section className="overflow-hidden rounded-xl border border-border bg-card">
-          <button
-            type="button"
-            onClick={() => setShowLocations((open) => !open)}
-            className="flex w-full items-center gap-3 px-4 py-3 text-left hover:bg-muted/20"
-          >
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-              <Signal className="h-4 w-4 text-primary" />
-            </span>
-            <div>
-              <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">Breakdown</div>
-              <h2 className="text-sm font-semibold text-foreground">Ανά τοποθεσία (A-side location)</h2>
-            </div>
-            <ChevronDown
-              className={`ml-auto h-4 w-4 text-muted-foreground transition-transform ${showLocations ? "rotate-180" : ""}`}
-            />
-          </button>
-
-          {showLocations && (
-            <div className="border-t border-border">
-              {locationSummary.length > 0 && (
-                <div className="overflow-x-auto">
-                  <table className="w-full min-w-[560px] text-xs">
-                    <thead>
-                      <tr className="border-b border-border bg-muted text-left text-[10px] uppercase tracking-wider text-muted-foreground">
-                        <th className="px-4 py-2 font-semibold">Voice · Location</th>
-                        <th className="px-4 py-2 text-right font-semibold">Complete</th>
-                        <th className="px-4 py-2 text-right font-semibold">Sys release</th>
-                        <th className="px-4 py-2 text-right font-semibold">Drop</th>
-                        <th className="px-4 py-2 text-right font-semibold">Fail</th>
-                        <th className="px-4 py-2 text-right font-semibold">Total</th>
-                        <th className="px-4 py-2 text-right font-semibold">Success rate</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {locationSummary.map((row) => (
-                        <tr key={row.location} className="border-b border-border/40 hover:bg-muted/15">
-                          <td className="px-4 py-2">
-                            <span className="flex items-center gap-2">
-                              <OperatorSwatch color={resolveLocationColor(row.location)} />
-                              <span className="font-medium text-foreground">{row.location}</span>
-                            </span>
-                          </td>
-                          <LocationCells complete={row.complete} sysRelease={row.sysRelease} drop={row.drop} fail={row.fail} total={row.total} />
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr className="border-t border-border bg-muted/20 font-semibold">
-                        <td className="px-4 py-2 text-foreground">Total</td>
-                        <LocationCells
-                          complete={locationSummaryTotals.complete}
-                          sysRelease={locationSummaryTotals.sysRelease}
-                          drop={locationSummaryTotals.drop}
-                          fail={locationSummaryTotals.fail}
-                          total={locationSummaryTotals.total}
-                        />
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              )}
-
-              {dataLocationSummary.length > 0 && (
-                <div className="overflow-x-auto border-t border-border">
-                  <table className="w-full min-w-[560px] text-xs">
-                    <thead>
-                      <tr className="border-b border-border bg-muted text-left text-[10px] uppercase tracking-wider text-muted-foreground">
-                        <th className="px-4 py-2 font-semibold">Data · Location</th>
-                        <th className="px-4 py-2 text-right font-semibold">Sessions</th>
-                        <th className="px-4 py-2 text-right font-semibold">Pass</th>
-                        <th className="px-4 py-2 text-right font-semibold">Fail</th>
-                        <th className="px-4 py-2 text-right font-semibold">Pass rate</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {dataLocationSummary.map((row) => (
-                        <tr key={row.location} className="border-b border-border/40 hover:bg-muted/15">
-                          <td className="px-4 py-2">
-                            <span className="flex items-center gap-2">
-                              <OperatorSwatch color={resolveLocationColor(row.location)} />
-                              <span className="font-medium text-foreground">{row.location}</span>
-                            </span>
-                          </td>
-                          <td className="px-4 py-2 text-right font-mono tabular-nums text-foreground">{row.sessions}</td>
-                          <td className="px-4 py-2 text-right font-mono tabular-nums text-foreground/90">{row.pass || "—"}</td>
-                          <td className="px-4 py-2 text-right font-mono tabular-nums text-foreground/90">{row.fail || "—"}</td>
-                          <td className="px-4 py-2 text-right font-mono tabular-nums text-foreground">
-                            {formatPercent(row.pass + row.fail > 0 ? row.pass / (row.pass + row.fail) : null, 1)}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                    <tfoot>
-                      <tr className="border-t border-border bg-muted/20 font-semibold">
-                        <td className="px-4 py-2 text-foreground">Total</td>
-                        <td className="px-4 py-2 text-right font-mono tabular-nums text-foreground">{dataLocationSummaryTotals.sessions}</td>
-                        <td className="px-4 py-2 text-right font-mono tabular-nums text-foreground/90">{dataLocationSummaryTotals.pass || "—"}</td>
-                        <td className="px-4 py-2 text-right font-mono tabular-nums text-foreground/90">{dataLocationSummaryTotals.fail || "—"}</td>
-                        <td className="px-4 py-2 text-right font-mono tabular-nums text-foreground">
-                          {formatPercent(
-                            dataLocationSummaryTotals.pass + dataLocationSummaryTotals.fail > 0
-                              ? dataLocationSummaryTotals.pass / (dataLocationSummaryTotals.pass + dataLocationSummaryTotals.fail)
-                              : null,
-                            1,
-                          )}
-                        </td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              )}
-            </div>
-          )}
-        </section>
-      )}
-
       <p className="px-1 text-[10px] text-muted-foreground">
         (*) Τα KPIs ακολουθούν τους ορισμούς του Attachment B. Οι ράβδοι στα ποσοστά δείχνουν κατάσταση (πράσινο → κόκκινο),
         οι ράβδοι στα πλήθη δείχνουν μέγεθος στο χρώμα του operator. Κάθε τιμή υπάρχει και ως αριθμός στον πίνακα.
+        {excludeSysRelease &&
+          " Με το «Avoid system release» οι κλήσεις που έκλεισε το σύστημα βγαίνουν από τη βάση των ποσοστών· η τιμή με αυτές μέσα εμφανίζεται ως «incl. SR» κάτω από κάθε νούμερο."}
       </p>
     </div>
   );
 };
 
 /* ────────────────────────── Βοηθητικά sub-components ────────────────────────── */
-
-const LocationCells = ({
-  complete,
-  sysRelease,
-  drop,
-  fail,
-  total,
-}: {
-  complete: number;
-  sysRelease: number;
-  drop: number;
-  fail: number;
-  total: number;
-}) => (
-  <>
-    <td className="px-4 py-2 text-right font-mono tabular-nums text-foreground/90">{complete || "—"}</td>
-    <td className="px-4 py-2 text-right font-mono tabular-nums text-foreground/90">{sysRelease || "—"}</td>
-    <td className="px-4 py-2 text-right font-mono tabular-nums text-foreground/90">{drop || "—"}</td>
-    <td className="px-4 py-2 text-right font-mono tabular-nums text-foreground/90">{fail || "—"}</td>
-    <td className="px-4 py-2 text-right font-mono tabular-nums font-semibold text-foreground">{total}</td>
-    <td className="px-4 py-2 text-right font-mono tabular-nums text-foreground">
-      {formatPercent(total > 0 ? complete / total : null, 1)}
-    </td>
-  </>
-);
 
 const DataSectionBlock = ({
   section,
@@ -1015,8 +829,5 @@ const DataSectionBlock = ({
     </div>
   );
 };
-
-/** Χρώμα swatch για ένα raw location string (ίδιος operator → ίδιο χρώμα). */
-const resolveLocationColor = (location: string): string => resolveOperator(location).color;
 
 export default SummaryTab;
