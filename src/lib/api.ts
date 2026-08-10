@@ -373,6 +373,38 @@ export async function fetchCallContextTechnology(
   return requestJson(`/api/call_context_technology?${params.toString()}`);
 }
 
+/**
+ * Έτοιμη περίοδος τεχνολογίας από το FactRadioTechnology (η πηγή που χρησιμοποιεί και
+ * το SmartAnalytics Scene). Σε αντίθεση με το /api/call_context_technology, εδώ
+ * υπάρχει και το GSM σκέλος ενός SRVCC και ολόκληρη η διάρκεια μιας CS κλήσης.
+ */
+export interface TechnologyPeriodRow {
+  StartTime: string;
+  EndTime: string | null;
+  Duration: number | null;
+  RadioTechnology: string | null;
+  /** Band όπως το γράφει το εργαλείο, π.χ. "LTE E-UTRA 20", "GSM 900" */
+  Band: string | null;
+  /** π.χ. "Home network", "No service", "Emergency calls only" */
+  NetworkStatus: string | null;
+  /** π.χ. "LTE", "5G EN-DC" */
+  RANConfiguration: string | null;
+  RFBand: number | null;
+  CGI: string | null;
+  CellChanged: string | null;
+  phase: "before" | "during" | "after";
+}
+
+export async function fetchTechnologyPeriods(
+  database: string,
+  session_id: string,
+  window_sec = 10,
+  side: "A" | "B" = "A"
+): Promise<{ periods: TechnologyPeriodRow[] }> {
+  const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec), side });
+  return requestJson(`/api/technology_periods?${params.toString()}`);
+}
+
 export interface L3MessageRow {
   Phase: "before" | "during" | "after";
   SecondsFromCallStart: number | null;

@@ -327,6 +327,117 @@ def get_gsm_context_signal_b_side(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/technology_periods")
+def get_technology_periods(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1),
+    window_sec: int = Query(default=10, ge=5, le=300),
+    side: str = Query(default="A", pattern="^[AB]$")
+):
+    """Περίοδοι τεχνολογίας (τι σέρβιρε πραγματικά το δίκτυο) σε παράθυρο ±window_sec.
+
+    Πηγή: FactRadioTechnology + DmnRadioTechnology — ο ίδιος πίνακας που διαβάζει και
+    το SmartAnalytics Scene για το Session Overview του. Κάθε γραμμή είναι έτοιμη
+    περίοδος με StartTime/EndTime/Duration, band (π.χ. "LTE E-UTRA 20", "GSM 900"),
+    NetworkStatus και CGI.
+
+    Γιατί όχι ο πίνακας Technology: εκεί γράφονται μόνο LTE/NR events, οπότε το GSM
+    σκέλος ενός SRVCC (και ολόκληρη μια CS κλήση) λείπει εντελώς.
+    """
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        # Παλιότερα schemas μπορεί να μην έχουν τον πίνακα — γυρνάμε άδειο αντί για 500,
+        # ώστε το frontend να πέσει στο fallback του.
+        cursor.execute("""
+            SELECT 1 FROM INFORMATION_SCHEMA.TABLES
+            WHERE TABLE_NAME IN ('FactRadioTechnology', 'DmnRadioTechnology')
+        """)
+        if len(cursor.fetchall()) < 2:
+            conn.close()
+            return {"periods": []}
+
+        # Το FactRadioTechnology είναι ανά FileId (ανά συσκευή), οπότε για B-side
+        # χρειάζεται το αρχείο της απέναντι πλευράς — ίδιο pattern με τα context signals.
+        if side == "B":
+            cursor.execute("""
+                ;WITH pair_root AS (
+                    SELECT TOP (1)
+                        CASE WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                             ELSE CA.SessionId END AS ASessionId
+                    FROM CallAnalysis CA
+                    WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                       OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+                )
+                SELECT TOP 1
+                    COALESCE(CA.FileId, S.FileId, SB.FileId) AS FileId,
+                    CA.callStartTimeStamp,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                    ) AS end_time
+                FROM CallAnalysis CA
+                LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+                INNER JOIN pair_root PR ON CA.SessionIdA = PR.ASessionId
+                WHERE CA.Side = 'B'
+            """, (session_id, session_id))
+        else:
+            cursor.execute("""
+                SELECT TOP 1
+                    CA.FileId,
+                    CA.callStartTimeStamp,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                    ) AS end_time
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+            """, (session_id,))
+
+        head = cursor.fetchone()
+        if head is None or head[0] is None:
+            conn.close()
+            return {"periods": []}
+
+        file_id, call_start, call_end = head[0], head[1], head[2]
+
+        cursor.execute("""
+            SELECT
+                f.StartTime,
+                f.EndTime,
+                f.Duration,
+                d.RadioTechnology,
+                d.RadioTechnologyBandServed AS Band,
+                d.NetworkStatus,
+                d.RANConfiguration,
+                f.RFBand,
+                f.CGI,
+                f.CellChanged,
+                CASE
+                    WHEN f.EndTime   < ? THEN 'before'
+                    WHEN f.StartTime > ? THEN 'after'
+                    ELSE 'during'
+                END AS phase
+            FROM FactRadioTechnology f WITH (NOLOCK)
+            INNER JOIN DmnRadioTechnology d WITH (NOLOCK)
+                ON d.DmnId = f.DmnIdRadioTechnology
+            WHERE f.FileId = ?
+              AND f.EndTime   >= DATEADD(SECOND, -?, ?)
+              AND f.StartTime <= DATEADD(SECOND,  ?, ?)
+            ORDER BY f.StartTime
+        """, (call_start, call_end, file_id, window_sec, call_start, window_sec, call_end))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+        conn.close()
+
+        return {"periods": [{columns[i]: row[i] for i in range(len(columns))} for row in rows]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/call_context_technology")
 def get_call_context_technology(
     database: str = Query(..., min_length=1),

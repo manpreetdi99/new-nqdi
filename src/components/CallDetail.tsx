@@ -11,11 +11,12 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchCallSrvccDetail, fetchTechnologyTimeline, fetchVoiceCodec, fetchMarkers, fetchCallNeighbors, type CallNeighbors, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type SrvccDetailResponse, type SrvccEventRow, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchCallSrvccDetail, fetchTechnologyTimeline, fetchTechnologyPeriods, fetchVoiceCodec, fetchMarkers, fetchCallNeighbors, type TechnologyPeriodRow, type CallNeighbors, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type SrvccDetailResponse, type SrvccEventRow, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
-import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE } from "@/lib/chartStyles";
+import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, technologyColor } from "@/lib/chartStyles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { L3SignalingPanel } from "@/components/L3SignalingPanel";
+import { SessionOverview, type OverviewLane, type OverviewSegment } from "@/components/SessionOverview";
 //ReferenceLine για γραμμες στο διαγραμμα, πχ για thresholds. 
 /**
  * Interface για τα props του Component CallDetail.
@@ -192,6 +193,9 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   const [selectedContextSide, setSelectedContextSide] = useState<"A" | "B">("A");
   const [contextWindowSec, setContextWindowSec] = useState(30);
   const [contextTechnology, setContextTechnology] = useState<any[]>([]);
+  // Περίοδοι τεχνολογίας (FactRadioTechnology) — η πηγή του Session Overview, ανά πλευρά
+  const [techPeriods, setTechPeriods] = useState<TechnologyPeriodRow[]>([]);
+  const [techPeriodsBSide, setTechPeriodsBSide] = useState<TechnologyPeriodRow[]>([]);
   // L3 signaling (RRC/NAS/SIP messages) for A-side and B-side
   const [l3Data, setL3Data] = useState<CallL3MessagesResponse | null>(null);
   const [l3DataBSide, setL3DataBSide] = useState<CallL3MessagesResponse | null>(null);
@@ -229,6 +233,15 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   const [showScanner, setShowScanner] = useState(false);
   const [showBScanner, setShowBScanner] = useState(false);
   const [showSignalingEvents, setShowSignalingEvents] = useState(true);
+  // SRVCC Transition chart: ίδια λογική σειρών/κατωφλίων με το κύριο RSRP/RxLev διάγραμμα,
+  // αλλά με δικά του toggles ώστε να μη «μολύνεται» η κύρια προβολή της κλήσης.
+  // "all" = ολόκληρη η κλήση (default), αλλιώς ±N δευτερόλεπτα γύρω από τα SRVCC events
+  const [srvccWindowSec, setSrvccWindowSec] = useState<number | "all">("all");
+  const [srvccShowStrength, setSrvccShowStrength] = useState(true);
+  const [srvccShowQuality, setSrvccShowQuality] = useState(false);
+  const [srvccShowSinr, setSrvccShowSinr] = useState(false);
+  const [srvccShowThresholds, setSrvccShowThresholds] = useState(true);
+  const [srvccShowDots, setSrvccShowDots] = useState(false);
   // Editable free-text comment attached to the call
   const [commentText, setCommentText] = useState(call.comment || "");
   const [isEditingComment, setIsEditingComment] = useState(false);
@@ -667,18 +680,22 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   useEffect(() => {
     if (!call.callId || !database) return;
     async function reloadContext() {
-      const [ctxRes, ctxTechRes, gsmCtxRes, ctxBRes, gsmCtxBRes] = await Promise.allSettled([
+      const [ctxRes, ctxTechRes, gsmCtxRes, ctxBRes, gsmCtxBRes, techPerRes, techPerBRes] = await Promise.allSettled([
         call.callMode !== "CS" ? fetchCallContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
         fetchCallContextTechnology(database, call.callId, contextWindowSec),
         call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
         call.callMode !== "CS" ? fetchCallContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
         call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+        fetchTechnologyPeriods(database, call.callId, contextWindowSec, "A"),
+        fetchTechnologyPeriods(database, call.callId, contextWindowSec, "B"),
       ]);
       if (ctxRes.status === "fulfilled") setContextSignal((ctxRes.value as any).signal || []);
       if (ctxTechRes.status === "fulfilled") setContextTechnology((ctxTechRes.value as any).technology || []);
       if (gsmCtxRes.status === "fulfilled") setGsmContextSignal((gsmCtxRes.value as any).signal || []);
       if (ctxBRes.status === "fulfilled") setContextSignalBSide((ctxBRes.value as any).signal || []);
       if (gsmCtxBRes.status === "fulfilled") setGsmContextSignalBSide((gsmCtxBRes.value as any).signal || []);
+      if (techPerRes.status === "fulfilled") setTechPeriods((techPerRes.value as { periods?: TechnologyPeriodRow[] }).periods || []);
+      if (techPerBRes.status === "fulfilled") setTechPeriodsBSide((techPerBRes.value as { periods?: TechnologyPeriodRow[] }).periods || []);
     }
     reloadContext();
   }, [contextWindowSec, call.callId, database, call.callMode]);
@@ -1055,36 +1072,115 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   );
   const primarySrvccEvent: SrvccEventRow | null = activeSrvccEvents[0] ?? srvccEvents[0] ?? null;
 
-  // One continuous SRVCC strength timeline. LTE and GSM keep their own series, but share the
-  // same absolute time axis, so the handover is visible without switching technology tabs.
+  // Χρονικό παράθυρο γύρω από τα SRVCC events του επιλεγμένου side — κοινό για το διάγραμμα
+  // και τα στατιστικά των δύο σκελών, ώστε ό,τι βλέπει ο χρήστης να είναι ό,τι μετριέται.
+  const srvccWindow = useMemo(() => {
+    const eventTimes = activeSrvccEvents
+      .map((event) => event.EventTime ? new Date(event.EventTime).getTime() : NaN)
+      .filter(Number.isFinite);
+    if (eventTimes.length === 0) return null;
+    const first = Math.min(...eventTimes);
+    const last = Math.max(...eventTimes);
+    // Στο "all" κρατάμε τα event times (τα χρειάζονται οι ζώνες/στατιστικά) αλλά ανοίγουμε
+    // τα όρια, ώστε να μη φιλτράρεται κανένα sample της κλήσης.
+    return srvccWindowSec === "all"
+      ? { first, last, start: -Infinity, end: Infinity }
+      : { first, last, start: first - srvccWindowSec * 1000, end: last + srvccWindowSec * 1000 };
+  }, [activeSrvccEvents, srvccWindowSec]);
+
+  // One continuous SRVCC timeline. LTE and GSM keep their own series but share one absolute time
+  // axis and one row per timestamp, so a single tooltip can show στοιχεία και των δύο τεχνολογιών
+  // (ισχύς, ποιότητα, SINR, cell identity) γύρω από το handover.
   const srvccTransitionData = useMemo(() => {
     if (call.callMode !== "SRVCC") return [];
 
     const lteRows = selectedLteSide === "B" ? bSideLteValues : radioValues;
     const gsmRows = selectedLteSide === "B" ? bSideGsmValues : gsmValues;
-    const eventTimes = activeSrvccEvents
-      .map((event) => event.EventTime ? new Date(event.EventTime).getTime() : NaN)
-      .filter(Number.isFinite);
-    const windowStart = eventTimes.length > 0 ? Math.min(...eventTimes) - 15_000 : null;
-    const windowEnd = eventTimes.length > 0 ? Math.max(...eventTimes) + 15_000 : null;
     const inWindow = (timestamp: number) =>
       Number.isFinite(timestamp)
-      && (windowStart == null || timestamp >= windowStart)
-      && (windowEnd == null || timestamp <= windowEnd);
+      && (srvccWindow == null || (timestamp >= srvccWindow.start && timestamp <= srvccWindow.end));
+    const toNum = (value: unknown) => {
+      if (value == null || value === "") return undefined;
+      const num = Number(value);
+      return Number.isFinite(num) ? num : undefined;
+    };
 
-    return [
-      ...lteRows.map((row) => ({
-        timestamp: new Date(row.MsgTime).getTime(),
-        LTE_RSRP: row.RSRP == null ? undefined : Number(row.RSRP),
-      })),
-      ...gsmRows.map((row) => ({
-        timestamp: new Date(row.MsgTime).getTime(),
-        GSM_RxLev: row.RxLevSub == null ? undefined : Number(row.RxLevSub),
-      })),
-    ]
-      .filter((row) => inWindow(row.timestamp))
-      .sort((a, b) => a.timestamp - b.timestamp);
-  }, [call.callMode, selectedLteSide, radioValues, bSideLteValues, gsmValues, bSideGsmValues, activeSrvccEvents]);
+    type SrvccPoint = {
+      timestamp: number;
+      LTE_RSRP?: number; LTE_RSRQ?: number; LTE_SINR?: number;
+      LTE_EARFCN?: number | null; LTE_PCI?: number | null; LTE_CGI?: string | null;
+      GSM_RxLev?: number; GSM_RxQual?: number;
+      GSM_BAND?: string | null; GSM_CGI?: string | null;
+    };
+    const byTime = new Map<number, SrvccPoint>();
+    const pointAt = (timestamp: number) => {
+      let point = byTime.get(timestamp);
+      if (!point) {
+        point = { timestamp };
+        byTime.set(timestamp, point);
+      }
+      return point;
+    };
+
+    for (const row of lteRows) {
+      const timestamp = new Date(row.MsgTime).getTime();
+      if (!inWindow(timestamp)) continue;
+      const point = pointAt(timestamp);
+      point.LTE_RSRP = toNum(row.RSRP);
+      point.LTE_RSRQ = toNum(row.RSRQ);
+      point.LTE_SINR = toNum(row.SINR);
+      point.LTE_EARFCN = row.EARFCN ?? null;
+      point.LTE_PCI = row.PhyCellId ?? null;
+      point.LTE_CGI = row.CGI ?? null;
+    }
+    for (const row of gsmRows) {
+      const timestamp = new Date(row.MsgTime).getTime();
+      if (!inWindow(timestamp)) continue;
+      const point = pointAt(timestamp);
+      point.GSM_RxLev = toNum(row.RxLevSub);
+      point.GSM_RxQual = toNum(row.RxQualSub);
+      point.GSM_BAND = row.band ?? null;
+      point.GSM_CGI = row.CGI ?? null;
+    }
+
+    return [...byTime.values()].sort((a, b) => a.timestamp - b.timestamp);
+  }, [call.callMode, selectedLteSide, radioValues, bSideLteValues, gsmValues, bSideGsmValues, srvccWindow]);
+
+  // Στατιστικά ανά σκέλος + το πραγματικό ραδιο-κενό: τελευταίο LTE sample πριν το event και
+  // πρώτο GSM sample μετά. Το κενό αυτό είναι το μετρήσιμο αντίστοιχο του KPI interruption time.
+  const srvccLegStats = useMemo(() => {
+    if (srvccTransitionData.length === 0) return null;
+    const cut = srvccWindow?.first ?? null;
+
+    const describe = (values: number[]) => values.length === 0 ? null : {
+      samples: values.length,
+      min: Math.min(...values),
+      max: Math.max(...values),
+      avg: values.reduce((acc, value) => acc + value, 0) / values.length,
+    };
+
+    const ltePoints = srvccTransitionData.filter((point) => point.LTE_RSRP != null);
+    const gsmPoints = srvccTransitionData.filter((point) => point.GSM_RxLev != null);
+    const lastLte = cut == null
+      ? ltePoints[ltePoints.length - 1]
+      : [...ltePoints].reverse().find((point) => point.timestamp <= cut) ?? ltePoints[ltePoints.length - 1];
+    const firstGsm = cut == null
+      ? gsmPoints[0]
+      : gsmPoints.find((point) => point.timestamp >= cut) ?? gsmPoints[0];
+
+    return {
+      lte: describe(ltePoints.map((point) => point.LTE_RSRP as number)),
+      lteRsrq: describe(ltePoints.filter((p) => p.LTE_RSRQ != null).map((p) => p.LTE_RSRQ as number)),
+      gsm: describe(gsmPoints.map((point) => point.GSM_RxLev as number)),
+      gsmRxQual: describe(gsmPoints.filter((p) => p.GSM_RxQual != null).map((p) => p.GSM_RxQual as number)),
+      lastLte: lastLte ?? null,
+      firstGsm: firstGsm ?? null,
+      radioGapMs: lastLte && firstGsm ? firstGsm.timestamp - lastLte.timestamp : null,
+      deltaDb: lastLte?.LTE_RSRP != null && firstGsm?.GSM_RxLev != null
+        ? (firstGsm.GSM_RxLev as number) - (lastLte.LTE_RSRP as number)
+        : null,
+    };
+  }, [srvccTransitionData, srvccWindow]);
 
   // Generic handovers remain useful for non-SRVCC calls. For SRVCC, only the KPI-backed events
   // are shown, avoiding the previous implication that every HandoverInfo row was an SRVCC event.
@@ -1198,6 +1294,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   const contextChartData = useMemo(() =>
     activeContextSignal.map((v, idx) => ({
       idx,
+      t: new Date(v.MsgTime).getTime(),
       time: new Date(v.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
       RSRP: v.RSRP != null ? Number(v.RSRP) : undefined,
       RSRQ: v.RSRQ != null ? Number(v.RSRQ) : undefined,
@@ -1205,50 +1302,332 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     }))
   , [activeContextSignal]);
 
-  // Finds the [first, last] index range where phase === "during", used to draw the shaded
-  // "during the call" ReferenceArea band on the LTE context chart (before/after are the rest)
-  const duringZone = useMemo(() => {
-    const firstIdx = contextChartData.findIndex(d => d.phase === "during");
-    const lastIdx  = [...contextChartData].reverse().findIndex(d => d.phase === "during");
-    const last = lastIdx === -1 ? -1 : contextChartData.length - 1 - lastIdx;
-    return {
-      first: firstIdx >= 0 ? firstIdx : null,
-      last:  last     >= 0 ? last     : null,
-    };
-  }, [contextChartData]);
+  // Το GSM context chart δεν αφορά μόνο τις CS κλήσεις: σε SRVCC το δεύτερο σκέλος είναι GSM,
+  // οπότε το δείχνουμε πάντα δίπλα στο LTE χωρίς να χρειάζεται το LTE/GSM toggle.
+  const showGsmContext = isGSMMode || call.callMode === "SRVCC";
 
   const gsmChartData = useMemo(() => {
-    if (!isGSMMode) return [];
+    if (!showGsmContext) return [];
+    // Το A-side GSM context φιλτράρεται στο backend μόνο χρονικά, οπότε επιστρέφει και
+    // GSMMeasReport παράλληλων sessions (άλλες συσκευές του ίδιου drive test). Κρατάμε μόνο
+    // τα δείγματα της ίδιας της κλήσης — αλλιώς οι σειρές πλέκονται σε μία πριονωτή καμπύλη.
+    const ownSession = activeGsmContextSignal.filter(
+      (v: any) => v.SessionId != null && String(v.SessionId) === String(call.callId),
+    );
+    const contextRows = ownSession.length > 0 ? ownSession : activeGsmContextSignal;
+
     // Use the active context signal (A or B side, has real before/during/after) when available
-    if (activeGsmContextSignal.length > 0) {
-      return activeGsmContextSignal.map((v: any, idx: number) => ({
+    if (contextRows.length > 0) {
+      return contextRows.map((v: any, idx: number) => ({
         idx,
+        t: new Date(v.MsgTime).getTime(),
         time: new Date(v.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
         RxLevSub: v.RxLevSub != null ? Number(v.RxLevSub) : undefined,
         RxQualSub: v.RxQualSub != null ? Number(v.RxQualSub) : undefined,
         phase: v.phase as "before" | "during" | "after",
       }));
     }
-    // Fallback: use the current call's measurements (all "during") so the chart always renders
-    return activeRadioValues.map((val: any, idx: number) => ({
+    // Fallback: τα GSM measurements της ίδιας της κλήσης (όλα "during") ώστε το chart να
+    // εμφανίζεται πάντα. Παίρνουμε ρητά GSM rows — σε SRVCC το activeRadioValues μπορεί να
+    // δείχνει το LTE σκέλος, που δεν έχει καθόλου RxLev/RxQual.
+    return (selectedContextSide === "B" ? bSideGsmValues : gsmValues).map((val: any, idx: number) => ({
       idx,
+      t: new Date(val.MsgTime).getTime(),
       time: new Date(val.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
       RxLevSub: val.RxLevSub != null ? Number(val.RxLevSub) : undefined,
       RxQualSub: val.RxQualSub != null ? Number(val.RxQualSub) : undefined,
       phase: "during" as const,
     }));
-  }, [isGSMMode, activeGsmContextSignal, activeRadioValues]);
+  }, [showGsmContext, activeGsmContextSignal, selectedContextSide, gsmValues, bSideGsmValues, call.callId]);
 
-  // Same before/during/after range-finding as duringZone, but for the GSM RxLev/RxQual chart
-  const gsmDuringZone = useMemo(() => {
-    const firstIdx = gsmChartData.findIndex(d => d.phase === "during");
-    const lastIdx  = [...gsmChartData].reverse().findIndex(d => d.phase === "during");
-    const last = lastIdx === -1 ? -1 : gsmChartData.length - 1 - lastIdx;
-    return {
-      first: firstIdx >= 0 ? firstIdx : null,
-      last:  last     >= 0 ? last     : null,
-    };
+  // ── Κοινός χρονικός άξονας για τα context charts ──────────────────────────
+  // Τα δύο διαγράμματα (LTE και GSM) στοιβάζονται το ένα κάτω από το άλλο και μοιράζονται
+  // ΤΟ ΙΔΙΟ absolute-time domain. Έτσι σε SRVCC το GSM σκέλος πιάνει μόνο το κομμάτι του
+  // άξονα που όντως διήρκεσε (π.χ. 42s στο τέλος) αντί να τεντώνεται σε όλο το πλάτος, και
+  // οι δύο καμπύλες διαβάζονται κάθετα η μία πάνω στην άλλη όπου συνυπάρχουν.
+  const ctxDomain = useMemo(() => {
+    const times = [...contextChartData, ...gsmChartData].map((d) => d.t).filter(Number.isFinite);
+    if (times.length < 2) return null;
+    return { start: Math.min(...times), end: Math.max(...times) };
+  }, [contextChartData, gsmChartData]);
+
+  // Όρια κλήσης σε epoch ms — κοινά και για τα δύο charts, ώστε οι ζώνες πριν/κατά/μετά
+  // να πέφτουν στην ίδια κάθετη θέση.
+  const ctxCallBounds = useMemo(() => {
+    const start = new Date(call.startTime).getTime();
+    const end = new Date(call.endTime).getTime();
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) return { start, end };
+    // Fallback: τα όρια της φάσης "during" όπως τα έδωσε το backend
+    const during = (contextChartData.length > 0 ? contextChartData : gsmChartData).filter((d) => d.phase === "during");
+    return during.length > 0 ? { start: during[0].t, end: during[during.length - 1].t } : null;
+  }, [call.startTime, call.endTime, contextChartData, gsmChartData]);
+
+  const ctxTimeTick = (value: number) =>
+    new Date(value).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+
+  // Πόσο κράτησε πραγματικά το GSM σκέλος (πρώτο → τελευταίο RxLev δείγμα)
+  const gsmSpanSec = useMemo(() => {
+    const times = gsmChartData.filter((d) => d.RxLevSub != null).map((d) => d.t);
+    return times.length > 1 ? (Math.max(...times) - Math.min(...times)) / 1000 : null;
   }, [gsmChartData]);
+
+  // ── Session Overview ──────────────────────────────────────────────────────
+  // Χρονική επισκόπηση (τύπου Gantt) που μπαίνει ακριβώς πάνω από το διάγραμμα
+  // RSRP/RxLev: λωρίδα κατάστασης (IDLE → CALL → IDLE) και λωρίδα τεχνολογίας.
+  // Δένεται στα ΙΔΙΑ δείγματα με το chart από κάτω (index domain), ώστε κάθε
+  // μπάρα να πέφτει πάνω από το αντίστοιχο σημείο της καμπύλης.
+  const sessionOverview = useMemo(() => {
+    if (!ctxDomain) return null;
+
+    // Τα charts από κάτω έχουν πλέον γραμμικό άξονα χρόνου, οπότε το overview δένεται σε
+    // ισαπέχοντα δείγματα του ίδιου domain (γραμμική αντιστοίχιση χρόνου → θέσης).
+    const STEPS = 120;
+    const times = Array.from({ length: STEPS + 1 }, (_, i) => ctxDomain.start + ((ctxDomain.end - ctxDomain.start) * i) / STEPS);
+
+    const winStart = ctxDomain.start;
+    const winEnd = ctxDomain.end;
+    const callStart = ctxCallBounds?.start ?? null;
+    const callEnd = ctxCallBounds?.end ?? null;
+
+    // Λωρίδα κατάστασης — τα όρια είναι ακριβώς αυτά του shaded "κατά την κλήση"
+    // area του chart, οπότε οι δύο απεικονίσεις δείχνουν πάντα το ίδιο διάστημα.
+    const stateSegments: OverviewSegment[] = [];
+    const callLabel = `CALL${call.callType ? ` · ${call.callType}` : ""}`;
+    const callDetail = [
+      call.callMode ? `Mode: ${call.callMode}` : null,
+      call.status ? `Status: ${call.status}` : null,
+    ].filter(Boolean).join(" · ") || undefined;
+
+    if (callStart != null && callEnd != null && callEnd > callStart) {
+      if (callStart > winStart) stateSegments.push({ from: winStart, to: callStart, label: "IDLE", color: "#4b5563", detail: "Πριν την κλήση" });
+      stateSegments.push({ from: callStart, to: callEnd, label: callLabel, color: "#dc2626", detail: callDetail });
+      if (winEnd > callEnd) stateSegments.push({ from: callEnd, to: winEnd, label: "IDLE", color: "#4b5563", detail: "Μετά την κλήση" });
+    } else {
+      stateSegments.push({ from: winStart, to: winEnd, label: callLabel, color: "#dc2626", detail: callDetail });
+    }
+
+    // Ψαλίδισμα στο παράθυρο των δειγμάτων (οι πηγές τεχνολογίας μπορεί να
+    // επιστρέψουν ελαφρώς φαρδύτερο παράθυρο από τα δείγματα του chart)
+    const clip = (seg: OverviewSegment): OverviewSegment | null => {
+      const from = Math.max(seg.from, winStart);
+      const to = Math.min(seg.to, winEnd);
+      return to > from ? { ...seg, from, to } : null;
+    };
+
+    // ── Λωρίδα τεχνολογίας ──
+    // Κύρια πηγή: FactRadioTechnology (/api/technology_periods) — έτοιμες περίοδοι με
+    // StartTime/EndTime και το band που σέρβιρε πραγματικά το δίκτυο ("LTE E-UTRA 20",
+    // "GSM 900"). Είναι η ίδια πηγή που διαβάζει και το SmartAnalytics Scene, οπότε
+    // περιέχει το GSM σκέλος ενός SRVCC, ολόκληρη μια CS κλήση και τα κενά "No service".
+    const periods = selectedContextSide === "B" ? techPeriodsBSide : techPeriods;
+    const periodSegments: OverviewSegment[] = [];
+    for (const period of periods) {
+      const from = new Date(period.StartTime).getTime();
+      const to = period.EndTime ? new Date(period.EndTime).getTime() : from + (period.Duration ?? 0);
+      if (!Number.isFinite(from) || !Number.isFinite(to) || to <= from) continue;
+      const outOfService = period.NetworkStatus != null && /no service|out of service/i.test(period.NetworkStatus);
+      // Το RANConfiguration ξεχωρίζει π.χ. 5G EN-DC πάνω σε LTE anchor
+      const ranSuffix = period.RANConfiguration && period.RANConfiguration !== period.RadioTechnology
+        ? ` · ${period.RANConfiguration}` : "";
+      const clipped = clip({
+        from,
+        to,
+        label: outOfService ? "NO SERVICE" : `${period.Band ?? period.RadioTechnology ?? "—"}${ranSuffix}`,
+        color: outOfService ? "#7f1d1d" : technologyColor(period.RANConfiguration ?? period.Band ?? period.RadioTechnology),
+        detail: [
+          period.NetworkStatus,
+          period.CGI ? `CGI ${period.CGI}` : null,
+          period.RFBand != null ? `RF band ${period.RFBand}` : null,
+        ].filter(Boolean).join(" · ") || undefined,
+        // Το CGI κρατά χωριστά τα μπλοκ διαφορετικών κυψελών κατά τη συγχώνευση
+        key: period.CGI ?? "",
+      });
+      if (clipped) periodSegments.push(clipped);
+    }
+
+    // Fallback όταν η βάση δεν έχει FactRadioTechnology: παλιά λογική πάνω στον πίνακα
+    // Technology, όπου κάθε αλλαγή ανοίγει ένα μπλοκ που κλείνει
+    // στην επόμενη αλλαγή (ή στο τέλος του παραθύρου). Οι εγγραφές με
+    // CurrTechnology = NULL είναι δείκτες "τέλος/μεταβατικό" και ΔΕΝ ανοίγουν νέα
+    // τεχνολογία — αν τις κρατούσαμε θα έσβηναν τη λωρίδα για όλη τη διάρκειά τους.
+    const techRows = (contextTechnology as TechnologyTimelineRow[])
+      .filter((row) => row?.MsgTime && row.CurrTechnology != null)
+      .map((row) => ({ ...row, t: new Date(row.MsgTime as string).getTime() }))
+      .filter((row) => Number.isFinite(row.t))
+      .sort((a, b) => a.t - b.t);
+
+    // Το Band περιέχει συνήθως ήδη το RAT ("LTE E-UTRA 20"), οπότε αποφεύγουμε
+    // διπλές ταμπέλες τύπου "LTE LTE E-UTRA 20". Band "unknown" αγνοείται.
+    const techLabel = (tech: string | null | undefined, band: string | null | undefined) => {
+      const t = (tech ?? "").trim();
+      const b = (band ?? "").trim();
+      if (!b || b.toLowerCase() === "unknown") return t || "—";
+      if (!t) return b;
+      return b.toUpperCase().includes(t.toUpperCase()) ? b : `${t} ${b}`;
+    };
+
+    const rawTech: OverviewSegment[] = [];
+    if (techRows.length > 0) {
+      const firstPrev = techRows[0].PrevTechnology;
+      if (firstPrev && techRows[0].t > winStart) {
+        rawTech.push({ from: winStart, to: techRows[0].t, label: firstPrev, color: technologyColor(firstPrev) });
+      }
+      techRows.forEach((row, i) => {
+        const to = i + 1 < techRows.length ? techRows[i + 1].t : winEnd;
+        const carriers = row.LTEDLCarriers != null || row.NR5GDLCarriers != null
+          ? `CA ${row.LTEDLCarriers ?? 0}DL/${row.LTEULCarriers ?? 0}UL LTE · ${row.NR5GDLCarriers ?? 0}DL/${row.NR5GULCarriers ?? 0}UL NR`
+          : undefined;
+        rawTech.push({
+          from: row.t,
+          to,
+          label: techLabel(row.CurrTechnology, row.Band),
+          color: technologyColor(row.CurrTechnology),
+          detail: carriers,
+        });
+      });
+    }
+
+    let segments = rawTech.map(clip).filter((seg): seg is OverviewSegment => seg != null);
+
+    // Ο πίνακας Technology καταγράφει μόνο LTE/NR περιόδους — το σκέλος GSM μιας
+    // SRVCC κλήσης δεν υπάρχει καθόλου εκεί. Το συνθέτουμε από το KPI event του
+    // SRVCC (ώρα + target technology) και το "καρφώνουμε" πάνω από τα LTE μπλοκ.
+    const srvccOverlays = (srvccDetail?.events ?? [])
+      .filter((ev) => (ev.Side ?? "A") === "A" && ev.Status === "Success")
+      .map((ev): OverviewSegment | null => {
+        const startIso = ev.TargetNetworkTime ?? ev.TargetRadioTime ?? ev.EventTime;
+        const start = startIso ? new Date(startIso).getTime() : NaN;
+        if (!Number.isFinite(start)) return null;
+        const target = String(ev.TargetTechnology ?? ev.TargetRadioBand ?? ev.HandoverType?.split("->")[1] ?? "GSM");
+        // Κλείνει όταν ο πίνακας Technology ξαναγράψει τεχνολογία (επιστροφή σε LTE),
+        // αλλιώς στο τέλος της κλήσης / του παραθύρου.
+        const backOnLte = techRows.find((row) => row.t > start + 500);
+        const end = backOnLte?.t ?? (callEnd != null && callEnd > start ? callEnd : winEnd);
+        if (end <= start) return null;
+        return clip({
+          from: start,
+          to: end,
+          label: target,
+          color: technologyColor(target),
+          detail: [
+            `SRVCC ${ev.HandoverType ?? ""} · ${ev.Status}`,
+            ev.InterruptionMs != null ? `διακοπή ${ev.InterruptionMs} ms` : null,
+            ev.TargetCGI ? `CGI ${ev.TargetCGI}` : null,
+          ].filter(Boolean).join(" · "),
+        });
+      })
+      .filter((seg): seg is OverviewSegment => seg != null);
+
+    // Το overlay κόβει ό,τι υπάρχει από κάτω του (π.χ. το LTE μπλοκ που "τρέχει"
+    // όταν γίνεται το handover) και μπαίνει στη θέση του.
+    for (const overlay of srvccOverlays) {
+      const kept: OverviewSegment[] = [];
+      for (const seg of segments) {
+        if (seg.to <= overlay.from || seg.from >= overlay.to) { kept.push(seg); continue; }
+        if (seg.from < overlay.from) kept.push({ ...seg, to: overlay.from });
+        if (seg.to > overlay.to) kept.push({ ...seg, from: overlay.to });
+      }
+      kept.push(overlay);
+      segments = kept;
+    }
+
+    // CS κλήση: το GSM σκέλος δεν καταγράφεται ούτε εδώ, οπότε αν τίποτα δεν
+    // καλύπτει τη διάρκεια της κλήσης τη συμπληρώνουμε ρητά ως GSM.
+    if (call.callMode === "CS" && callStart != null && callEnd != null && callEnd > callStart
+        && !segments.some((seg) => seg.from < callEnd && seg.to > callStart)) {
+      const csSeg = clip({ from: callStart, to: callEnd, label: "GSM", color: technologyColor("GSM"), detail: "CS κλήση — δεν υπάρχει εγγραφή στον πίνακα Technology" });
+      if (csSeg) segments.push(csSeg);
+    }
+
+    // Οι περίοδοι του FactRadioTechnology είναι η αξιόπιστη πηγή· το fallback
+    // χρησιμοποιείται μόνο αν αυτές λείπουν εντελώς.
+    const chosen = periodSegments.length > 0 ? periodSegments : segments;
+
+    // Ταξινόμηση και συγχώνευση διαδοχικών μπλοκ με ίδια ταμπέλα ΚΑΙ ίδια κυψέλη
+    chosen.sort((a, b) => a.from - b.from);
+    const techSegments: OverviewSegment[] = [];
+    for (const seg of chosen) {
+      const prev = techSegments[techSegments.length - 1];
+      if (prev && prev.label === seg.label && prev.key === seg.key && seg.from - prev.to <= 1) {
+        prev.to = Math.max(prev.to, seg.to);
+      } else {
+        techSegments.push({ ...seg });
+      }
+    }
+
+    const lanes: OverviewLane[] = [{ name: "Κατάσταση", segments: stateSegments }];
+    if (techSegments.length > 0) lanes.push({ name: "Τεχνολογία", segments: techSegments });
+
+    return { times, lanes, callStart, callEnd };
+  }, [ctxDomain, ctxCallBounds, contextTechnology, techPeriods, techPeriodsBSide, selectedContextSide, srvccDetail, call.callType, call.callMode, call.status]);
+
+  // GSM context chart (RxLev / RxQual με τις ζώνες πριν/κατά/μετά). Ορίζεται μία φορά εδώ γιατί
+  // η θέση του μέσα στο panel αλλάζει: πάνω σε GSM view, κάτω από το LTE chart σε SRVCC.
+  const gsmContextChart = showGsmContext && gsmChartData.length > 0 ? (
+    <div>
+      <div className="flex items-center gap-3 mb-1">
+        <span className="text-xs text-muted-foreground">
+          RxLev / RxQual
+          {call.callMode === "SRVCC" && !isGSMMode && gsmSpanSec != null
+            ? ` · GSM σκέλος ${gsmSpanSec.toFixed(0)}s (μετά το SRVCC)`
+            : ""}
+        </span>
+        <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-amber-400/30 border border-amber-400/50" />Πριν</span>
+        <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-blue-500/30 border border-blue-500/50" />Κατά</span>
+        <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-orange-400/30 border border-orange-400/50" />Μετά</span>
+      </div>
+      <ResponsiveContainer width="100%" height={160}>
+        <LineChart data={gsmChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
+          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
+          {/* Κοινός άξονας χρόνου με το LTE chart από πάνω — το GSM σκέλος καταλαμβάνει μόνο
+              το πραγματικό του διάστημα, στη σωστή θέση της κλήσης */}
+          <XAxis
+            dataKey="t"
+            type="number"
+            scale="time"
+            domain={ctxDomain ? [ctxDomain.start, ctxDomain.end] : ["dataMin", "dataMax"]}
+            allowDataOverflow
+            tickFormatter={ctxTimeTick}
+            tick={{ fontSize: 9, fill: "#94a3b8" }}
+            interval="preserveStartEnd"
+          />
+          <YAxis yAxisId="rxlev" domain={[-120, -40]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={32} />
+          <YAxis yAxisId="rxqual" orientation="right" domain={[7, 0]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={28} />
+          <RechartsTooltip
+            contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155", fontSize: 11 }}
+            labelFormatter={ctxTimeTick}
+            formatter={(val: any, name: string) => [val != null ? Number(val).toFixed(1) : "—", name]}
+          />
+          {/* Ζώνες πριν / κατά / μετά — σε χρόνο, ίδιες με του LTE chart */}
+          {ctxDomain && ctxCallBounds && (
+            <>
+              {ctxCallBounds.start > ctxDomain.start && (
+                <ReferenceArea yAxisId="rxlev" x1={ctxDomain.start} x2={ctxCallBounds.start} fill="#f59e0b" fillOpacity={0.25} stroke="#f59e0b" strokeOpacity={0.4} strokeWidth={1} />
+              )}
+              <ReferenceArea yAxisId="rxlev" x1={ctxCallBounds.start} x2={ctxCallBounds.end} fill="#3b82f6" fillOpacity={0.22} stroke="#3b82f6" strokeOpacity={0.5} strokeWidth={1} />
+              {ctxDomain.end > ctxCallBounds.end && (
+                <ReferenceArea yAxisId="rxlev" x1={ctxCallBounds.end} x2={ctxDomain.end} fill="#f97316" fillOpacity={0.25} stroke="#f97316" strokeOpacity={0.4} strokeWidth={1} />
+              )}
+            </>
+          )}
+          {/* Σε SRVCC σημειώνουμε το handover στην ακριβή του ώρα */}
+          {call.callMode === "SRVCC" && activeSrvccEvents.map((event, idx) => event.EventTime && (
+            <ReferenceLine
+              key={`gsm-srvcc-${event.MsgId ?? idx}`}
+              yAxisId="rxlev"
+              x={new Date(event.EventTime).getTime()}
+              stroke={event.Status === "Success" ? "#22c55e" : "#ef4444"}
+              strokeWidth={2}
+              strokeDasharray="4 3"
+              label={{ value: `SRVCC ${event.HandoverType}`, position: "insideTopRight", fill: "#cbd5e1", fontSize: 9 }}
+            />
+          ))}
+          <Line yAxisId="rxlev" dataKey="RxLevSub" stroke="#22c55e" dot={false} strokeWidth={2} connectNulls name="RxLev" />
+          <Line yAxisId="rxqual" dataKey="RxQualSub" stroke="#e2e8f0" dot={false} strokeWidth={1} connectNulls name="RxQual" />
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  ) : null;
 
   return (
     <motion.div
@@ -1337,7 +1716,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                 SRVCC Transition
               </h3>
               <p className="text-[10px] text-muted-foreground mt-0.5">
-                KPI 38040/38050 · κοινός χρόνος LTE → 3G/2G · παράθυρο ±15s
+                KPI 38040/38050 · κοινός χρόνος LTE → 3G/2G · {srvccWindowSec === "all" ? "όλη η κλήση" : `παράθυρο ±${srvccWindowSec}s`} · {srvccTransitionData.length} δείγματα
               </p>
             </div>
             {new Set(srvccEvents.map((event) => event.Side).filter(Boolean)).size > 1 && (
@@ -1396,12 +1775,57 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
 
               {srvccTransitionData.length > 0 && (
                 <div className="rounded border border-border/60 bg-muted/10 p-2">
-                  <div className="flex items-center gap-4 mb-1 text-[10px] text-muted-foreground">
-                    <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-green-500" />LTE RSRP</span>
-                    <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-amber-400" />GSM RxLev</span>
+                  {/* Controls: σειρές (ισχύς/ποιότητα/SINR), κατώφλια, δείγματα και εύρος παραθύρου —
+                      ίδια φιλοσοφία με τα checkboxes του κύριου RSRP/RxLev διαγράμματος. */}
+                  <div className="mb-1.5 flex items-center justify-between gap-2 flex-wrap">
+                    <div className="flex items-center gap-3 flex-wrap bg-muted/40 px-2 py-0.5 rounded border border-border/50">
+                      {([
+                        ["Ισχύς (RSRP/RxLev)", srvccShowStrength, setSrvccShowStrength],
+                        ["Ποιότητα (RSRQ/RxQual)", srvccShowQuality, setSrvccShowQuality],
+                        ["SINR", srvccShowSinr, setSrvccShowSinr],
+                        ["Κατώφλια", srvccShowThresholds, setSrvccShowThresholds],
+                        ["Δείγματα", srvccShowDots, setSrvccShowDots],
+                      ] as const).map(([label, checked, setChecked]) => (
+                        <label key={label} className="flex items-center gap-1.5 text-[10px] font-medium text-foreground cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={(e) => setChecked(e.target.checked)}
+                            className="h-3 w-3 rounded-sm border-primary text-primary focus:ring-primary"
+                          />
+                          {label}
+                        </label>
+                      ))}
+                    </div>
+                    <div className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                      <span>Παράθυρο</span>
+                      <div className="inline-flex rounded border border-border overflow-hidden">
+                        {([["all", "Όλη η κλήση"], [5, "±5s"], [15, "±15s"], [30, "±30s"], [60, "±60s"]] as const).map(([value, label], idx) => (
+                          <button
+                            key={value}
+                            type="button"
+                            onClick={() => setSrvccWindowSec(value)}
+                            className={`px-1.5 py-0.5 font-mono ${idx > 0 ? "border-l border-border" : ""} ${srvccWindowSec === value ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
+                          >
+                            {label}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   </div>
-                  <ResponsiveContainer width="100%" height={190}>
-                    <LineChart data={srvccTransitionData} margin={{ top: 8, right: 12, left: 0, bottom: 0 }}>
+
+                  {/* Legend — μόνο οι σειρές που είναι όντως ενεργές */}
+                  <div className="flex items-center gap-3 mb-1 text-[10px] text-muted-foreground flex-wrap">
+                    {srvccShowStrength && <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-green-500" />LTE RSRP (dBm)</span>}
+                    {srvccShowStrength && <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-amber-400" />GSM RxLev (dBm)</span>}
+                    {srvccShowQuality && <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-sky-400" />LTE RSRQ (dB)</span>}
+                    {srvccShowQuality && <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-slate-200" />GSM RxQual (0-7)</span>}
+                    {srvccShowSinr && <span className="flex items-center gap-1"><span className="inline-block w-3 h-0.5 bg-purple-400" />LTE SINR (dB)</span>}
+                    <span className="flex items-center gap-1"><span className="inline-block w-3 h-1.5 bg-red-500/30 border border-red-500/60" />Interruption</span>
+                  </div>
+
+                  <ResponsiveContainer width="100%" height={260}>
+                    <LineChart data={srvccTransitionData} margin={{ top: 10, right: 12, left: 0, bottom: 0 }}>
                       <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
                       <XAxis
                         dataKey="timestamp"
@@ -1411,15 +1835,111 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                         tickFormatter={(value: number) => new Date(value).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
                         tick={{ fontSize: 9, fill: "#94a3b8" }}
                       />
-                      <YAxis domain={[-140, -40]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={34} unit=" dBm" />
+                      <YAxis yAxisId="strength" domain={[-140, -40]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={34} unit=" dBm" />
+                      {(srvccShowQuality || srvccShowSinr) && (
+                        <YAxis
+                          yAxisId="db"
+                          orientation="right"
+                          domain={srvccShowSinr ? [-25, 30] : [-25, 0]}
+                          tick={{ fontSize: 9, fill: "#94a3b8" }}
+                          width={30}
+                          unit=" dB"
+                        />
+                      )}
+                      {srvccShowQuality && (
+                        <YAxis yAxisId="rxqual" orientation="right" domain={[0, 7]} reversed tick={{ fontSize: 9, fill: "#94a3b8" }} width={20} />
+                      )}
+
+                      {/* Φάσεις: LTE μέχρι το handover, το interruption παράθυρο του KPI, GSM μετά */}
+                      {srvccWindow && (
+                        <>
+                          <ReferenceArea
+                            yAxisId="strength"
+                            x1={Number.isFinite(srvccWindow.start) ? srvccWindow.start : srvccTransitionData[0].timestamp}
+                            x2={srvccWindow.first}
+                            fill="#22c55e"
+                            fillOpacity={0.06}
+                          />
+                          <ReferenceArea
+                            yAxisId="strength"
+                            x1={srvccWindow.last}
+                            x2={Number.isFinite(srvccWindow.end) ? srvccWindow.end : srvccTransitionData[srvccTransitionData.length - 1].timestamp}
+                            fill="#fbbf24"
+                            fillOpacity={0.06}
+                          />
+                        </>
+                      )}
+                      {activeSrvccEvents.map((event, idx) => {
+                        if (!event.EventTime || event.InterruptionMs == null) return null;
+                        const eventTs = new Date(event.EventTime).getTime();
+                        return (
+                          <ReferenceArea
+                            key={`${event.MsgId ?? idx}-gap`}
+                            yAxisId="strength"
+                            x1={eventTs}
+                            x2={eventTs + Number(event.InterruptionMs)}
+                            fill="#ef4444"
+                            fillOpacity={0.28}
+                            stroke="#ef4444"
+                            strokeOpacity={0.5}
+                          />
+                        );
+                      })}
+
+                      {/* Κατώφλια ανά τεχνολογία — ίδιες τιμές με το κύριο διάγραμμα
+                          (LTE RSRP -115/-120 dBm, GSM RxLev -88/-92 dBm) */}
+                      {srvccShowThresholds && srvccShowStrength && (
+                        <>
+                          <ReferenceLine yAxisId="strength" y={-115} stroke="#22c55e" strokeOpacity={0.5} strokeDasharray="2 4" label={{ value: "LTE -115", position: "insideLeft", fill: "#22c55e", fontSize: 8 }} />
+                          <ReferenceLine yAxisId="strength" y={-120} stroke="#22c55e" strokeOpacity={0.35} strokeDasharray="2 4" />
+                          <ReferenceLine yAxisId="strength" y={-88} stroke="#fbbf24" strokeOpacity={0.5} strokeDasharray="2 4" label={{ value: "GSM -88", position: "insideRight", fill: "#fbbf24", fontSize: 8 }} />
+                          <ReferenceLine yAxisId="strength" y={-92} stroke="#fbbf24" strokeOpacity={0.35} strokeDasharray="2 4" />
+                        </>
+                      )}
+
                       <RechartsTooltip
-                        labelFormatter={(value: number) => new Date(value).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
-                        formatter={(value: number | string, name: string) => [`${Number(value).toFixed(1)} dBm`, name]}
-                        contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155", fontSize: 11 }}
+                        cursor={{ stroke: "#64748b", strokeDasharray: "3 3" }}
+                        content={({ active, payload }: any) => {
+                          if (!active || !payload?.length) return null;
+                          const point = payload[0].payload as typeof srvccTransitionData[number];
+                          const deltaMs = srvccWindow ? point.timestamp - srvccWindow.first : null;
+                          const rows: Array<[string, string]> = [];
+                          if (point.LTE_RSRP != null) rows.push(["LTE RSRP", `${point.LTE_RSRP.toFixed(1)} dBm`]);
+                          if (point.LTE_RSRQ != null) rows.push(["LTE RSRQ", `${point.LTE_RSRQ.toFixed(1)} dB`]);
+                          if (point.LTE_SINR != null) rows.push(["LTE SINR", `${point.LTE_SINR.toFixed(1)} dB`]);
+                          if (point.LTE_EARFCN != null || point.LTE_PCI != null) rows.push(["EARFCN / PCI", `${point.LTE_EARFCN ?? "—"} / ${point.LTE_PCI ?? "—"}`]);
+                          if (point.LTE_CGI) rows.push(["LTE CGI", String(point.LTE_CGI)]);
+                          if (point.GSM_RxLev != null) rows.push(["GSM RxLev", `${point.GSM_RxLev.toFixed(1)} dBm`]);
+                          if (point.GSM_RxQual != null) rows.push(["GSM RxQual", point.GSM_RxQual.toFixed(0)]);
+                          if (point.GSM_BAND) rows.push(["GSM band", String(point.GSM_BAND)]);
+                          if (point.GSM_CGI) rows.push(["GSM CGI", String(point.GSM_CGI)]);
+                          return (
+                            <div className="rounded border border-border bg-card/95 px-2 py-1.5 text-[10px] shadow-lg">
+                              <div className="font-mono text-foreground">
+                                {new Date(point.timestamp).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                              </div>
+                              {deltaMs != null && (
+                                <div className="text-muted-foreground mb-1">
+                                  {deltaMs >= 0 ? "+" : ""}{(deltaMs / 1000).toFixed(1)}s ως προς το handover
+                                </div>
+                              )}
+                              <div className="grid grid-cols-[auto_auto] gap-x-3 gap-y-0.5">
+                                {rows.map(([label, value]) => (
+                                  <div key={label} className="contents">
+                                    <span className="text-muted-foreground">{label}</span>
+                                    <span className="font-mono text-foreground text-right break-all">{value}</span>
+                                  </div>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        }}
                       />
+
                       {activeSrvccEvents.map((event, idx) => event.EventTime && (
                         <ReferenceLine
                           key={`${event.MsgId ?? idx}-line`}
+                          yAxisId="strength"
                           x={new Date(event.EventTime).getTime()}
                           stroke={event.Status === "Success" ? "#22c55e" : "#ef4444"}
                           strokeWidth={2}
@@ -1427,10 +1947,57 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                           label={{ value: `${event.HandoverType} ${event.InterruptionMs ?? "—"}ms`, position: "insideTopRight", fill: "#cbd5e1", fontSize: 10 }}
                         />
                       ))}
-                      <Line type="monotone" dataKey="LTE_RSRP" stroke="#22c55e" dot={false} strokeWidth={2} name="LTE RSRP" />
-                      <Line type="monotone" dataKey="GSM_RxLev" stroke="#fbbf24" dot={false} strokeWidth={2} name="GSM RxLev" />
+
+                      {srvccShowStrength && <Line yAxisId="strength" type="monotone" dataKey="LTE_RSRP" stroke="#22c55e" dot={srvccShowDots ? { r: 1.5, fill: "#22c55e" } : false} strokeWidth={2} name="LTE RSRP" />}
+                      {srvccShowStrength && <Line yAxisId="strength" type="monotone" dataKey="GSM_RxLev" stroke="#fbbf24" dot={srvccShowDots ? { r: 1.5, fill: "#fbbf24" } : false} strokeWidth={2} name="GSM RxLev" />}
+                      {srvccShowQuality && <Line yAxisId="db" type="monotone" dataKey="LTE_RSRQ" stroke="#38bdf8" dot={false} strokeWidth={1.5} strokeDasharray="4 2" name="LTE RSRQ" />}
+                      {srvccShowQuality && <Line yAxisId="rxqual" type="monotone" dataKey="GSM_RxQual" stroke="#e2e8f0" dot={false} strokeWidth={1.5} strokeDasharray="4 2" name="GSM RxQual" />}
+                      {srvccShowSinr && <Line yAxisId="db" type="monotone" dataKey="LTE_SINR" stroke="#a855f7" dot={false} strokeWidth={1.5} strokeDasharray="2 2" name="LTE SINR" />}
                     </LineChart>
                   </ResponsiveContainer>
+
+                  {/* Μετρημένα στοιχεία των δύο σκελών + το πραγματικό ραδιο-κενό μεταξύ τους */}
+                  {srvccLegStats && (
+                    <div className="mt-1.5 grid grid-cols-1 md:grid-cols-3 gap-1.5 text-[10px]">
+                      <div className="rounded border border-green-500/25 bg-green-500/5 px-2 py-1">
+                        <div className="text-green-400 font-semibold uppercase tracking-wider">LTE leg (RSRP)</div>
+                        {srvccLegStats.lte ? (
+                          <div className="mt-0.5 flex flex-wrap gap-x-3 text-muted-foreground">
+                            <span>n <b className="text-foreground font-mono">{srvccLegStats.lte.samples}</b></span>
+                            <span>avg <b className="text-foreground font-mono">{srvccLegStats.lte.avg.toFixed(1)}</b></span>
+                            <span>min <b className="text-foreground font-mono">{srvccLegStats.lte.min.toFixed(1)}</b></span>
+                            <span>max <b className="text-foreground font-mono">{srvccLegStats.lte.max.toFixed(1)}</b></span>
+                            {srvccLegStats.lteRsrq && <span>RSRQ avg <b className="text-foreground font-mono">{srvccLegStats.lteRsrq.avg.toFixed(1)}</b></span>}
+                          </div>
+                        ) : <div className="mt-0.5 text-muted-foreground">Χωρίς LTE δείγματα στο παράθυρο.</div>}
+                      </div>
+                      <div className="rounded border border-red-500/25 bg-red-500/5 px-2 py-1">
+                        <div className="text-red-400 font-semibold uppercase tracking-wider">Μετάβαση</div>
+                        <div className="mt-0.5 flex flex-wrap gap-x-3 text-muted-foreground">
+                          <span>KPI <b className="text-foreground font-mono">{primarySrvccEvent?.InterruptionMs != null ? `${Number(primarySrvccEvent.InterruptionMs).toFixed(0)} ms` : "—"}</b></span>
+                          <span>ραδιο-κενό <b className="text-foreground font-mono">{srvccLegStats.radioGapMs != null ? `${srvccLegStats.radioGapMs} ms` : "—"}</b></span>
+                          <span>Δ ισχύος <b className="text-foreground font-mono">{srvccLegStats.deltaDb != null ? `${srvccLegStats.deltaDb > 0 ? "+" : ""}${srvccLegStats.deltaDb.toFixed(1)} dB` : "—"}</b></span>
+                        </div>
+                        <div className="mt-0.5 text-muted-foreground">
+                          τελευταίο RSRP <b className="text-foreground font-mono">{srvccLegStats.lastLte?.LTE_RSRP != null ? `${srvccLegStats.lastLte.LTE_RSRP.toFixed(1)} dBm` : "—"}</b>
+                          {" → "}
+                          πρώτο RxLev <b className="text-foreground font-mono">{srvccLegStats.firstGsm?.GSM_RxLev != null ? `${srvccLegStats.firstGsm.GSM_RxLev.toFixed(1)} dBm` : "—"}</b>
+                        </div>
+                      </div>
+                      <div className="rounded border border-amber-500/25 bg-amber-500/5 px-2 py-1">
+                        <div className="text-amber-400 font-semibold uppercase tracking-wider">GSM leg (RxLev)</div>
+                        {srvccLegStats.gsm ? (
+                          <div className="mt-0.5 flex flex-wrap gap-x-3 text-muted-foreground">
+                            <span>n <b className="text-foreground font-mono">{srvccLegStats.gsm.samples}</b></span>
+                            <span>avg <b className="text-foreground font-mono">{srvccLegStats.gsm.avg.toFixed(1)}</b></span>
+                            <span>min <b className="text-foreground font-mono">{srvccLegStats.gsm.min.toFixed(1)}</b></span>
+                            <span>max <b className="text-foreground font-mono">{srvccLegStats.gsm.max.toFixed(1)}</b></span>
+                            {srvccLegStats.gsmRxQual && <span>RxQual avg <b className="text-foreground font-mono">{srvccLegStats.gsmRxQual.avg.toFixed(1)}</b></span>}
+                          </div>
+                        ) : <div className="mt-0.5 text-muted-foreground">Χωρίς GSM δείγματα στο παράθυρο.</div>}
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
 
@@ -2351,7 +2918,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       </div>
 
       {/* ── Συμπεριφορά δικτύου πριν / κατά / μετά κλήση ── */}
-      {(contextChartData.length > 0 || contextTechnology.length > 0 || (isGSMMode && gsmChartData.length > 0)) && (
+      {(contextChartData.length > 0 || contextTechnology.length > 0 || gsmChartData.length > 0) && (
         <div className="bg-card border border-border rounded-lg p-3 space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             <h3 className="text-sm font-semibold text-foreground">
@@ -2373,7 +2940,10 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
               </div>
               {/* A/B context is side-isolated for both LTE and GSM. */}
               {(() => {
-                const hasBSide = isGSMMode ? gsmContextSignalBSide.length > 0 : contextSignalBSide.length > 0;
+                // Σε SRVCC υπάρχει B-side context αν το έχει έστω μία από τις δύο τεχνολογίες
+                const hasBSide = isGSMMode
+                  ? gsmContextSignalBSide.length > 0
+                  : contextSignalBSide.length > 0 || (showGsmContext && gsmContextSignalBSide.length > 0);
                 return (
                   <div className={`inline-flex rounded-md border border-border overflow-hidden ${!hasBSide && isLoadingRadio ? "opacity-40 pointer-events-none" : ""}`}>
                     <button
@@ -2396,57 +2966,36 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
             </div>
           </div>
 
-          {selectedContextSide === "B" && activeContextSignal.length === 0 && (!isGSMMode || activeGsmContextSignal.length === 0) && (
+          {selectedContextSide === "B" && activeContextSignal.length === 0 && (!showGsmContext || activeGsmContextSignal.length === 0) && (
             <div className="rounded border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
               Δεν υπάρχουν context measurements για B-side. Δεν χρησιμοποιούνται δεδομένα A-side ως fallback.
             </div>
           )}
 
-          {/* GSM chart — RxLev / RxQual over the before/during/after window, shaded by gsmDuringZone */}
-          {isGSMMode && gsmChartData.length > 0 && (
+          {/* Session Overview — χρονική επισκόπηση (IDLE/CALL + τεχνολογία) ακριβώς
+              πάνω από το διάγραμμα RSRP/RxLev, στο ίδιο x-domain με αυτό */}
+          {sessionOverview && (
             <div>
-              <div className="flex items-center gap-3 mb-1">
-                <span className="text-xs text-muted-foreground">RxLev / RxQual</span>
-                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-amber-400/30 border border-amber-400/50" />Πριν</span>
-                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-blue-500/30 border border-blue-500/50" />Κατά</span>
-                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-orange-400/30 border border-orange-400/50" />Μετά</span>
+              <div className="mb-1 flex items-center gap-3">
+                <span className="text-xs text-muted-foreground">Session Overview</span>
+                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm" style={{ backgroundColor: "#4b5563" }} />IDLE</span>
+                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm" style={{ backgroundColor: "#dc2626" }} />CALL</span>
+                <span className="text-xs text-muted-foreground">· 2η λωρίδα: τεχνολογία / band</span>
               </div>
-              <ResponsiveContainer width="100%" height={160}>
-                <LineChart data={gsmChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
-                  <XAxis
-                    dataKey="idx"
-                    type="number"
-                    domain={[0, gsmChartData.length - 1]}
-                    tickFormatter={(v: number) => gsmChartData[v]?.time ?? ""}
-                    tick={{ fontSize: 9, fill: "#94a3b8" }}
-                    interval="preserveStartEnd"
-                  />
-                  <YAxis yAxisId="rxlev" domain={[-120, -40]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={32} />
-                  <YAxis yAxisId="rxqual" orientation="right" domain={[7, 0]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={22} />
-                  <RechartsTooltip
-                    contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155", fontSize: 11 }}
-                    labelFormatter={(v: number) => gsmChartData[v]?.time ?? ""}
-                    formatter={(val: any, name: string) => [val != null ? Number(val).toFixed(1) : "—", name]}
-                  />
-                  {/* before — κίτρινο */}
-                  {gsmDuringZone.first != null && (
-                    <ReferenceArea yAxisId="rxlev" x1={0} x2={gsmDuringZone.first} fill="#f59e0b" fillOpacity={0.25} stroke="#f59e0b" strokeOpacity={0.4} strokeWidth={1} />
-                  )}
-                  {/* during — μπλε */}
-                  {gsmDuringZone.first != null && gsmDuringZone.last != null && (
-                    <ReferenceArea yAxisId="rxlev" x1={gsmDuringZone.first} x2={gsmDuringZone.last} fill="#3b82f6" fillOpacity={0.22} stroke="#3b82f6" strokeOpacity={0.5} strokeWidth={1} />
-                  )}
-                  {/* after — πορτοκαλί */}
-                  {gsmDuringZone.last != null && (
-                    <ReferenceArea yAxisId="rxlev" x1={gsmDuringZone.last} x2={gsmChartData.length - 1} fill="#f97316" fillOpacity={0.25} stroke="#f97316" strokeOpacity={0.4} strokeWidth={1} />
-                  )}
-                  <Line yAxisId="rxlev" dataKey="RxLevSub" stroke="#22c55e" dot={false} strokeWidth={2} connectNulls name="RxLev" />
-                  <Line yAxisId="rxqual" dataKey="RxQualSub" stroke="#e2e8f0" dot={false} strokeWidth={1} connectNulls name="RxQual" />
-                </LineChart>
-              </ResponsiveContainer>
+              <SessionOverview
+                times={sessionOverview.times}
+                lanes={sessionOverview.lanes}
+                callStart={sessionOverview.callStart}
+                callEnd={sessionOverview.callEnd}
+                padLeft={32}
+                padRight={36}
+              />
             </div>
           )}
+
+          {/* Σε καθαρό GSM view το RxLev chart μπαίνει πρώτο (ευθυγραμμισμένο με το Session
+              Overview από πάνω). Σε SRVCC με ενεργό LTE view μπαίνει κάτω από το LTE. */}
+          {isGSMMode && gsmContextChart}
 
           {/* LTE Signal chart — RSRP / RSRQ over the before/during/after window, shaded by duringZone */}
           {contextChartData.length > 0 && (
@@ -2460,11 +3009,14 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
               <ResponsiveContainer width="100%" height={160}>
                 <LineChart data={contextChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
                   <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
+                  {/* Κοινός άξονας χρόνου με το GSM chart από κάτω */}
                   <XAxis
-                    dataKey="idx"
+                    dataKey="t"
                     type="number"
-                    domain={[0, contextChartData.length - 1]}
-                    tickFormatter={(v: number) => contextChartData[v]?.time ?? ""}
+                    scale="time"
+                    domain={ctxDomain ? [ctxDomain.start, ctxDomain.end] : ["dataMin", "dataMax"]}
+                    allowDataOverflow
+                    tickFormatter={ctxTimeTick}
                     tick={{ fontSize: 9, fill: "#94a3b8" }}
                     interval="preserveStartEnd"
                   />
@@ -2472,20 +3024,20 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                   <YAxis yAxisId="rsrq" orientation="right" domain={[-25, 0]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={28} />
                   <RechartsTooltip
                     contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155", fontSize: 11 }}
-                    labelFormatter={(v: number) => contextChartData[v]?.time ?? ""}
+                    labelFormatter={ctxTimeTick}
                     formatter={(val: any, name: string) => [val != null ? Number(val).toFixed(1) : "—", name]}
                   />
-                  {/* before — κίτρινο */}
-                  {duringZone.first != null && (
-                    <ReferenceArea yAxisId="rsrp" x1={0} x2={duringZone.first} fill="#f59e0b" fillOpacity={0.25} stroke="#f59e0b" strokeOpacity={0.4} strokeWidth={1} />
-                  )}
-                  {/* during — μπλε */}
-                  {duringZone.first != null && duringZone.last != null && (
-                    <ReferenceArea yAxisId="rsrp" x1={duringZone.first} x2={duringZone.last} fill="#3b82f6" fillOpacity={0.22} stroke="#3b82f6" strokeOpacity={0.5} strokeWidth={1} />
-                  )}
-                  {/* after — πορτοκαλί */}
-                  {duringZone.last != null && (
-                    <ReferenceArea yAxisId="rsrp" x1={duringZone.last} x2={contextChartData.length - 1} fill="#f97316" fillOpacity={0.25} stroke="#f97316" strokeOpacity={0.4} strokeWidth={1} />
+                  {/* Ζώνες πριν / κατά / μετά — σε χρόνο, ίδιες με του GSM chart */}
+                  {ctxDomain && ctxCallBounds && (
+                    <>
+                      {ctxCallBounds.start > ctxDomain.start && (
+                        <ReferenceArea yAxisId="rsrp" x1={ctxDomain.start} x2={ctxCallBounds.start} fill="#f59e0b" fillOpacity={0.25} stroke="#f59e0b" strokeOpacity={0.4} strokeWidth={1} />
+                      )}
+                      <ReferenceArea yAxisId="rsrp" x1={ctxCallBounds.start} x2={ctxCallBounds.end} fill="#3b82f6" fillOpacity={0.22} stroke="#3b82f6" strokeOpacity={0.5} strokeWidth={1} />
+                      {ctxDomain.end > ctxCallBounds.end && (
+                        <ReferenceArea yAxisId="rsrp" x1={ctxCallBounds.end} x2={ctxDomain.end} fill="#f97316" fillOpacity={0.25} stroke="#f97316" strokeOpacity={0.4} strokeWidth={1} />
+                      )}
+                    </>
                   )}
                   <Line yAxisId="rsrp" dataKey="RSRP" stroke="#22c55e" dot={false} strokeWidth={2} connectNulls name="RSRP" />
                   <Line yAxisId="rsrq" dataKey="RSRQ" stroke="#e2e8f0" dot={false} strokeWidth={1} connectNulls name="RSRQ" />
@@ -2493,6 +3045,10 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
               </ResponsiveContainer>
             </div>
           )}
+
+          {/* SRVCC σε LTE view: το GSM σκέλος μπαίνει αμέσως μετά το LTE, με τη σειρά που
+              συμβαίνει στην κλήση (LTE → handover → GSM) */}
+          {!isGSMMode && gsmContextChart}
 
           {/* Technology changes table */}
           {contextTechnology.length > 0 && (
@@ -2536,7 +3092,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
             </div>
           )}
 
-          {contextChartData.length === 0 && contextTechnology.length === 0 && !(isGSMMode && gsmChartData.length > 0) && (
+          {contextChartData.length === 0 && contextTechnology.length === 0 && gsmChartData.length === 0 && (
             <p className="text-xs text-muted-foreground">Δεν βρέθηκαν δεδομένα στο παράθυρο ±10 δευτ.</p>
           )}
         </div>

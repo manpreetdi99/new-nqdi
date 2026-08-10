@@ -21,6 +21,18 @@ export const GRID_STYLE = {
 
 export const LEGEND_WRAPPER_STYLE = { fontSize: 11, color: "hsl(215, 12%, 50%)" };
 
+/** Χρώμα ανά RAT για τις μπάρες τεχνολογίας (LTE μπλε, GSM ροζ/σομόν, NR μωβ, 3G τιρκουάζ). */
+export function technologyColor(name: string | null | undefined): string {
+  const t = (name ?? "").toUpperCase();
+  if (!t) return "#475569";
+  if (t.includes("NR") || t.includes("5G")) return "#a855f7";
+  if (t.includes("CA")) return "#1d4ed8";
+  if (t.includes("LTE") || t.includes("E-UTRA")) return "#3b82f6";
+  if (t.includes("WCDMA") || t.includes("UMTS") || t.includes("HSPA") || t.includes("3G")) return "#14b8a6";
+  if (t.includes("GSM") || t.includes("GPRS") || t.includes("EDGE") || t.includes("2G")) return "#fb7185";
+  return "#64748b";
+}
+
 export const DEFAULTS = {
   areaFillOpacity: 0.1,
   radarFillOpacity: 0.15,
