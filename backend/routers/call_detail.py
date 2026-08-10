@@ -127,11 +127,12 @@ def get_call_neighbors(
     database: str = Query(..., min_length=1),
     session_id: str = Query(..., min_length=1)
 ):
-    """Prev/Next κλήση για τα κουμπιά πλοήγησης του Call Detail.
-    Κάθε κλήση καταναλώνει συνήθως 2 SessionIds (A-side + B-side), οπότε ο στόχος
-    είναι το ±2 — αλλά ελέγχουμε σειριακά και το ±1 (κλήσεις χωρίς B-side).
-    Ίδια κριτήρια ορατότητας με το /api/calls (Sessions.Valid 0/1, όχι B-side rows).
-    NULL σημαίνει ότι δεν υπάρχει prev/next κλήση → το κουμπί γίνεται disabled."""
+    """Prev/Next visible A-side call from the same measurement file, ordered by time.
+
+    SessionId values are identifiers, not a chronological sequence: paired A/B calls,
+    missing B sides and parallel devices make ``sid +/- 1`` unreliable.  FileId keeps
+    navigation on the same device/route stream and the timestamp provides the order.
+    """
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
@@ -139,21 +140,49 @@ def get_call_neighbors(
         cursor.execute("""
             DECLARE @sid BIGINT = TRY_CONVERT(BIGINT, ?);
 
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE
+                        WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                        ELSE CA.SessionId
+                    END AS SessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = @sid OR CA.SessionIdA = @sid
+                ORDER BY CASE WHEN CA.SessionId = @sid THEN 0 ELSE 1 END
+            ),
+            current_call AS (
+                SELECT TOP (1)
+                    CA.SessionId,
+                    CA.FileId,
+                    CA.callStartTimeStamp
+                FROM CallAnalysis CA
+                INNER JOIN pair_root PR ON PR.SessionId = CA.SessionId
+                WHERE (CA.Side <> 'B' OR CA.Side IS NULL)
+            ),
+            visible_calls AS (
+                SELECT
+                    CA.SessionId,
+                    CA.callStartTimeStamp
+                FROM CallAnalysis CA
+                INNER JOIN current_call CC ON CC.FileId = CA.FileId
+                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                WHERE (CA.Side <> 'B' OR CA.Side IS NULL)
+                  AND (S.Valid IN (0, 1) OR S.SessionId IS NULL)
+                  AND CA.callStartTimeStamp IS NOT NULL
+            )
             SELECT
-                (SELECT MAX(CA.SessionId)
-                   FROM CallAnalysis CA
-                   LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
-                  WHERE CA.SessionId IN (@sid - 1, @sid - 2)
-                    AND CA.SessionId > 0
-                    AND (CA.Side <> 'B' OR CA.Side IS NULL)
-                    AND (S.Valid = 1 OR S.Valid = 0))   AS PrevSessionId,
-
-                (SELECT MIN(CA.SessionId)
-                   FROM CallAnalysis CA
-                   LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
-                  WHERE CA.SessionId IN (@sid + 1, @sid + 2)
-                    AND (CA.Side <> 'B' OR CA.Side IS NULL)
-                    AND (S.Valid = 1 OR S.Valid = 0))   AS NextSessionId;
+                (SELECT TOP (1) VC.SessionId
+                   FROM visible_calls VC
+                   CROSS JOIN current_call CC
+                  WHERE VC.callStartTimeStamp < CC.callStartTimeStamp
+                     OR (VC.callStartTimeStamp = CC.callStartTimeStamp AND VC.SessionId < CC.SessionId)
+                  ORDER BY VC.callStartTimeStamp DESC, VC.SessionId DESC) AS PrevSessionId,
+                (SELECT TOP (1) VC.SessionId
+                   FROM visible_calls VC
+                   CROSS JOIN current_call CC
+                  WHERE VC.callStartTimeStamp > CC.callStartTimeStamp
+                     OR (VC.callStartTimeStamp = CC.callStartTimeStamp AND VC.SessionId > CC.SessionId)
+                  ORDER BY VC.callStartTimeStamp ASC, VC.SessionId ASC) AS NextSessionId;
         """, (session_id,))
 
         row = cursor.fetchone()
@@ -177,7 +206,10 @@ def get_mos_values(
         cursor = conn.cursor()
 
         query = """
-            SELECT OptionalWB
+            SELECT
+                COALESCE(OptionalWB, OptionalNB) AS MOS,
+                OptionalWB,
+                OptionalNB
               FROM [ResultsLQ08Avg]
               WHERE [SessionId] = ?
               ORDER BY MsgId
@@ -209,28 +241,34 @@ def get_results_kpi(
         cursor = conn.cursor()
 
         query = """
-            SELECT [MsgId]
-                  ,[SessionId]
-                  ,[TestId]
-                  ,[KPIId]
-                  ,[StartTime]
-                  ,[EndTime]
-                  ,[ErrorCode]
-                  ,[Counter]
-                  ,[Value1]
-                  ,[Value2]
-                  ,[Value3]
-                  ,[Value4]
-                  ,[Value5]
-              FROM [ResultsKPI]
+            SELECT RK.[MsgId]
+                  ,RK.[SessionId]
+                  ,RK.[TestId]
+                  ,RK.[KPIId]
+                  ,DK.[ShortName] AS [KPIShortName]
+                  ,DK.[KPIName]
+                  ,DK.[KPIStatus]
+                  ,RK.[StartTime]
+                  ,RK.[EndTime]
+                  ,RK.[ErrorCode]
+                  ,RK.[Counter]
+                  ,RK.[Value1]
+                  ,RK.[Value2]
+                  ,RK.[Value3]
+                  ,RK.[Value4]
+                  ,RK.[Value5]
+              FROM [ResultsKPI] RK
+              LEFT JOIN [DmnKPI] DK
+                ON DK.[KPIId] = RK.[KPIId]
+               AND DK.[ErrorCode] = RK.[ErrorCode]
         """
 
         params = []
         if session_id:
-            query += " WHERE [SessionId] = ?"
+            query += " WHERE RK.[SessionId] = ?"
             params.append(session_id)
 
-        query += " ORDER BY [MsgId]"
+        query += " ORDER BY RK.[MsgId]"
 
         cursor.execute(query, tuple(params))
 
@@ -485,6 +523,226 @@ def get_handover_info(
         data = _rows(cursor)
         conn.close()
         return {"handoverInfo": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/call_srvcc_detail")
+def get_call_srvcc_detail(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """SRVCC-specific events and A/B technology context for one paired call.
+
+    ResultsKPI is the authoritative SRVCC source:
+      * KPI 38040 -> 4G to 3G
+      * KPI 38050 -> 4G to 2G
+      * ErrorCode 0 -> success, 108003 -> known failure
+
+    The source/target network snapshots are taken from the same side's FileId,
+    immediately before the KPI start and at/after the KPI end. This keeps the
+    event classification separate from the generic HandoverInfo feed.
+    """
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            DECLARE @sid BIGINT = TRY_CONVERT(BIGINT, ?);
+
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE
+                        WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                        ELSE CA.SessionId
+                    END AS ASessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = @sid OR CA.SessionIdA = @sid
+                ORDER BY CASE WHEN CA.SessionId = @sid THEN 0 ELSE 1 END
+            ),
+            paired_sessions AS (
+                SELECT DISTINCT
+                    CA.SessionId,
+                    CASE
+                        WHEN CA.SessionId = PR.ASessionId THEN 'A'
+                        ELSE COALESCE(NULLIF(CA.Side, ''), 'B')
+                    END AS Side,
+                    CA.FileId
+                FROM CallAnalysis CA
+                CROSS JOIN pair_root PR
+                WHERE CA.SessionId = PR.ASessionId
+                   OR CA.SessionIdA = PR.ASessionId
+            ),
+            srvcc_events AS (
+                SELECT
+                    PS.Side,
+                    PS.FileId,
+                    RK.MsgId,
+                    RK.SessionId,
+                    RK.KPIId,
+                    RK.StartTime,
+                    RK.EndTime,
+                    RK.ErrorCode,
+                    RK.Duration AS InterruptionMs,
+                    COALESCE(RK.StartTime, RK.EndTime) AS EventTime,
+                    COALESCE(
+                        RK.EndTime,
+                        DATEADD(MILLISECOND, TRY_CONVERT(INT, RK.Duration), RK.StartTime),
+                        RK.StartTime
+                    ) AS TargetTime
+                FROM paired_sessions PS
+                INNER JOIN ResultsKPI RK ON RK.SessionId = PS.SessionId
+                WHERE RK.KPIId IN (38040, 38050)
+            )
+            SELECT
+                E.Side,
+                E.MsgId,
+                E.SessionId,
+                E.KPIId,
+                CASE E.KPIId
+                    WHEN 38040 THEN '4G->3G'
+                    WHEN 38050 THEN '4G->2G'
+                    ELSE 'N/A'
+                END AS HandoverType,
+                E.ErrorCode,
+                CASE
+                    WHEN E.ErrorCode = 0 THEN 'Success'
+                    WHEN E.ErrorCode = 108003 THEN 'Fail'
+                    ELSE 'Unknown'
+                END AS Status,
+                E.EventTime,
+                E.TargetTime,
+                E.InterruptionMs,
+
+                SRC.MsgTime AS SourceTime,
+                SRC.Technology AS SourceTechnology,
+                SRC.RFBand AS SourceBand,
+                SRC.CGI AS SourceCGI,
+                SRC.CID AS SourceCellId,
+                SRC.LAC AS SourceLAC,
+                SRC.RAC AS SourceRAC,
+                SRC.BCCH AS SourceBCCH,
+                SRC.BSIC AS SourceBSIC,
+                SRC.Operator AS SourceOperator,
+                SRC.MCC AS SourceMCC,
+                SRC.MNC AS SourceMNC,
+
+                TGT.MsgTime AS TargetNetworkTime,
+                TGT.Technology AS TargetTechnology,
+                TGT.RFBand AS TargetBand,
+                TGT.CGI AS TargetCGI,
+                TGT.CID AS TargetCellId,
+                TGT.LAC AS TargetLAC,
+                TGT.RAC AS TargetRAC,
+                TGT.BCCH AS TargetBCCH,
+                TGT.BSIC AS TargetBSIC,
+                TGT.Operator AS TargetOperator,
+                TGT.MCC AS TargetMCC,
+                TGT.MNC AS TargetMNC,
+
+                LTE.FullDate AS SourceRadioTime,
+                LTE.EARFCN AS SourceEARFCN,
+                LTE.PhyCellId AS SourcePCI,
+                LTE.CGI AS SourceRadioCGI,
+                ROUND(LTE.RSRP, 2) AS SourceRSRP,
+                ROUND(LTE.RSRQ, 2) AS SourceRSRQ,
+                ROUND(LTE.SINR, 2) AS SourceSINR,
+                ROUND(LTE.RSSI, 2) AS SourceRSSI,
+                LTE.DLBandWidth AS SourceDLBandwidth,
+                LTE.ULBandWidth AS SourceULBandwidth,
+
+                GSM.FullDate AS TargetRadioTime,
+                GSM.band AS TargetRadioBand,
+                GSM.CGI AS TargetRadioCGI,
+                ROUND(GSM.RxLevSub, 2) AS TargetRxLev,
+                ROUND(GSM.RxQualSub, 2) AS TargetRxQual
+            FROM srvcc_events E
+            OUTER APPLY (
+                SELECT TOP (1)
+                    NI.MsgTime, NI.Technology, NI.RFBand, NI.CGI, NI.CID,
+                    NI.LAC, NI.RAC, NI.BCCH, NI.BSIC, NI.Operator, NI.MCC, NI.MNC
+                FROM NetworkInfo NI
+                WHERE NI.FileId = E.FileId
+                  AND NI.MsgTime <= E.EventTime
+                ORDER BY NI.MsgTime DESC
+            ) SRC
+            OUTER APPLY (
+                SELECT TOP (1)
+                    NI.MsgTime, NI.Technology, NI.RFBand, NI.CGI, NI.CID,
+                    NI.LAC, NI.RAC, NI.BCCH, NI.BSIC, NI.Operator, NI.MCC, NI.MNC
+                FROM NetworkInfo NI
+                WHERE NI.FileId = E.FileId
+                  AND NI.MsgTime >= E.TargetTime
+                ORDER BY NI.MsgTime
+            ) TGT
+            OUTER APPLY (
+                SELECT TOP (1)
+                    FR.FullDate, FR.EARFCN, FR.PhyCellId, FR.CGI,
+                    FR.RSRP, FR.RSRQ, FR.SINR, FR.RSSI,
+                    FR.DLBandWidth, FR.ULBandWidth
+                FROM FactLTERadio FR
+                WHERE FR.SessionId = E.SessionId
+                  AND FR.FullDate <= E.EventTime
+                ORDER BY FR.FullDate DESC
+            ) LTE
+            OUTER APPLY (
+                SELECT TOP (1)
+                    FG.FullDate, FG.band, FG.CGI, FG.RxLevSub, FG.RxQualSub
+                FROM FactGSMRadio FG
+                WHERE FG.SessionId = E.SessionId
+                  AND FG.FullDate >= E.TargetTime
+                  AND (FG.RxLevSub IS NOT NULL OR FG.RxQualSub IS NOT NULL)
+                ORDER BY FG.FullDate
+            ) GSM
+            ORDER BY E.EventTime, E.Side;
+        """, (session_id,))
+        events = _rows(cursor)
+
+        cursor.execute("""
+            DECLARE @sid BIGINT = TRY_CONVERT(BIGINT, ?);
+
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE
+                        WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                        ELSE CA.SessionId
+                    END AS ASessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = @sid OR CA.SessionIdA = @sid
+                ORDER BY CASE WHEN CA.SessionId = @sid THEN 0 ELSE 1 END
+            ),
+            paired_sessions AS (
+                SELECT DISTINCT
+                    CA.SessionId,
+                    CASE
+                        WHEN CA.SessionId = PR.ASessionId THEN 'A'
+                        ELSE COALESCE(NULLIF(CA.Side, ''), 'B')
+                    END AS Side
+                FROM CallAnalysis CA
+                CROSS JOIN pair_root PR
+                WHERE CA.SessionId = PR.ASessionId
+                   OR CA.SessionIdA = PR.ASessionId
+            )
+            SELECT
+                PS.Side,
+                T.MsgTime,
+                T.SessionId,
+                T.PrevTechnology,
+                T.CurrTechnology,
+                T.Duration,
+                T.Band,
+                T.LTEDLCarriers,
+                T.LTEULCarriers,
+                T.NR5GDLCarriers,
+                T.NR5GULCarriers
+            FROM paired_sessions PS
+            INNER JOIN Technology T ON T.SessionId = PS.SessionId
+            ORDER BY T.MsgTime, PS.Side;
+        """, (session_id,))
+        technology = _rows(cursor)
+
+        conn.close()
+        return {"events": events, "technology": technology}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

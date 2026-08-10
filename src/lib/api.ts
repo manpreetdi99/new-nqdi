@@ -231,10 +231,16 @@ export async function fetchGsmValuesBSide(
   return requestJson(`/api/gsm_values_b_side?${params.toString()}`);
 }
 
+export interface MosValueRow {
+  MOS: number | null;
+  OptionalWB: number | null;
+  OptionalNB: number | null;
+}
+
 export async function fetchMosValues(
   database: string,
   session_id: string
-): Promise<{ mosValues: any[] }> {
+): Promise<{ mosValues: MosValueRow[] }> {
   const params = new URLSearchParams({ database, session_id });
   return requestJson(`/api/mos_values?${params.toString()}`);
 }
@@ -603,6 +609,76 @@ export async function fetchHandoverInfo(
 ): Promise<{ handoverInfo: HandoverInfoRow[] }> {
   const params = new URLSearchParams({ database, session_id });
   return requestJson(`/api/handover_info?${params.toString()}`);
+}
+
+export interface SrvccEventRow {
+  Side: "A" | "B" | string | null;
+  MsgId: number | null;
+  SessionId: string | null;
+  KPIId: 38040 | 38050 | number;
+  HandoverType: "4G->3G" | "4G->2G" | string;
+  ErrorCode: number | null;
+  Status: "Success" | "Fail" | "Unknown" | string;
+  EventTime: string | null;
+  TargetTime: string | null;
+  InterruptionMs: number | null;
+  SourceTime: string | null;
+  SourceTechnology: string | null;
+  SourceBand: string | number | null;
+  SourceCGI: string | null;
+  SourceCellId: string | number | null;
+  SourceLAC: string | number | null;
+  SourceRAC: string | number | null;
+  SourceBCCH: string | number | null;
+  SourceBSIC: string | number | null;
+  SourceOperator: string | null;
+  SourceMCC: string | number | null;
+  SourceMNC: string | number | null;
+  TargetNetworkTime: string | null;
+  TargetTechnology: string | null;
+  TargetBand: string | number | null;
+  TargetCGI: string | null;
+  TargetCellId: string | number | null;
+  TargetLAC: string | number | null;
+  TargetRAC: string | number | null;
+  TargetBCCH: string | number | null;
+  TargetBSIC: string | number | null;
+  TargetOperator: string | null;
+  TargetMCC: string | number | null;
+  TargetMNC: string | number | null;
+  SourceRadioTime: string | null;
+  SourceEARFCN: number | null;
+  SourcePCI: number | null;
+  SourceRadioCGI: string | null;
+  SourceRSRP: number | null;
+  SourceRSRQ: number | null;
+  SourceSINR: number | null;
+  SourceRSSI: number | null;
+  SourceDLBandwidth: string | number | null;
+  SourceULBandwidth: string | number | null;
+  TargetRadioTime: string | null;
+  TargetRadioBand: string | number | null;
+  TargetRadioCGI: string | null;
+  TargetRxLev: number | null;
+  TargetRxQual: number | null;
+}
+
+export interface SrvccTechnologyRow extends TechnologyTimelineRow {
+  Side: "A" | "B" | string | null;
+  SessionId: string | null;
+}
+
+export interface SrvccDetailResponse {
+  events: SrvccEventRow[];
+  technology: SrvccTechnologyRow[];
+}
+
+export async function fetchCallSrvccDetail(
+  database: string,
+  session_id: string
+): Promise<SrvccDetailResponse> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/call_srvcc_detail?${params.toString()}`);
 }
 
 export interface TechnologyTimelineRow {
