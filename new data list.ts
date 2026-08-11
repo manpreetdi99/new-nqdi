@@ -11,7 +11,6 @@ import {
   Filter,
   MapPin,
   RefreshCw,
-  CalendarDays,
 } from "lucide-react";
 import type { DataCallRow } from "@/lib/api";
 import { classifyDataTest } from "@/lib/attachmentC";
@@ -22,33 +21,15 @@ export interface DataSessionItem {
   tests: DataCallRow[];
   passCount: number;
   failCount: number;
-  /** ASideLocation της session (από το πρώτο test) */
-  location?: string;
-  /** Αριθμός cycle μέσα στη location (1 = πιο παλιό) */
-  cycle?: number;
-  /** Θέση της session μέσα στο cycle (1 = πρώτη του cycle) */
-  cyclePosition?: number;
-  /** Πρώτο SessionId του cycle (αριθμητικά) */
-  cycleStartId?: number | null;
-  /** Τελευταίο SessionId που ανήκει ακόμη στο cycle (cycleStartId + span) */
-  cycleEndId?: number | null;
 }
 
 interface DataSessionsListProps {
   sessions: DataSessionItem[];
   selectedSessionId: string | null;
   onSelectSession: (sessionId: string) => void;
-  /** Εμφάνιση των sessions σε blocks ανά cycle (αλλιώς επίπεδη λίστα ανά location). */
-  groupByCycle?: boolean;
 }
 
 type SortKey = "natural" | "newest" | "fails" | "dl" | "rtt" | "session";
-
-/**
- * "auto" = χρονολογικά όταν υπάρχουν πολλά A-side locations (όπως στις κλήσεις),
- * ανά location όταν υπάρχει μόνο ένα.
- */
-type Grouping = "auto" | "time" | "location";
 
 /* ── helpers ───────────────────────────────────────────────────────────── */
 
@@ -70,24 +51,6 @@ function formatDay(ts: string | null | undefined): string {
   const d = parseTs(ts);
   if (!d) return "";
   return `${pad(d.getDate())}/${pad(d.getMonth() + 1)}`;
-}
-
-/** Κλειδί ημέρας για τα χρονολογικά headers (τοπική ώρα, όχι UTC). */
-function dayKey(ms: number): string {
-  if (!ms) return "unknown";
-  const d = new Date(ms);
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
-}
-
-const DAY_FORMAT = new Intl.DateTimeFormat("el-GR", {
-  weekday: "long",
-  day: "2-digit",
-  month: "2-digit",
-  year: "numeric",
-});
-
-function formatFullDay(ms: number): string {
-  return ms ? DAY_FORMAT.format(new Date(ms)) : "Χωρίς χρονοσήμανση";
 }
 
 /** 95 → "95s", 512 → "8m 32s", 4210 → "1h 10m" */
@@ -249,12 +212,10 @@ interface SessionView {
   searchBlob: string;
   /** Θέση του session μέσα στο location, με τη σειρά που το επιστρέφει το SQL. */
   order: number;
-  /** Αριθμός cycle μέσα στο location. */
+  /** 6 συνεχόμενα sessions ενός location = 1 cycle. */
   cycle: number;
-  /** 1..cycleTotal — η θέση του session μέσα στο cycle. */
+  /** 1..cycleSize — η θέση του session μέσα στο cycle. */
   posInCycle: number;
-  /** Πόσα sessions έχει συνολικά το cycle στο οποίο ανήκει. */
-  cycleTotal: number;
 }
 
 function buildView(item: DataSessionItem): SessionView {
@@ -336,7 +297,7 @@ function buildView(item: DataSessionItem): SessionView {
 
   return {
     item,
-    location: item.location ?? item.first?.Location ?? "Unknown",
+    location: item.first?.Location ?? "Unknown",
     status,
     startedAt,
     endedAt,
@@ -364,7 +325,7 @@ function buildView(item: DataSessionItem): SessionView {
     orderedTests,
     searchBlob: [
       item.sessionId,
-      item.location ?? item.first?.Location ?? "",
+      item.first?.Location ?? "",
       item.first?.CollectionName ?? "",
       item.first?.ASideFileName ?? "",
       item.first?.comment ?? "",
@@ -376,7 +337,6 @@ function buildView(item: DataSessionItem): SessionView {
     order: 0,
     cycle: 1,
     posInCycle: 1,
-    cycleTotal: 1,
   };
 }
 
@@ -385,15 +345,10 @@ function buildView(item: DataSessionItem): SessionView {
 interface CycleGroup {
   cycle: number;
   views: SessionView[];
-  /** Πόσα sessions περιμένουμε στο cycle (πραγματικά ή από τη ρύθμιση). */
-  expected: number;
   /** Πλήρες = έχει όλα τα sessions του cycle (π.χ. 6/6). */
   complete: boolean;
   from: string | null;
   to: string | null;
-  /** Εύρος SessionId του cycle, όταν το στέλνει το Index. */
-  idFrom: number | null;
-  idTo: number | null;
   tests: number;
   pass: number;
   fail: number;
@@ -407,7 +362,7 @@ interface CycleGroup {
   spanSec: number | null;
 }
 
-function summarizeCycle(cycle: number, views: SessionView[], expected: number): CycleGroup {
+function summarizeCycle(cycle: number, views: SessionView[], cycleSize: number): CycleGroup {
   const stamps = views
     .map((v) => v.item.first?.callStartTimeStamp)
     .filter((s): s is string => !!parseTs(s))
@@ -421,12 +376,9 @@ function summarizeCycle(cycle: number, views: SessionView[], expected: number): 
   return {
     cycle,
     views,
-    expected,
-    complete: views.length >= expected,
+    complete: views.length >= cycleSize,
     from,
     to,
-    idFrom: views[0]?.item.cycleStartId ?? null,
-    idTo: views[0]?.item.cycleEndId ?? null,
     tests: views.reduce((s, v) => s + v.item.tests.length, 0),
     pass: views.reduce((s, v) => s + v.item.passCount, 0),
     fail: views.reduce((s, v) => s + v.item.failCount, 0),
@@ -437,33 +389,6 @@ function summarizeCycle(cycle: number, views: SessionView[], expected: number): 
     mos: avg(views.map((v) => v.mos).filter((v): v is number => v != null)),
     spanSec: spanMs == null || spanMs <= 0 ? null : spanMs / 1000,
   };
-}
-
-/**
- * Ένα cycle όπως εμφανίζεται μέσα στη χρονολογική λίστα: συνεχόμενα sessions του
- * ίδιου location & cycle. Αν το ίδιο cycle κοπεί (π.χ. αλλάζει η μέρα), γίνονται
- * δύο runs — η χρονική σειρά δεν σπάει ποτέ για να μαζευτούν οι γραμμές.
- */
-interface CycleRun extends CycleGroup {
-  key: string;
-  location: string;
-}
-
-/** Ένα "μπλοκ ημέρας" στη χρονολογική προβολή (όλα τα locations μαζί). */
-interface DayGroup {
-  key: string;
-  label: string;
-  views: SessionView[];
-  /** Τα ίδια views, σπασμένα σε συνεχόμενα cycle blocks. */
-  runs: CycleRun[];
-  /** Ποια locations ακουμπήθηκαν μέσα στην ημέρα, με σειρά εμφάνισης. */
-  locations: string[];
-  tests: number;
-  pass: number;
-  fail: number;
-  badSessions: number;
-  from: number | null;
-  to: number | null;
 }
 
 interface LocationGroup {
@@ -517,77 +442,6 @@ const Fact = ({
     </div>
   );
 
-/** Επικεφαλίδα cycle — ίδια σε ομαδοποίηση ανά location και στη χρονολογική λίστα. */
-const CycleHeader = ({ group, location }: { group: CycleGroup; location?: string }) => (
-  <div className="flex flex-wrap items-center gap-x-2 gap-y-1 px-3 sm:px-4 py-2 bg-muted/30 border-b border-border/40">
-    <RefreshCw className="h-3 w-3 text-muted-foreground xl:ml-5" />
-    {location && (
-      <span className="flex items-center gap-1 min-w-0" title={location}>
-        <MapPin className="h-3 w-3 text-primary shrink-0" />
-        <span className="text-[11px] font-semibold text-foreground truncate max-w-[12rem]">{location}</span>
-        <span className="text-muted-foreground">·</span>
-      </span>
-    )}
-    <span className="text-[11px] font-semibold text-foreground whitespace-nowrap">Cycle {group.cycle}</span>
-    <span className="text-[10px] font-mono text-muted-foreground whitespace-nowrap">
-      {group.views.length}/{group.expected}
-      {!group.complete && <span className="text-yellow-400"> μερικός</span>}
-    </span>
-    {group.idFrom != null && group.idTo != null && (
-      <span
-        className="text-[10px] font-mono text-muted-foreground/70 whitespace-nowrap"
-        title="Εύρος SessionId που ανήκει στο cycle"
-      >
-        ID {group.idFrom} – {group.idTo}
-      </span>
-    )}
-    {group.badSessions > 0 && (
-      <span
-        className="text-[10px] font-mono text-orange-400 whitespace-nowrap"
-        title="Sessions του cycle με αποτυχίες ή invalid"
-      >
-        {group.badSessions} με πρόβλημα
-      </span>
-    )}
-    {group.from && (
-      <span className="text-[10px] font-mono text-muted-foreground whitespace-nowrap">
-        {formatClock(group.from)} → {formatClock(group.to)} · {formatDay(group.from)}
-        {group.spanSec != null && (
-          <span className="text-muted-foreground/60"> ({formatDuration(group.spanSec)})</span>
-        )}
-      </span>
-    )}
-    <span className="w-full sm:w-auto sm:ml-auto flex flex-wrap items-center gap-x-3 gap-y-1 text-[10px] font-mono text-muted-foreground">
-      <span>{group.tests} tests</span>
-      {group.dl != null && (
-        <span>
-          DL <span className={kpiClass.dl(group.dl)}>{group.dl.toFixed(1)}</span> Mbps
-        </span>
-      )}
-      {group.ul != null && (
-        <span>
-          UL <span className={kpiClass.ul(group.ul)}>{group.ul.toFixed(1)}</span> Mbps
-        </span>
-      )}
-      {group.rtt != null && (
-        <span>
-          RTT <span className={kpiClass.rtt(group.rtt)}>{group.rtt.toFixed(0)}</span> ms
-        </span>
-      )}
-      {group.mos != null && (
-        <span>
-          MOS <span className={kpiClass.mos(group.mos)}>{group.mos.toFixed(2)}</span>
-        </span>
-      )}
-      <span>
-        <span className="text-green-400">{group.pass}</span>
-        <span>/</span>
-        <span className={group.fail > 0 ? "text-red-400" : ""}>{group.fail}</span>
-      </span>
-    </span>
-  </div>
-);
-
 const PassFailBar = ({ pass, fail, total }: { pass: number; fail: number; total: number }) => {
   const other = Math.max(total - pass - fail, 0);
   const pct = (n: number) => (total > 0 ? (n / total) * 100 : 0);
@@ -610,39 +464,25 @@ const PassFailBar = ({ pass, fail, total }: { pass: number; fail: number; total:
 
 /* ── component ─────────────────────────────────────────────────────────── */
 
-/** Ομαδοποίηση ανά location: το location ζει στο header, όχι στη γραμμή. */
-const GRID_BY_LOCATION =
+const GRID =
   "grid grid-cols-[1.75rem_1.75rem_minmax(9rem,1.3fr)_5rem_4rem_4.5rem_minmax(6rem,0.8fr)_4.5rem_4.5rem_4.5rem_4rem_9rem_1.75rem] gap-2 items-center";
 
-/** Χρονολογική προβολή: μπαίνει στήλη Location, όπως στη λίστα των κλήσεων. */
-const GRID_BY_TIME =
-  "grid grid-cols-[1.75rem_1.75rem_minmax(8rem,1.1fr)_5rem_minmax(7rem,1fr)_4rem_4.5rem_minmax(6rem,0.8fr)_4.5rem_4.5rem_4.5rem_4rem_9rem_1.75rem] gap-2 items-center";
-
-/** Πόσα συνεχόμενα sessions ενός location κάνουν ένα cycle (fallback). */
+/** Πόσα συνεχόμενα sessions ενός location κάνουν ένα cycle. */
 const DEFAULT_CYCLE_SIZE = 6;
 const CYCLE_SIZE_OPTIONS = [4, 6, 8, 12];
 
-const DataSessionsList = ({
-  sessions,
-  selectedSessionId,
-  onSelectSession,
-  groupByCycle = false,
-}: DataSessionsListProps) => {
+const DataSessionsList = ({ sessions, selectedSessionId, onSelectSession }: DataSessionsListProps) => {
   const [search, setSearch] = useState("");
   const [onlyProblems, setOnlyProblems] = useState(false);
   const [sortKey, setSortKey] = useState<SortKey>("natural");
   const [cycleSize, setCycleSize] = useState(DEFAULT_CYCLE_SIZE);
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
   const [collapsedLocations, setCollapsedLocations] = useState<Set<string>>(new Set());
-  const [grouping, setGrouping] = useState<Grouping>("auto");
-
-  /** Το Index υπολογίζει τα cycles από το εύρος των SessionId — αν τα έχει στείλει, τα σεβόμαστε. */
-  const hasPrecomputedCycles = sessions.some((s) => s.cycle != null);
 
   /**
-   * Τα sessions έρχονται με τη σειρά του SQL (ORDER BY Location, SessionId), δηλαδή
-   * από το παλαιότερο προς το νεότερο. Χωρίς έτοιμα cycles από το Index, κάθε
-   * {cycleSize} συνεχόμενα sessions του ίδιου location μετράνε ως ένα cycle.
+   * Τα sessions έρχονται με τη σειρά του SQL (ORDER BY SessionId, Test Start TS),
+   * δηλαδή από το παλαιότερο προς το νεότερο. Πάνω σε αυτή τη σειρά χτίζονται τα
+   * cycles: κάθε {cycleSize} συνεχόμενα sessions του ίδιου ASideLocation = 1 cycle.
    */
   const views = useMemo(() => {
     const built = sessions.map(buildView);
@@ -651,39 +491,11 @@ const DataSessionsList = ({
       const idx = perLocation.get(v.location) ?? 0;
       perLocation.set(v.location, idx + 1);
       v.order = idx;
-      v.cycle = v.item.cycle ?? Math.floor(idx / cycleSize) + 1;
-      v.posInCycle = v.item.cyclePosition ?? (idx % cycleSize) + 1;
-    }
-
-    // Πραγματικό μέγεθος κάθε cycle, ώστε η γραμμή να δείχνει "3/6" με σωστό παρονομαστή.
-    const sizes = new Map<string, number>();
-    for (const v of built) {
-      const key = `${v.location}#${v.cycle}`;
-      sizes.set(key, (sizes.get(key) ?? 0) + 1);
-    }
-    for (const v of built) {
-      v.cycleTotal = hasPrecomputedCycles
-        ? sizes.get(`${v.location}#${v.cycle}`) ?? 1
-        : cycleSize;
+      v.cycle = Math.floor(idx / cycleSize) + 1;
+      v.posInCycle = (idx % cycleSize) + 1;
     }
     return built;
-  }, [sessions, cycleSize, hasPrecomputedCycles]);
-
-  /** Πόσα διαφορετικά A-side locations βλέπουμε — ορίζει την προεπιλεγμένη προβολή. */
-  const locationCount = useMemo(() => new Set(views.map((v) => v.location)).size, [views]);
-
-  /**
-   * Με παραπάνω από ένα location τα per-location blocks κρύβουν τη σειρά με την
-   * οποία έγινε το drive: όλα μαζί σε μία χρονολογική λίστα, όπως στις κλήσεις.
-   * Το "Group by cycle" δεν αλλάζει την προβολή — προσθέτει cycle headers μέσα της.
-   */
-  const byTime = grouping === "time" || (grouping === "auto" && locationCount > 1);
-
-  /** Τα cycle blocks βγάζουν νόημα μόνο στη φυσική σειρά συλλογής (και στις δύο προβολές). */
-  const showCycleBlocks = groupByCycle && sortKey === "natural";
-
-  /** Τα headers ημέρας έχουν νόημα μόνο όταν η λίστα είναι όντως χρονολογική. */
-  const showDayHeaders = byTime && (sortKey === "natural" || sortKey === "newest");
+  }, [sessions, cycleSize]);
 
   const visible = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -707,13 +519,12 @@ const DataSessionsList = ({
         case "session":
           return a.item.sessionId.localeCompare(b.item.sessionId, undefined, { numeric: true });
         default:
-          // Φυσική σειρά συλλογής: παλαιότερο πρώτα. Στη χρονολογική προβολή αυτό
-          // σημαίνει πραγματικός χρόνος, ώστε να μπλέκονται σωστά τα locations.
-          return byTime ? a.startedAt - b.startedAt || a.order - b.order : a.order - b.order;
+          // Φυσική σειρά συλλογής: παλαιότερο πρώτα, όπως το SQL.
+          return a.order - b.order;
       }
     });
     return sorted;
-  }, [views, search, onlyProblems, sortKey, byTime]);
+  }, [views, search, onlyProblems, sortKey]);
 
   /** Ομαδοποίηση ανά ASideLocation· τα locations με τη σειρά που εμφανίζονται στο SQL. */
   const locationGroups = useMemo<LocationGroup[]>(() => {
@@ -744,13 +555,7 @@ const DataSessionsList = ({
         views: groupViews,
         cycles: Array.from(cycles.entries())
           .sort((a, b) => a[0] - b[0])
-          .map(([cycle, cycleViews]) =>
-            summarizeCycle(
-              cycle,
-              cycleViews,
-              hasPrecomputedCycles ? cycleViews[0]?.cycleTotal ?? cycleViews.length : cycleSize,
-            ),
-          ),
+          .map(([cycle, cycleViews]) => summarizeCycle(cycle, cycleViews, cycleSize)),
         tests: groupViews.reduce((s, v) => s + v.item.tests.length, 0),
         pass: groupViews.reduce((s, v) => s + v.item.passCount, 0),
         fail: groupViews.reduce((s, v) => s + v.item.failCount, 0),
@@ -763,84 +568,7 @@ const DataSessionsList = ({
           .sort((a, b) => b.count - a.count),
       };
     });
-  }, [visible, cycleSize, hasPrecomputedCycles]);
-
-  /**
-   * Χρονολογική προβολή. Χωρίς cycle blocks είναι μία ενιαία λίστα γραμμών. Με
-   * cycle blocks, κάθε cycle μένει ΕΝΙΑΙΟ: όλη η τετράδα/εξάδα του ενός location
-   * μαζί και από κάτω ολόκληρο το επόμενο cycle του άλλου location. Τα δύο
-   * locations τρέχουν παράλληλα, οπότε οι χρονοσημάνσεις τους μπλέκονται — τα
-   * blocks μπαίνουν στη σειρά που ΞΕΚΙΝΗΣΑΝ, όχι σπασμένα ανά γραμμή.
-   */
-  const dayGroups = useMemo<DayGroup[]>(() => {
-    const groups: DayGroup[] = [];
-
-    const openDay = (v: SessionView): DayGroup => {
-      const key = dayKey(v.startedAt);
-      const last = groups[groups.length - 1];
-      if (last && last.key === key) return last;
-      const group: DayGroup = {
-        key,
-        label: formatFullDay(v.startedAt),
-        views: [],
-        runs: [],
-        locations: [],
-        tests: 0,
-        pass: 0,
-        fail: 0,
-        badSessions: 0,
-        from: null,
-        to: null,
-      };
-      groups.push(group);
-      return group;
-    };
-
-    const addToDay = (group: DayGroup, v: SessionView) => {
-      group.views.push(v);
-      if (!group.locations.includes(v.location)) group.locations.push(v.location);
-      group.tests += v.item.tests.length;
-      group.pass += v.item.passCount;
-      group.fail += v.item.failCount;
-      if (v.status !== "ok") group.badSessions++;
-      if (v.startedAt > 0) {
-        group.from = group.from == null ? v.startedAt : Math.min(group.from, v.startedAt);
-        group.to = group.to == null ? v.endedAt : Math.max(group.to, v.endedAt);
-      }
-    };
-
-    if (!showCycleBlocks) {
-      for (const v of visible) addToDay(openDay(v), v);
-      return groups;
-    }
-
-    // Ένα block ανά (location, cycle). Η σειρά των blocks είναι η σειρά με την
-    // οποία πρωτοεμφανίστηκαν στη (χρονολογικά ταξινομημένη) λίστα.
-    const blocks = new Map<string, SessionView[]>();
-    for (const v of visible) {
-      const key = `${v.location}#${v.cycle}`;
-      const bucket = blocks.get(key);
-      if (bucket) bucket.push(v);
-      else blocks.set(key, [v]);
-    }
-
-    for (const [key, blockViews] of blocks) {
-      const head = blockViews[0];
-      const day = openDay(head);
-      for (const v of blockViews) addToDay(day, v);
-      day.runs.push({
-        ...summarizeCycle(
-          head.cycle,
-          blockViews,
-          hasPrecomputedCycles ? head.cycleTotal : cycleSize,
-        ),
-        key,
-        location: head.location,
-      });
-    }
-
-    return groups;
-  }, [visible, showCycleBlocks, hasPrecomputedCycles, cycleSize]);
+  }, [visible, cycleSize]);
 
   const totals = useMemo(() => {
     let pass = 0;
@@ -877,7 +605,8 @@ const DataSessionsList = ({
     });
   };
 
-  const GRID = byTime ? GRID_BY_TIME : GRID_BY_LOCATION;
+  /** Τα cycle blocks βγάζουν νόημα μόνο στη φυσική σειρά συλλογής. */
+  const groupByCycle = sortKey === "natural";
 
   const toggleLocation = (location: string) => {
     setCollapsedLocations((prev) => {
@@ -891,21 +620,21 @@ const DataSessionsList = ({
   return (
     <div>
       {/* ── Toolbar ── */}
-      <div className="flex flex-col sm:flex-row sm:flex-wrap sm:items-center gap-2 px-3 sm:px-4 py-3 border-b border-border bg-muted/20">
-        <div className="relative w-full sm:w-auto sm:flex-1 lg:flex-none">
+      <div className="flex flex-wrap items-center gap-2 px-4 py-2 border-b border-border bg-muted/20">
+        <div className="relative">
           <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
           <input
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="Session / Location / Collection / Host"
-            className="h-9 w-full lg:w-72 rounded-lg border border-border bg-background pl-8 pr-3 text-xs text-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-2 focus:ring-primary/40"
+            className="h-7 w-64 rounded-md border border-border bg-background pl-7 pr-2 text-xs text-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-primary"
           />
         </div>
 
         <button
           type="button"
           onClick={() => setOnlyProblems((v) => !v)}
-          className={`flex items-center justify-center gap-1.5 h-9 px-3 rounded-lg border text-[11px] transition-colors ${
+          className={`flex items-center gap-1 h-7 px-2 rounded-md border text-[11px] transition-colors ${
             onlyProblems
               ? "border-orange-500/50 bg-orange-500/15 text-orange-300"
               : "border-border text-muted-foreground hover:bg-muted/40"
@@ -916,41 +645,12 @@ const DataSessionsList = ({
           Μόνο προβλήματα
         </button>
 
-        {/* Προβολή: χρονολογικά (όλα τα locations μαζί) ή ομαδοποιημένα ανά location. */}
-        <div className="grid grid-cols-2 items-center rounded-lg border border-border overflow-hidden w-full sm:w-auto">
-          {([
-            { key: "time", label: "Χρονολογικά" },
-            { key: "location", label: "Ανά location" },
-          ] as const).map(({ key, label }) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setGrouping(grouping === key ? "auto" : key)}
-              title={
-                key === "time"
-                  ? "Όλα τα sessions σε μία λίστα, με τη σειρά που έγιναν"
-                  : "Ομαδοποίηση ανά A-side location"
-              }
-              className={`h-9 px-3 text-[11px] transition-colors ${
-                (key === "time") === byTime
-                  ? "bg-primary/15 text-primary font-semibold"
-                  : "text-muted-foreground hover:bg-muted/40"
-              } ${key === "location" ? "border-l border-border" : ""}`}
-            >
-              {label}
-              {grouping === "auto" && (key === "time") === byTime && (
-                <span className="ml-1 text-[9px] opacity-60">auto</span>
-              )}
-            </button>
-          ))}
-        </div>
-
-        <div className="flex items-center gap-2 w-full sm:w-auto">
+        <div className="flex items-center gap-1">
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Sort</span>
           <select
             value={sortKey}
             onChange={(e) => setSortKey(e.target.value as SortKey)}
-            className="h-9 min-w-0 flex-1 sm:flex-none rounded-lg border border-border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+            className="h-7 rounded-md border border-border bg-background px-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
           >
             <option value="natural">Σειρά συλλογής (παλαιότερο πρώτα)</option>
             <option value="newest">Πιο πρόσφατα πρώτα</option>
@@ -961,27 +661,24 @@ const DataSessionsList = ({
           </select>
         </div>
 
-        {/* Χωρίς έτοιμα cycles από το Index, ο χρήστης ορίζει το μέγεθος του cycle. */}
-        {!hasPrecomputedCycles && (
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Cycle</span>
-            <select
-              value={cycleSize}
-              onChange={(e) => setCycleSize(Number(e.target.value))}
-              title="Πόσα συνεχόμενα sessions ανά location κάνουν ένα cycle"
-              className="h-9 min-w-0 flex-1 sm:flex-none rounded-lg border border-border bg-background px-2 text-xs text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-            >
-              {CYCLE_SIZE_OPTIONS.map((n) => (
-                <option key={n} value={n}>
-                  {n} sessions
-                </option>
-              ))}
-            </select>
-          </div>
-        )}
+        <div className="flex items-center gap-1">
+          <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Cycle</span>
+          <select
+            value={cycleSize}
+            onChange={(e) => setCycleSize(Number(e.target.value))}
+            title="Πόσα συνεχόμενα sessions ανά location κάνουν ένα cycle"
+            className="h-7 rounded-md border border-border bg-background px-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+          >
+            {CYCLE_SIZE_OPTIONS.map((n) => (
+              <option key={n} value={n}>
+                {n} sessions
+              </option>
+            ))}
+          </select>
+        </div>
 
-        <div className="w-full grid grid-cols-2 sm:flex sm:flex-wrap sm:items-center gap-x-3 gap-y-1 rounded-lg border border-border/60 bg-background/50 px-3 py-2 text-[11px] font-mono lg:w-auto lg:ml-auto lg:border-0 lg:bg-transparent lg:p-0">
-          <span className="text-foreground font-medium col-span-2 sm:col-auto">
+        <div className="ml-auto flex items-center gap-3 text-[11px] font-mono">
+          <span className="text-muted-foreground">
             {visible.length}/{views.length} sessions
             {totals.bad > 0 && <span className="text-orange-400"> ({totals.bad} με πρόβλημα)</span>}
           </span>
@@ -1017,13 +714,12 @@ const DataSessionsList = ({
 
       {/* ── Header ── */}
       <div
-        className={`${GRID} hidden xl:grid px-4 py-2 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold border-b border-border`}
+        className={`${GRID} px-4 py-2 text-[10px] uppercase tracking-wider text-muted-foreground font-semibold border-b border-border`}
       >
         <span />
         <span />
         <span>Session</span>
         <span>Start</span>
-        {byTime && <span>Location</span>}
         <span title="Διάρκεια session / πλήθος tests">Διάρκεια</span>
         <span>Cycle</span>
         <span>Technology</span>
@@ -1035,86 +731,12 @@ const DataSessionsList = ({
         <span />
       </div>
 
-      {/* ── Rows: χρονολογικά (ανά ημέρα) ή ανά ASideLocation → ανά cycle ── */}
-      <div className="max-h-[620px] overflow-y-auto overscroll-contain">
+      {/* ── Rows: ανά ASideLocation → ανά cycle ── */}
+      <div className="max-h-[620px] overflow-y-auto">
         {visible.length === 0 ? (
           <p className="px-4 py-6 text-center text-xs text-muted-foreground">
             Κανένα session δεν ταιριάζει με την αναζήτηση / το φίλτρο.
           </p>
-        ) : byTime ? (
-          dayGroups.map((day) => (
-            <div key={day.key}>
-              {showDayHeaders && (
-                <div className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-secondary/80 backdrop-blur border-y border-border">
-                  <CalendarDays className="h-3.5 w-3.5 text-primary" />
-                  <span className="text-xs font-semibold text-foreground capitalize">{day.label}</span>
-                  {day.from != null && (
-                    <span className="text-[11px] font-mono text-muted-foreground">
-                      {formatClock(new Date(day.from).toISOString())} →{" "}
-                      {formatClock(new Date(day.to ?? day.from).toISOString())}
-                    </span>
-                  )}
-                  <span className="text-[11px] font-mono text-muted-foreground">
-                    {day.views.length} sessions · {day.tests} tests
-                    {day.badSessions > 0 && (
-                      <span className="text-orange-400"> · {day.badSessions} με πρόβλημα</span>
-                    )}
-                  </span>
-
-                  {/* Ποια locations ακουμπήθηκαν μέσα στην ημέρα */}
-                  <span className="flex items-center gap-1 min-w-0">
-                    <MapPin className="h-3 w-3 text-muted-foreground shrink-0" />
-                    <span
-                      className="text-[10px] text-muted-foreground truncate max-w-[22rem]"
-                      title={day.locations.join("\n")}
-                    >
-                      {day.locations.slice(0, 3).join(" · ")}
-                      {day.locations.length > 3 && ` +${day.locations.length - 3}`}
-                    </span>
-                  </span>
-
-                  <span className="ml-auto flex items-center gap-3 text-[11px] font-mono">
-                    <span className="text-green-400">{day.pass}</span>
-                    <span className={day.fail > 0 ? "text-red-400" : "text-muted-foreground"}>
-                      {day.fail} fail
-                    </span>
-                  </span>
-                </div>
-              )}
-
-              {/* Με "Group by cycle": cycle blocks μέσα στη χρονολογική ροή, με το location στο header. */}
-              {showCycleBlocks
-                ? day.runs.map((run) => (
-                    <div key={run.key}>
-                      <CycleHeader group={run} location={run.location} />
-                      {run.views.map((v) => (
-                        <SessionRow
-                          key={v.item.sessionId}
-                          view={v}
-                          grid={GRID}
-                          showLocation
-                          isSelected={selectedSessionId === v.item.sessionId}
-                          isOpen={expanded.has(v.item.sessionId)}
-                          onToggle={() => toggleExpand(v.item.sessionId)}
-                          onOpenDetail={() => onSelectSession(v.item.sessionId)}
-                        />
-                      ))}
-                    </div>
-                  ))
-                : day.views.map((v) => (
-                    <SessionRow
-                      key={v.item.sessionId}
-                      view={v}
-                      grid={GRID}
-                      showLocation
-                      isSelected={selectedSessionId === v.item.sessionId}
-                      isOpen={expanded.has(v.item.sessionId)}
-                      onToggle={() => toggleExpand(v.item.sessionId)}
-                      onOpenDetail={() => onSelectSession(v.item.sessionId)}
-                    />
-                  ))}
-            </div>
-          ))
         ) : (
           locationGroups.map((group) => {
             const isCollapsed = collapsedLocations.has(group.location);
@@ -1124,7 +746,7 @@ const DataSessionsList = ({
                 {/* Location header */}
                 <div
                   onClick={() => toggleLocation(group.location)}
-                  className="sticky top-0 z-10 flex flex-wrap items-center gap-x-2 gap-y-1 px-3 sm:px-4 py-2 bg-secondary/90 backdrop-blur border-y border-border cursor-pointer hover:bg-secondary"
+                  className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-secondary/80 backdrop-blur border-y border-border cursor-pointer hover:bg-secondary"
                 >
                   {isCollapsed ? (
                     <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
@@ -1132,8 +754,8 @@ const DataSessionsList = ({
                     <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" />
                   )}
                   <MapPin className="h-3.5 w-3.5 text-primary" />
-                  <span className="text-xs font-semibold text-foreground min-w-0 truncate">{group.location}</span>
-                  <span className="text-[11px] font-mono text-muted-foreground w-full sm:w-auto sm:order-none order-last pl-9 sm:pl-0">
+                  <span className="text-xs font-semibold text-foreground">{group.location}</span>
+                  <span className="text-[11px] font-mono text-muted-foreground">
                     {group.views.length} sessions · {group.cycles.length} cycles · {group.tests} tests
                     {group.badSessions > 0 && (
                       <span className="text-orange-400"> · {group.badSessions} με πρόβλημα</span>
@@ -1141,7 +763,7 @@ const DataSessionsList = ({
                   </span>
 
                   {/* Tech mix όλου του location */}
-                  <span className="hidden md:flex items-center gap-1">
+                  <span className="flex items-center gap-1">
                     {group.techMix.slice(0, 3).map(({ tech, count }) => (
                       <span
                         key={tech}
@@ -1153,7 +775,7 @@ const DataSessionsList = ({
                     ))}
                   </span>
 
-                  <span className="ml-auto hidden sm:flex items-center gap-3 text-[11px] font-mono">
+                  <span className="ml-auto flex items-center gap-3 text-[11px] font-mono">
                     {group.dl != null && (
                       <span className="text-muted-foreground">
                         DL <span className={kpiClass.dl(group.dl)}>{group.dl.toFixed(1)}</span>
@@ -1177,13 +799,13 @@ const DataSessionsList = ({
                   </span>
                 </div>
 
-                {/* Επίπεδη λίστα: το cycle φαίνεται ως badge πάνω στη γραμμή. */}
-                {!isCollapsed && !showCycleBlocks &&
+                {/* Με custom ταξινόμηση τα cycles χάνουν νόημα ως blocks: επίπεδη λίστα, με το cycle badge στη γραμμή. */}
+                {!isCollapsed && !groupByCycle &&
                   group.views.map((v) => (
                     <SessionRow
                       key={v.item.sessionId}
                       view={v}
-                      grid={GRID}
+                      cycleSize={cycleSize}
                       isSelected={selectedSessionId === v.item.sessionId}
                       isOpen={expanded.has(v.item.sessionId)}
                       onToggle={() => toggleExpand(v.item.sessionId)}
@@ -1191,16 +813,71 @@ const DataSessionsList = ({
                     />
                   ))}
 
-                {!isCollapsed && showCycleBlocks &&
+                {!isCollapsed && groupByCycle &&
                   group.cycles.map((cycleGroup) => (
                     <div key={cycleGroup.cycle}>
-                      <CycleHeader group={cycleGroup} />
+                      {/* Cycle header */}
+                      <div className="flex items-center gap-2 px-4 py-1 bg-muted/30 border-b border-border/40">
+                        <RefreshCw className="h-3 w-3 text-muted-foreground ml-5" />
+                        <span className="text-[11px] font-semibold text-foreground">Cycle {cycleGroup.cycle}</span>
+                        <span className="text-[10px] font-mono text-muted-foreground">
+                          {cycleGroup.views.length}/{cycleSize}
+                          {!cycleGroup.complete && <span className="text-yellow-400"> μερικός</span>}
+                        </span>
+                        {cycleGroup.badSessions > 0 && (
+                          <span
+                            className="text-[10px] font-mono text-orange-400"
+                            title="Sessions του cycle με αποτυχίες ή invalid"
+                          >
+                            {cycleGroup.badSessions} με πρόβλημα
+                          </span>
+                        )}
+                        {cycleGroup.from && (
+                          <span className="text-[10px] font-mono text-muted-foreground">
+                            {formatClock(cycleGroup.from)} → {formatClock(cycleGroup.to)} · {formatDay(cycleGroup.from)}
+                            {cycleGroup.spanSec != null && (
+                              <span className="text-muted-foreground/60">
+                                {" "}
+                                ({formatDuration(cycleGroup.spanSec)})
+                              </span>
+                            )}
+                          </span>
+                        )}
+                        <span className="ml-auto flex items-center gap-3 text-[10px] font-mono text-muted-foreground">
+                          <span>{cycleGroup.tests} tests</span>
+                          {cycleGroup.dl != null && (
+                            <span>
+                              DL <span className={kpiClass.dl(cycleGroup.dl)}>{cycleGroup.dl.toFixed(1)}</span> Mbps
+                            </span>
+                          )}
+                          {cycleGroup.ul != null && (
+                            <span>
+                              UL <span className={kpiClass.ul(cycleGroup.ul)}>{cycleGroup.ul.toFixed(1)}</span> Mbps
+                            </span>
+                          )}
+                          {cycleGroup.rtt != null && (
+                            <span>
+                              RTT <span className={kpiClass.rtt(cycleGroup.rtt)}>{cycleGroup.rtt.toFixed(0)}</span> ms
+                            </span>
+                          )}
+                          {cycleGroup.mos != null && (
+                            <span>
+                              MOS <span className={kpiClass.mos(cycleGroup.mos)}>{cycleGroup.mos.toFixed(2)}</span>
+                            </span>
+                          )}
+                          <span>
+                            <span className="text-green-400">{cycleGroup.pass}</span>
+                            <span>/</span>
+                            <span className={cycleGroup.fail > 0 ? "text-red-400" : ""}>{cycleGroup.fail}</span>
+                          </span>
+                        </span>
+                      </div>
 
                       {cycleGroup.views.map((v) => (
                         <SessionRow
                           key={v.item.sessionId}
                           view={v}
-                          grid={GRID}
+                          cycleSize={cycleSize}
                           isSelected={selectedSessionId === v.item.sessionId}
                           isOpen={expanded.has(v.item.sessionId)}
                           onToggle={() => toggleExpand(v.item.sessionId)}
@@ -1222,25 +899,14 @@ const DataSessionsList = ({
 
 interface SessionRowProps {
   view: SessionView;
-  /** Το grid αλλάζει ανάλογα με το αν υπάρχει στήλη Location. */
-  grid: string;
-  /** Στη χρονολογική προβολή δεν υπάρχει location header — μπαίνει στη γραμμή. */
-  showLocation?: boolean;
+  cycleSize: number;
   isSelected: boolean;
   isOpen: boolean;
   onToggle: () => void;
   onOpenDetail: () => void;
 }
 
-const SessionRow = ({
-  view: v,
-  grid,
-  showLocation = false,
-  isSelected,
-  isOpen,
-  onToggle,
-  onOpenDetail,
-}: SessionRowProps) => {
+const SessionRow = ({ view: v, cycleSize, isSelected, isOpen, onToggle, onOpenDetail }: SessionRowProps) => {
   const { item } = v;
   const cfg = statusConfig[v.status];
   const StatusIcon = cfg.icon;
@@ -1252,7 +918,7 @@ const SessionRow = ({
   <div className="border-b border-border/40 last:border-b-0">
     <div
       onClick={onToggle}
-      className={`${grid} hidden xl:grid px-4 py-2 cursor-pointer transition-colors group ${
+      className={`${GRID} px-4 py-2 cursor-pointer transition-colors group ${
         isSelected ? "bg-primary/10" : isOpen ? "bg-muted/30" : "hover:bg-muted/40"
       }`}
     >
@@ -1294,14 +960,6 @@ const SessionRow = ({
         </span>
       </div>
 
-      {/* Location — μόνο στη χρονολογική προβολή, όπου δεν υπάρχει location header */}
-      {showLocation && (
-        <div className="flex items-center gap-1 min-w-0" title={v.location}>
-          <MapPin className="h-3 w-3 text-muted-foreground shrink-0" />
-          <span className="text-xs text-foreground truncate">{v.location}</span>
-        </div>
-      )}
-
       {/* Διάρκεια + πλήθος tests */}
       <div className="leading-tight">
         <span className="block text-xs font-mono text-muted-foreground">
@@ -1321,15 +979,11 @@ const SessionRow = ({
       {/* Cycle / θέση μέσα στο cycle */}
       <span
         className="text-[11px] font-mono text-muted-foreground whitespace-nowrap"
-        title={`Cycle ${v.cycle}, session ${v.posInCycle} από ${v.cycleTotal}${
-          item.cycleStartId != null && item.cycleEndId != null
-            ? ` · SessionId ${item.cycleStartId} – ${item.cycleEndId}`
-            : ""
-        }`}
+        title={`Cycle ${v.cycle}, session ${v.posInCycle} από ${cycleSize}`}
       >
         C{v.cycle}
         <span className="text-muted-foreground/60">
-          ·{v.posInCycle}/{v.cycleTotal}
+          ·{v.posInCycle}/{cycleSize}
         </span>
       </span>
 
@@ -1405,87 +1059,6 @@ const SessionRow = ({
       >
         <ArrowUpRight className="h-3.5 w-3.5" />
       </button>
-    </div>
-
-    {/* Compact card for phones, tablets and narrower dashboard columns. */}
-    <div
-      onClick={onToggle}
-      className={`xl:hidden cursor-pointer px-3 py-3 transition-colors ${
-        isSelected ? "bg-primary/10" : isOpen ? "bg-muted/30" : "hover:bg-muted/40"
-      }`}
-    >
-      <div className="flex items-start gap-2.5">
-        <div className={`${cfg.bg} mt-0.5 rounded-lg p-2 flex items-center justify-center shrink-0`} title={cfg.label}>
-          <StatusIcon className={`h-4 w-4 ${cfg.color}`} />
-        </div>
-
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="text-sm font-mono font-semibold text-foreground truncate">{item.sessionId}</span>
-            <span className="text-[10px] font-mono text-muted-foreground whitespace-nowrap">
-              {formatClock(item.first?.callStartTimeStamp)} · {formatDay(item.first?.callStartTimeStamp)}
-            </span>
-          </div>
-          <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground min-w-0">
-            {showLocation && <MapPin className="h-3 w-3 shrink-0" />}
-            <span className="truncate">
-              {showLocation ? v.location : item.first?.CollectionName || v.fileName || "Data session"}
-            </span>
-          </div>
-        </div>
-
-        <button
-          type="button"
-          onClick={(e) => {
-            e.stopPropagation();
-            onOpenDetail();
-          }}
-          title="Άνοιγμα λεπτομερειών session"
-          className="h-9 w-9 rounded-lg border border-border/70 bg-background/60 text-muted-foreground flex items-center justify-center shrink-0 hover:border-primary/40 hover:text-primary"
-        >
-          <ArrowUpRight className="h-4 w-4" />
-        </button>
-      </div>
-
-      <div className="mt-3 flex flex-wrap items-center gap-1.5">
-        <span className="rounded-md border border-border bg-background/50 px-2 py-1 text-[10px] font-mono text-muted-foreground">
-          C{v.cycle} · {v.posInCycle}/{v.cycleTotal}
-        </span>
-        <span className="rounded-md border border-border bg-background/50 px-2 py-1 text-[10px] font-mono text-muted-foreground">
-          {formatDuration(v.durationSec)} · {item.tests.length} tests
-        </span>
-        {v.techMix.slice(0, 2).map(({ tech }) => (
-          <span key={tech} className={`rounded-md border px-2 py-1 text-[10px] ${techColor(tech)}`}>
-            {tech}
-          </span>
-        ))}
-        {v.techPath.length > 1 && <ArrowLeftRight className="h-3.5 w-3.5 text-yellow-400" />}
-      </div>
-
-      <div className="mt-3 grid grid-cols-4 gap-1.5">
-        {[
-          { label: "DL", value: v.dl, format: (n: number) => n.toFixed(1), tone: kpiClass.dl, unit: "Mbps" },
-          { label: "UL", value: v.ul, format: (n: number) => n.toFixed(1), tone: kpiClass.ul, unit: "Mbps" },
-          { label: "RTT", value: v.rtt, format: (n: number) => n.toFixed(0), tone: kpiClass.rtt, unit: "ms" },
-          { label: "MOS", value: v.mos, format: (n: number) => n.toFixed(2), tone: kpiClass.mos, unit: "" },
-        ].map((metric) => (
-          <div key={metric.label} className="rounded-lg border border-border/60 bg-background/50 px-2 py-2 text-center min-w-0">
-            <span className="block text-[9px] uppercase tracking-wide text-muted-foreground">{metric.label}</span>
-            <span className="block mt-0.5 leading-none">
-              <Kpi value={metric.value} format={metric.format} tone={metric.tone} />
-            </span>
-            {metric.unit && <span className="block mt-1 text-[8px] text-muted-foreground/70">{metric.unit}</span>}
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-3 flex items-center justify-between gap-3">
-        <PassFailBar pass={item.passCount} fail={item.failCount} total={item.tests.length} />
-        <span className="flex items-center gap-1 text-[10px] text-muted-foreground">
-          {isOpen ? "Λιγότερα" : "Ανάλυση"}
-          {isOpen ? <ChevronDown className="h-3.5 w-3.5" /> : <ChevronRight className="h-3.5 w-3.5" />}
-        </span>
-      </div>
     </div>
 
     {/* ── Expanded: ανάλυση ανά τύπο test + αποτυχίες ── */}
@@ -1619,15 +1192,7 @@ const SessionRow = ({
               )} (${formatDuration(v.durationSec)})`}
               mono
             />
-            <Fact
-              label="Cycle"
-              value={`${v.cycle} · session ${v.posInCycle}/${v.cycleTotal}${
-                item.cycleStartId != null && item.cycleEndId != null
-                  ? ` · ID ${item.cycleStartId} – ${item.cycleEndId}`
-                  : ""
-              }`}
-              mono
-            />
+            <Fact label="Cycle" value={`${v.cycle} · session ${v.posInCycle}/${cycleSize}`} mono />
             <Fact
               label="Tests"
               value={`${item.tests.length} — ${item.passCount} pass / ${item.failCount} fail${

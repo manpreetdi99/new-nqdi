@@ -169,6 +169,11 @@ const getFileDateTime = (filename: string | null | undefined): string | null => 
 // Αρχεία (FileList) που ξεκινούν μέσα σε αυτό το διάστημα θεωρούνται το ίδιο "run" (π.χ. Cosmote Free + Vodafone Free + Data)
 const FILE_GROUP_GAP_MS = 5 * 60 * 1000;
 
+// Εύρος αρίθμησης SessionId που καλύπτει ένα cycle (ανά location).
+// Το cycle ξεκινά στο πρώτο SessionId και φτάνει μέχρι και firstId + 6
+// (π.χ. ...738 → ...744), ανεξάρτητα από το πόσες sessions πέφτουν μέσα.
+const DATA_CYCLE_ID_SPAN = 6;
+
 const formatGroupTimeRange = (startMs: number, endMs: number): string => {
   const fmt = (ms: number) => {
     const d = new Date(ms);
@@ -203,6 +208,7 @@ const Index = () => {
   const [dataCallsRows, setDataCallsRows] = useState<DataCallRow[]>([]);
   const [dataCallsLoading, setDataCallsLoading] = useState(false);
   const [selectedDataSessionId, setSelectedDataSessionId] = useState<string | null>(null);
+  const [dataSessionsView, setDataSessionsView] = useLocalStorage<"flat" | "cycle">("perf-insights-data-sessions-view", "flat");
   const [callRecords, setCallRecords] = useState<CallRecord[]>([]);
 
   const [showScrollTop, setShowScrollTop] = useState(false);
@@ -619,10 +625,12 @@ const Index = () => {
       if (!map.has(key)) map.set(key, []);
       map.get(key)!.push(row);
     }
-    return Array.from(map.entries()).map(([sessionId, tests]) => ({
+
+    const sessions = Array.from(map.entries()).map(([sessionId, tests]) => ({
       sessionId,
       tests,
       first: tests[0],
+      location: tests[0]?.Location ?? "Unknown",
       passCount: tests.filter(r => {
         const s = (r.scoringStatus ?? r.status ?? "").toLowerCase();
         return s === "a" || s.includes("success") || s.includes("complet");
@@ -632,6 +640,52 @@ const Index = () => {
         return s.includes("fail") || s === "f";
       }).length,
     }));
+
+    // Ανά location: ταξινόμηση με SessionId αύξοντα (πιο παλιό πρώτα).
+    const sessionKey = (id: string) => {
+      const n = Number(id);
+      return Number.isFinite(n) ? n : Number.POSITIVE_INFINITY;
+    };
+    const ordered = [...sessions].sort((a, b) => {
+      const byLoc = a.location.localeCompare(b.location);
+      if (byLoc !== 0) return byLoc;
+      const diff = sessionKey(a.sessionId) - sessionKey(b.sessionId);
+      return Number.isFinite(diff) && diff !== 0 ? diff : a.sessionId.localeCompare(b.sessionId);
+    });
+
+    // Το cycle ορίζεται από την ΑΡΙΘΜΗΣΗ των SessionId, όχι από πλήθος γραμμών:
+    // ξεκινά στο πρώτο SessionId της location και κλείνει στο firstId + DATA_CYCLE_ID_SPAN
+    // (το τελευταίο id συμπεριλαμβάνεται). Π.χ. με first = ...738 το cycle πιάνει
+    // ...738 έως ...744· η επόμενη session (...746) ανοίγει νέο cycle.
+    let currentLocation: string | null = null;
+    let anchorId = Number.NaN;
+    let cycleNo = 1;
+    let positionInCycle = 0;
+
+    return ordered.map((item) => {
+      const id = sessionKey(item.sessionId);
+      const numeric = Number.isFinite(id);
+
+      if (item.location !== currentLocation) {
+        currentLocation = item.location;
+        anchorId = numeric ? id : Number.NaN;
+        cycleNo = 1;
+        positionInCycle = 0;
+      } else if (numeric && (!Number.isFinite(anchorId) || id > anchorId + DATA_CYCLE_ID_SPAN)) {
+        anchorId = id;
+        cycleNo += 1;
+        positionInCycle = 0;
+      }
+      positionInCycle += 1;
+
+      return {
+        ...item,
+        cycle: cycleNo,
+        cyclePosition: positionInCycle,
+        cycleStartId: Number.isFinite(anchorId) ? anchorId : null,
+        cycleEndId: Number.isFinite(anchorId) ? anchorId + DATA_CYCLE_ID_SPAN : null,
+      };
+    });
   }, [dataCallsRows]);
 
   const dataLocationSummary = useMemo(() => {
@@ -670,6 +724,12 @@ const Index = () => {
       return true;
     });
   }, [groupedDataSessions, locationTableFilter, selectedFileGroupSessionIds]);
+
+  const dataSessionCycleCount = useMemo(() => {
+    const seen = new Set<string>();
+    for (const item of filteredGroupedDataSessions) seen.add(`${item.location}#${item.cycle}`);
+    return seen.size;
+  }, [filteredGroupedDataSessions]);
 
   const locationGroups = useMemo(() => {
     const lower = (s: string) => s.toLowerCase();
@@ -1497,16 +1557,59 @@ const Index = () => {
               </div>
 
               {/* ── DATA CALLS LIST (distinct sessions) ── */}
-              <div className="bg-card border border-border rounded-lg overflow-hidden">
-                <div className="px-4 py-3 border-b border-border">
-                  <h2 className="text-sm font-semibold text-foreground">Data Calls (Mobile)</h2>
-                  <p className="text-xs text-muted-foreground">
-                    {dataCallsLoading
-                      ? "Loading..."
-                      : locationTableFilter.length > 0
-                        ? `${filteredGroupedDataSessions.length} / ${groupedDataSessions.length} sessions`
-                        : `${groupedDataSessions.length} sessions`}
-                  </p>
+              <div className="bg-card border border-border rounded-xl overflow-hidden shadow-sm">
+                <div className="px-3 py-3.5 sm:px-4 sm:py-4 border-b border-border bg-gradient-to-r from-primary/[0.07] via-transparent to-transparent flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="h-10 w-10 rounded-xl border border-primary/20 bg-primary/10 flex items-center justify-center shrink-0">
+                      <Wifi className="h-5 w-5 text-primary" />
+                    </div>
+                    <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <h2 className="text-sm font-semibold text-foreground">Data Calls (Mobile)</h2>
+                      {!dataCallsLoading && groupedDataSessions.length > 0 && (
+                        <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
+                          {locationTableFilter.length > 0
+                            ? `${filteredGroupedDataSessions.length} / ${groupedDataSessions.length}`
+                            : groupedDataSessions.length} sessions
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-0.5 text-xs text-muted-foreground">
+                      {dataCallsLoading
+                        ? "Loading mobile data sessions..."
+                        : locationTableFilter.length > 0
+                          ? "Filtered by the selected A-side location"
+                          : "Performance, technology and test results per session"}
+                      {!dataCallsLoading && dataSessionsView === "cycle"
+                        ? ` · ${dataSessionCycleCount} cycles · ${DATA_CYCLE_ID_SPAN} SessionIds each`
+                        : ""}
+                    </p>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 items-center rounded-lg border border-border bg-background/70 p-1 shrink-0 w-full sm:w-auto">
+                    <button
+                      type="button"
+                      onClick={() => setDataSessionsView("flat")}
+                      className={`min-h-8 rounded-md px-3 text-[11px] transition-colors ${
+                        dataSessionsView === "flat"
+                          ? "bg-primary text-primary-foreground font-semibold shadow-sm"
+                          : "text-muted-foreground hover:bg-muted/50"
+                      }`}
+                    >
+                      Sessions
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setDataSessionsView("cycle")}
+                      className={`min-h-8 rounded-md px-3 text-[11px] transition-colors ${
+                        dataSessionsView === "cycle"
+                          ? "bg-primary text-primary-foreground font-semibold shadow-sm"
+                          : "text-muted-foreground hover:bg-muted/50"
+                      }`}
+                    >
+                      Group by cycle
+                    </button>
+                  </div>
                 </div>
                 {!dataCallsLoading && groupedDataSessions.length === 0 ? (
                   <p className="px-4 py-6 text-center text-xs text-muted-foreground">
@@ -1519,6 +1622,7 @@ const Index = () => {
                 ) : (
                   <DataSessionsList
                     sessions={filteredGroupedDataSessions}
+                    groupByCycle={dataSessionsView === "cycle"}
                     selectedSessionId={selectedDataSessionId}
                     onSelectSession={(id) => {
                       setSelectedDataSessionId(id);

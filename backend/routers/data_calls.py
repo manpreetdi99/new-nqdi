@@ -67,7 +67,9 @@ def list_data_calls(
             query += f" AND FL.ASideLocation IN ({placeholders})"
             params.extend(selected_locations)
 
-        query += " ORDER BY CC.SessionId, CC.[Test Start TS]"
+        # Ταξινόμηση ανά location, μετά χρονολογικά (SessionId ↑ = πιο παλιό πρώτα).
+        # Κάθε 6 συνεχόμενα SessionId μιας location αποτελούν ένα cycle (grouping γίνεται στο UI).
+        query += " ORDER BY FL.ASideLocation, CC.SessionId, CC.TestId"
 
         cursor.execute(query, tuple(params))
 
