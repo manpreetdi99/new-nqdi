@@ -155,8 +155,8 @@ describe("voice KPIs", () => {
       call({ callDir: "B->A", setupTime: 2 }),
     ]);
 
-    expect(stats.setupMoc).toEqual({ avg: 4, samples: 2 });
-    expect(stats.setupMtc).toEqual({ avg: 2, samples: 1 });
+    expect(stats.setupMoc).toEqual({ avg: 4, samples: 2, min: 3, max: 5 });
+    expect(stats.setupMtc).toEqual({ avg: 2, samples: 1, min: 2, max: 2 });
     expect(stats.setupAll.avg).toBeCloseTo(10 / 3, 12);
   });
 
@@ -171,6 +171,32 @@ describe("voice KPIs", () => {
     expect(stats.lowQualityCalls).toBe(2); // < 2.2
     expect(stats.badQualityCalls).toBe(1); // < 1.3
     expect(stats.mos.samples).toBe(3);
+    expect(stats.mos.min).toBe(1.2);
+    expect(stats.mos.max).toBe(4.6);
+  });
+
+  it("aggregates raw UL/DL MOS samples from the backend per-session stats, weighted by sample count", () => {
+    // Κάθε γραμμή είναι μία κλήση (session) με ήδη υπολογισμένα avg/min/max/samples
+    // από το backend πάνω σε raw ResultsLQ08Avg δείγματα — όχι ένα Avg_mos ανά κλήση.
+    const stats = buildVoiceStats([
+      call({ mosUlAvg: 4, mosUlMin: 3, mosUlMax: 5, mosUlSamples: 4 }), // 4 δείγματα, sum 16
+      call({ mosUlAvg: 2, mosUlMin: 2, mosUlMax: 2, mosUlSamples: 1 }), // 1 δείγμα, sum 2
+      call({ mosDlAvg: 3.5, mosDlMin: 3, mosDlMax: 4, mosDlSamples: 2 }),
+    ]);
+
+    // (16 + 2) / (4 + 1) = 3.6 — ο μέσος όρος σταθμισμένος με τα samples, όχι με τις κλήσεις.
+    expect(stats.mosUl).toEqual({ avg: 3.6, samples: 5, min: 2, max: 5 });
+    expect(stats.mosDl).toEqual({ avg: 3.5, samples: 2, min: 3, max: 4 });
+  });
+
+  it("counts more MOS samples than calls when each call carries several raw samples", () => {
+    const stats = buildVoiceStats([
+      call({ mosUlAvg: 3, mosUlMin: 1, mosUlMax: 5, mosUlSamples: 4 }),
+      call({ mosUlAvg: 3, mosUlMin: 1, mosUlMax: 5, mosUlSamples: 4 }),
+    ]);
+
+    expect(stats.attempts).toBe(2);
+    expect(stats.mosUl.samples).toBe(8); // calls × 4, not capped at 1 per call
   });
 
   it("groups a table by operator and keeps only the requested mode", () => {

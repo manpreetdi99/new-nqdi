@@ -224,6 +224,20 @@ const Index = () => {
   const [totalTime, setTotalTime] = useState(0);
   const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null);
   const [activeTab, setActiveTab] = useLocalStorage<string>("perf-insights-active-tab", "queries");
+  // "Call Detail" and "Data Detail" live as a sub-navbar inside the "All Calls" tab
+  const [callsSubTab, setCallsSubTab] = useState<"list" | "detail" | "data-detail">("list");
+
+  const openCallDetail = (record: CallRecord) => {
+    setSelectedCall(record);
+    setActiveTab("calls");
+    setCallsSubTab("detail");
+  };
+
+  const openDataSessionDetail = (sessionId: string) => {
+    setSelectedDataSessionId(sessionId);
+    setActiveTab("calls");
+    setCallsSubTab("data-detail");
+  };
   const [sessionValidFilter, setSessionValidFilter] = useState<"all" | "1" | "0">("all");
   const [statusFilters, setStatusFilters] = useState<StatusFilterKey[]>([]);
   const [lastClickedRowId, setLastClickedRowId] = useState<string | null>(null);
@@ -232,7 +246,7 @@ const Index = () => {
   const [selectedFileGroupIds, setSelectedFileGroupIds] = useState<string[]>([]);
 
   useEffect(() => {
-    if (activeTab === "calls" && lastClickedRowId) {
+    if (activeTab === "calls" && callsSubTab === "list" && lastClickedRowId) {
       setTimeout(() => {
         const el = document.getElementById(lastClickedRowId);
         if (el) {
@@ -240,7 +254,7 @@ const Index = () => {
         }
       }, 100);
     }
-  }, [activeTab, lastClickedRowId]);
+  }, [activeTab, callsSubTab, lastClickedRowId]);
 
   const toggleCollection = (collectionName: string) => {
     setSelectedCallsCollections((prev) =>
@@ -984,7 +998,7 @@ const Index = () => {
             </div>
           </div>
 
-          {!["queries", "query-map", "map2", "validation"].includes(activeTab) && (
+          {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
             <div className="flex items-center gap-2">
               {/* Edit Filters button */}
               <button
@@ -1013,7 +1027,7 @@ const Index = () => {
           )}
 
           <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            {!["queries", "query-map", "map2", "validation"].includes(activeTab) && (
+            {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
               <button
                 type="button"
                 onClick={clearCallsFilters}
@@ -1038,7 +1052,7 @@ const Index = () => {
                 </motion.button>
               )}
             </AnimatePresence>
-            {!["queries", "query-map", "map2", "validation"].includes(activeTab) && (
+            {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
               <span>{filteredCallRecords.length} calls recorded</span>
             )}
           </div>
@@ -1064,13 +1078,6 @@ const Index = () => {
               <TabsTrigger value="map" className="gap-1.5 text-xs">
                 <MapPin className="h-3.5 w-3.5" /> Map
               </TabsTrigger>
-              <TabsTrigger value="data-detail" className="gap-1.5 text-xs" disabled={!selectedDataSessionId}>
-                <Wifi className="h-3.5 w-3.5" />
-                Data Detail
-              </TabsTrigger>
-              <TabsTrigger value="detail" className="gap-1.5 text-xs" disabled={!selectedCall}>
-                <BarChart3 className="h-3.5 w-3.5" /> Call Detail
-              </TabsTrigger>
               <TabsTrigger value="map2" className="gap-1.5 text-xs">
                 <MapPin className="h-3.5 w-3.5 text-cyan-400" /> Antennas
               </TabsTrigger>
@@ -1081,11 +1088,19 @@ const Index = () => {
           </div>
 
           <TabsContent value="Summary">
+            {/* Attachment C αγνοεί τα global φίλτρα (session valid / status / file group) — μόνο η επιλογή collection το καθορίζει. */}
             <SummaryTab
-              allCallsRows={filteredAllCallsRows}
+              allCallsRows={allCallsRows}
               dataCallsRows={dataCallsRows}
               database={selectedDatabase}
               collections={selectedCallsCollections}
+              databases={databases}
+              onDatabaseChange={handleDatabaseChange}
+              collectionNames={collectionNames}
+              collectionsLoading={collectionsLoading}
+              onToggleCollection={toggleCollection}
+              onSelectAllCollections={selectAllCollections}
+              onClearCollections={clearCollectionSelection}
             />
           </TabsContent>
 
@@ -1131,6 +1146,45 @@ const Index = () => {
           </TabsContent>
 
           <TabsContent value="calls" className="space-y-4">
+            <div className="flex items-center gap-1 rounded-lg border border-border bg-muted p-1 w-fit">
+              <button
+                type="button"
+                onClick={() => setCallsSubTab("list")}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors ${
+                  callsSubTab === "list"
+                    ? "bg-background text-foreground font-semibold shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Phone className="h-3.5 w-3.5" /> All Calls
+              </button>
+              <button
+                type="button"
+                onClick={() => setCallsSubTab("detail")}
+                disabled={!selectedCall}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  callsSubTab === "detail"
+                    ? "bg-background text-foreground font-semibold shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <BarChart3 className="h-3.5 w-3.5" /> Call Detail
+              </button>
+              <button
+                type="button"
+                onClick={() => setCallsSubTab("data-detail")}
+                disabled={!selectedDataSessionId}
+                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                  callsSubTab === "data-detail"
+                    ? "bg-background text-foreground font-semibold shadow-sm"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Wifi className="h-3.5 w-3.5" /> Data Detail
+              </button>
+            </div>
+
+            {callsSubTab === "list" && (
             <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4 items-start">
               <aside className="space-y-2 lg:sticky lg:top-24">
                 <div className="bg-card border border-border rounded-lg p-2">
@@ -1519,8 +1573,7 @@ const Index = () => {
                                 setLastClickedRowId(`call-row-${row.SessionId}-${idx}`);
                                 const record = callRecords.find((c) => c.callId === row.SessionId);
                                 if (record) {
-                                  setSelectedCall(record);
-                                  setActiveTab("detail");
+                                  openCallDetail(record);
                                 }
                               }}
                             >
@@ -1625,72 +1678,71 @@ const Index = () => {
                     groupByCycle={dataSessionsView === "cycle"}
                     selectedSessionId={selectedDataSessionId}
                     onSelectSession={(id) => {
-                      setSelectedDataSessionId(id);
-                      setActiveTab("data-detail");
+                      openDataSessionDetail(id);
                     }}
                   />
                 )}
               </div>
               </div>
             </div>
+            )}
+
+            {callsSubTab === "detail" && (
+              selectedCall ? (
+                <CallDetail
+                  call={selectedCall}
+                  database={selectedDatabase}
+                  onBack={() => setCallsSubTab("list")}
+                  onNavigateToCall={(sessionId) => {
+                    const record = callRecords.find((c) => String(c.callId) === String(sessionId));
+                    if (record) {
+                      setSelectedCall(record);
+                    } else {
+                      toast({
+                        title: "Η κλήση δεν βρέθηκε",
+                        description: `Το session ${sessionId} δεν υπάρχει στην τρέχουσα λίστα κλήσεων (φίλτρα collection/location).`,
+                        variant: "destructive",
+                      });
+                    }
+                  }}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-20 text-center">
+                  <Phone className="h-10 w-10 text-muted-foreground mb-3" />
+                  <p className="text-sm text-muted-foreground">
+                    Επιλέξτε μια κλήση από τη λίστα "All Calls" για να δείτε λεπτομέρειες.
+                  </p>
+                </div>
+              )
+            )}
+
+            {callsSubTab === "data-detail" && (
+              selectedDataSessionId ? (
+                <DataSessionDetail
+                  sessionId={selectedDataSessionId}
+                  tests={selectedDataSessionTests}
+                  onBack={() => setCallsSubTab("list")}
+                  database={selectedDatabase}
+                />
+              ) : (
+                <div className="flex flex-col items-center justify-center py-20 text-center">
+                  <Wifi className="h-10 w-10 text-muted-foreground mb-3" />
+                  <p className="text-sm text-muted-foreground">
+                    Επιλέξτε μια data session από τη λίστα "All Calls" για να δείτε λεπτομέρειες.
+                  </p>
+                </div>
+              )
+            )}
           </TabsContent>
 
           <TabsContent value="map">
             <CallsMap
               calls={filteredCallRecords}
               onSelectCall={(call) => {
-                setSelectedCall(call);
-                setActiveTab("detail");
+                openCallDetail(call);
               }}
               dataSessions={groupedDataSessions}
             />
-          </TabsContent>
-
-          <TabsContent value="data-detail">
-            {selectedDataSessionId ? (
-              <DataSessionDetail
-                sessionId={selectedDataSessionId}
-                tests={selectedDataSessionTests}
-                onBack={() => setActiveTab("calls")}
-                database={selectedDatabase}
-              />
-            ) : (
-              <div className="flex flex-col items-center justify-center py-20 text-center">
-                <Wifi className="h-10 w-10 text-muted-foreground mb-3" />
-                <p className="text-sm text-muted-foreground">
-                  Επιλέξτε μια data session από το tab "All Calls" για να δείτε λεπτομέρειες.
-                </p>
-              </div>
-            )}
-          </TabsContent>
-
-          <TabsContent value="detail">
-            {selectedCall ? (
-              <CallDetail
-                call={selectedCall}
-                database={selectedDatabase}
-                onBack={() => setActiveTab("calls")}
-                onNavigateToCall={(sessionId) => {
-                  const record = callRecords.find((c) => String(c.callId) === String(sessionId));
-                  if (record) {
-                    setSelectedCall(record);
-                  } else {
-                    toast({
-                      title: "Η κλήση δεν βρέθηκε",
-                      description: `Το session ${sessionId} δεν υπάρχει στην τρέχουσα λίστα κλήσεων (φίλτρα collection/location).`,
-                      variant: "destructive",
-                    });
-                  }
-                }}
-              />
-            ) : (
-              <div className="flex flex-col items-center justify-center py-20 text-center">
-                <Phone className="h-10 w-10 text-muted-foreground mb-3" />
-                <p className="text-sm text-muted-foreground">
-                  Επιλέξτε μια κλήση από το tab "All Calls" για να δείτε λεπτομέρειες.
-                </p>
-              </div>
-            )}
           </TabsContent>
 
           <TabsContent value="map2">

@@ -162,6 +162,14 @@ def list_calls(
                 (SELECT ROUND(AVG(OptionalWB),2) AS MOS
                     FROM ResultsLQ08Avg
                     WHERE SessionId = CA.SessionId) AS Avg_mos,
+                MOS.MosUlAvg AS mosUlAvg,
+                MOS.MosUlMin AS mosUlMin,
+                MOS.MosUlMax AS mosUlMax,
+                MOS.MosUlSamples AS mosUlSamples,
+                MOS.MosDlAvg AS mosDlAvg,
+                MOS.MosDlMin AS mosDlMin,
+                MOS.MosDlMax AS mosDlMax,
+                MOS.MosDlSamples AS mosDlSamples,
                 (ca.callDuration/1000) as callDuration,
                 {comment_expr} AS comment,
                 DF.ASideFileName,
@@ -176,6 +184,26 @@ def list_calls(
 			LEFT JOIN AnalysisCommentSessionsBridge ACSB ON ACSB.sessionID = CA.SessionId
 			LEFT JOIN AnalysisComment AC ON ACSB.commentId = AC.commentID
             {dw_comment_join}
+            -- Raw ResultsLQ08Avg samples (ίδιο κριτήριο με το A-LEVEL Attachment C query:
+            -- OptionalWB BETWEEN 1 AND 5, TestInfo.Valid = 1), σπασμένα σε UL (A->B) / DL (B->A)
+            -- ανά TestInfo.direction — ώστε το count να είναι τα raw MOS samples (~calls x N),
+            -- όχι ένα ήδη-μέσο-όρο νούμερο ανά κλήση.
+            OUTER APPLY (
+                SELECT
+                    ROUND(AVG(CASE WHEN TI.direction = 'A->B' THEN LQ.OptionalWB END), 2) AS MosUlAvg,
+                    MIN(CASE WHEN TI.direction = 'A->B' THEN LQ.OptionalWB END)           AS MosUlMin,
+                    MAX(CASE WHEN TI.direction = 'A->B' THEN LQ.OptionalWB END)           AS MosUlMax,
+                    COUNT(CASE WHEN TI.direction = 'A->B' THEN LQ.OptionalWB END)         AS MosUlSamples,
+                    ROUND(AVG(CASE WHEN TI.direction = 'B->A' THEN LQ.OptionalWB END), 2) AS MosDlAvg,
+                    MIN(CASE WHEN TI.direction = 'B->A' THEN LQ.OptionalWB END)           AS MosDlMin,
+                    MAX(CASE WHEN TI.direction = 'B->A' THEN LQ.OptionalWB END)           AS MosDlMax,
+                    COUNT(CASE WHEN TI.direction = 'B->A' THEN LQ.OptionalWB END)         AS MosDlSamples
+                FROM ResultsLQ08Avg LQ
+                JOIN TestInfo TI ON TI.TestId = LQ.TestId
+                WHERE LQ.SessionId = CA.SessionId
+                    AND TI.Valid = 1
+                    AND LQ.OptionalWB BETWEEN 1 AND 5
+            ) MOS
             WHERE (S.Valid = 1 or S.Valid = 0)
         """
 

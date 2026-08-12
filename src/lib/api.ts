@@ -104,6 +104,16 @@ export interface AllCallsRow {
   callDuration: number | null;
   callStartTimeStamp: string | null;
   Avg_mos: number | null;
+  /** Raw ResultsLQ08Avg samples για TestInfo.direction = 'A->B', OptionalWB σε [1,5]. */
+  mosUlAvg?: number | null;
+  mosUlMin?: number | null;
+  mosUlMax?: number | null;
+  mosUlSamples?: number | null;
+  /** Raw ResultsLQ08Avg samples για TestInfo.direction = 'B->A', OptionalWB σε [1,5]. */
+  mosDlAvg?: number | null;
+  mosDlMin?: number | null;
+  mosDlMax?: number | null;
+  mosDlSamples?: number | null;
   latitude: number | null;
   longitude: number | null;
   ASideFileName?: string | null;

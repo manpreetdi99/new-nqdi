@@ -1,5 +1,5 @@
 import { useMemo, useState, type ReactNode } from "react";
-import { Database, MapPin, Phone, Radio, Wifi } from "lucide-react";
+import { ChevronDown, Database, MapPin, Phone, Radio, Wifi } from "lucide-react";
 
 import type { AllCallsRow, DataCallRow } from "@/lib/api";
 import {
@@ -8,6 +8,7 @@ import {
   buildReportPeriod,
   buildVoiceStats,
   buildVoiceTable,
+  classifyCallStatus,
   collectOperators,
   EMPTY_VOICE_STATS,
   formatCount,
@@ -29,6 +30,15 @@ interface SummaryTabProps {
   dataCallsRows: DataCallRow[];
   database?: string;
   collections?: string[];
+  /** Για το dropdown επιλογής database μέσα στο banner· χωρίς αυτά, το banner δείχνει απλό κείμενο. */
+  databases?: string[];
+  onDatabaseChange?: (database: string) => void;
+  /** Όλα τα διαθέσιμα collections της επιλεγμένης βάσης — για το dropdown επιλογής collections. */
+  collectionNames?: string[];
+  collectionsLoading?: boolean;
+  onToggleCollection?: (name: string) => void;
+  onSelectAllCollections?: () => void;
+  onClearCollections?: () => void;
 }
 
 /* ────────────────────────── Χρώματα & κατώφλια ────────────────────────── */
@@ -64,6 +74,15 @@ const rateSeverity = (value: number | null, higherIsBetter: boolean): Severity |
   return "critical";
 };
 
+/** Κατώφλια του hero KPI (overall CSR excl. SR): >95% πράσινο, 90–95% πορτοκαλί, <90% κόκκινο. */
+const heroCsrColor = (value: number | null): string | undefined => {
+  if (value == null) return undefined;
+  const pct = value * 100;
+  if (pct > 95) return STATUS_COLORS.good;
+  if (pct >= 90) return STATUS_COLORS.warning;
+  return STATUS_COLORS.critical;
+};
+
 /** Το mix των outcomes είναι κατάσταση, όχι ταυτότητα → status χρώματα. */
 const OUTCOME_SEGMENTS = [
   { key: "completed", label: "Normal release", color: STATUS_COLORS.good },
@@ -95,16 +114,6 @@ const RateMeter = ({ value, higherIsBetter }: { value: number | null; higherIsBe
   );
 };
 
-/** Μέγεθος σε σχέση με το max της γραμμής — χρώμα του operator (ταυτότητα). */
-const MagnitudeBar = ({ value, max, color }: { value: number; max: number; color: string }) => (
-  <div className="h-1 w-full rounded-full bg-foreground/[0.08]">
-    <div
-      className="h-full rounded-full ring-1 ring-inset ring-white/20 transition-[width] duration-500"
-      style={{ width: `${max > 0 ? (value / max) * 100 : 0}%`, backgroundColor: color }}
-    />
-  </div>
-);
-
 /** Part-to-whole: πώς έκλεισαν οι κλήσεις. 2px κενά αντί για περιγράμματα. */
 const OutcomeMixBar = ({ stats }: { stats: VoiceStats }) => {
   if (stats.attempts === 0) return <span className="text-muted-foreground/40">—</span>;
@@ -128,7 +137,7 @@ const OutcomeMixBar = ({ stats }: { stats: VoiceStats }) => {
   );
 };
 
-const MetaChip = ({ icon: Icon, label, value }: { icon?: typeof Database; label: string; value: string }) => (
+const MetaChip = ({ icon: Icon, label, value }: { icon?: typeof Database; label: string; value: ReactNode }) => (
   <div className="flex items-center gap-2 rounded-md border border-border/70 bg-background/40 px-2.5 py-1.5">
     {Icon && <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
     <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
@@ -142,7 +151,16 @@ const MetaChip = ({ icon: Icon, label, value }: { icon?: typeof Database; label:
 type Cell =
   | { kind: "rate"; value: number | null; higherIsBetter: boolean; alt?: string }
   | { kind: "count"; value: number; alt?: string }
-  | { kind: "value"; value: number | null; decimals: number; unit?: string; samples?: number; higherIsBetter?: boolean }
+  | {
+      kind: "value";
+      value: number | null;
+      decimals: number;
+      unit?: string;
+      samples?: number;
+      higherIsBetter?: boolean;
+      /** Εύρος (min–max) κάτω από την κύρια τιμή — π.χ. MinMOS/MaxMOS. */
+      range?: { min: number | null; max: number | null };
+    }
   | { kind: "mix"; stats: VoiceStats };
 
 interface KpiRowSpec<T> {
@@ -260,6 +278,40 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
     cell: (s) => ({ kind: "value", value: s.mos.avg, decimals: 2, samples: s.mos.samples, higherIsBetter: true }),
   },
   {
+    label: "MOS UL (avg, min–max)",
+    hint: "TestInfo.direction A→B — raw δείγματα, όχι κλήσεις",
+    cell: (s) => ({
+      kind: "value",
+      value: s.mosUl.avg,
+      decimals: 2,
+      samples: s.mosUl.samples,
+      higherIsBetter: true,
+      range: { min: s.mosUl.min, max: s.mosUl.max },
+    }),
+  },
+  {
+    label: "MOS DL (avg, min–max)",
+    hint: "TestInfo.direction B→A — raw δείγματα, όχι κλήσεις",
+    cell: (s) => ({
+      kind: "value",
+      value: s.mosDl.avg,
+      decimals: 2,
+      samples: s.mosDl.samples,
+      higherIsBetter: true,
+      range: { min: s.mosDl.min, max: s.mosDl.max },
+    }),
+  },
+  {
+    label: "MOS UL Count",
+    hint: "TestInfo.direction A→B — πλήθος raw δειγμάτων",
+    cell: (s) => ({ kind: "count", value: s.mosUl.samples }),
+  },
+  {
+    label: "MOS DL Count",
+    hint: "TestInfo.direction B→A — πλήθος raw δειγμάτων",
+    cell: (s) => ({ kind: "count", value: s.mosDl.samples }),
+  },
+  {
     label: "MOC Call Setup Time (sec)",
     hint: "callDir A→B",
     cell: (s) => ({ kind: "value", value: s.setupMoc.avg, decimals: 2, samples: s.setupMoc.samples, higherIsBetter: false }),
@@ -311,9 +363,11 @@ interface KpiTableProps<T> {
   total: T;
   hideEmptyRows: boolean;
   markBest: boolean;
+  /** Αντικαθιστά το default "KPI" label στο πάνω-αριστερά κελί (π.χ. τίτλος section). */
+  cornerLabel?: ReactNode;
 }
 
-function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest }: KpiTableProps<T>) {
+function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest, cornerLabel }: KpiTableProps<T>) {
   const columns = operators.map((operator) => ({ operator, stats: statsFor(operator.key) }));
 
   // Πλάτος ανά στήλη ώστε η στήλη με τα ονόματα των KPI να μη στριμώχνεται.
@@ -321,21 +375,21 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
 
   return (
     <div className="overflow-x-auto">
-      <table className="w-full border-collapse text-xs" style={{ minWidth }}>
+      <table className="w-full border-collapse text-sm" style={{ minWidth }}>
         <thead>
-          <tr className="border-b border-border bg-muted">
-            <th className="sticky left-0 z-10 min-w-[15rem] bg-muted px-4 py-2.5 text-left text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
-              KPI
+          <tr className="border-b-2 border-border bg-muted">
+            <th className="sticky left-0 z-10 min-w-[15rem] bg-muted px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-foreground/80">
+              {cornerLabel ?? "KPI"}
             </th>
             {columns.map(({ operator }) => (
-              <th key={operator.key} className="px-4 py-2.5 text-right font-semibold">
+              <th key={operator.key} className="px-4 py-3 text-right font-semibold">
                 <span className="flex items-center justify-end gap-1.5">
                   <OperatorSwatch color={operator.color} />
-                  <span className="text-[11px] tracking-wide text-foreground">{operator.label}</span>
+                  <span className="text-xs font-bold tracking-wide text-foreground">{operator.label}</span>
                 </span>
               </th>
             ))}
-            <th className="border-l border-border/60 px-4 py-2.5 text-right text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
+            <th className="border-l-2 border-border/60 px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wider text-foreground/80">
               Total
             </th>
           </tr>
@@ -357,12 +411,11 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                   ? Math.max(...numbers)
                   : Math.min(...numbers)
                 : null;
-            const rowMax = numbers.length > 0 ? Math.max(...numbers) : 0;
 
             return (
-              <tr key={row.label} className="border-b border-border/40 last:border-b-0 hover:bg-muted/15">
-                <td className="sticky left-0 z-10 min-w-[15rem] bg-card px-4 py-2 align-middle">
-                  <div className={row.emphasis ? "font-medium text-foreground" : "text-foreground/80"}>{row.label}</div>
+              <tr key={row.label} className="border-b border-border/70 last:border-b-0 hover:bg-muted/30">
+                <td className="sticky left-0 z-10 min-w-[15rem] bg-card px-4 py-2.5 align-middle">
+                  <div className={row.emphasis ? "font-semibold text-foreground" : "font-medium text-foreground/80"}>{row.label}</div>
                   {row.hint && <div className="text-[10px] text-muted-foreground">{row.hint}</div>}
                 </td>
 
@@ -372,7 +425,7 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                   const isBest = bestValue != null && value === bestValue;
 
                   return (
-                    <td key={operator.key} className="px-4 py-1.5 align-middle">
+                    <td key={operator.key} className="px-4 py-2 align-middle">
                       {cell.kind === "mix" ? (
                         <OutcomeMixBar stats={(cell as Extract<Cell, { kind: "mix" }>).stats} />
                       ) : (
@@ -384,18 +437,15 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                             {isBest ? "best" : ""}
                           </span>
 
-                          {/* Σταθερή θέση για τη ράβδο ώστε να ευθυγραμμίζονται οι αριθμοί. */}
+                          {/* Σταθερή θέση για τη ράβδο ώστε να ευθυγραμμίζονται οι αριθμοί — μόνο τα ποσοστά παίρνουν μπάρα. */}
                           <span className="w-14 shrink-0">
                             {cell.kind === "rate" && <RateMeter value={cell.value} higherIsBetter={cell.higherIsBetter} />}
-                            {cell.kind === "count" && rowMax > 0 && (
-                              <MagnitudeBar value={cell.value} max={rowMax} color={operator.color} />
-                            )}
                           </span>
 
                           <span className="w-[4.75rem] text-right">
                             <span
                               className={`block font-mono tabular-nums ${
-                                row.emphasis ? "text-[13px] font-semibold text-foreground" : "text-foreground/90"
+                                row.emphasis ? "text-sm font-bold text-foreground" : "text-[13px] font-medium text-foreground/90"
                               } ${value === 0 && cell.kind === "count" ? "text-muted-foreground/40" : ""}`}
                             >
                               {cellText(cell)}
@@ -403,6 +453,12 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                             {cell.kind === "value" && cell.samples != null && cell.samples > 0 && (
                               <span className="block text-[10px] leading-tight text-muted-foreground">
                                 n={formatCount(cell.samples)}
+                                {cell.range && (cell.range.min != null || cell.range.max != null) && (
+                                  <>
+                                    {" "}
+                                    · {formatNumber(cell.range.min, cell.decimals)}–{formatNumber(cell.range.max, cell.decimals)}
+                                  </>
+                                )}
                               </span>
                             )}
                             {(cell.kind === "rate" || cell.kind === "count") && cell.alt && (
@@ -439,29 +495,24 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
 /* ────────────────────────── Κάρτες ────────────────────────── */
 
 const ReportCard = ({
-  eyebrow,
   title,
   subtitle,
   icon: Icon,
   footer,
   children,
 }: {
-  eyebrow: string;
   title: string;
   subtitle?: string;
   icon: typeof Phone;
   footer?: ReactNode;
   children: ReactNode;
 }) => (
-  <section className="overflow-hidden rounded-xl border border-border bg-card">
-    <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
-      <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10">
-        <Icon className="h-4 w-4 text-primary" />
+  <section className="overflow-hidden rounded-xl border-2 border-border bg-card shadow-sm">
+    <header className="flex flex-wrap items-center gap-3 border-b-2 border-border bg-muted/30 px-4 py-3.5">
+      <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/15">
+        <Icon className="h-5 w-5 text-primary" />
       </span>
-      <div className="min-w-0">
-        <div className="text-[10px] font-semibold uppercase tracking-[0.14em] text-muted-foreground">{eyebrow}</div>
-        <h2 className="text-sm font-semibold text-foreground">{title}</h2>
-      </div>
+      <h2 className="min-w-0 text-lg font-bold tracking-tight text-foreground">{title}</h2>
       {subtitle && <p className="ml-auto text-[11px] text-muted-foreground">{subtitle}</p>}
     </header>
     {children}
@@ -491,7 +542,6 @@ const OperatorTile = ({
   stats: VoiceStats;
   excludeSysRelease: boolean;
 }) => {
-  const hasQualityData = stats.mos.samples > 0 || stats.setupAll.samples > 0;
   const rates = ratesOf(stats, excludeSysRelease);
 
   return (
@@ -499,8 +549,8 @@ const OperatorTile = ({
       <div className="flex items-center gap-2">
         <OperatorSwatch color={operator.color} />
         <span className="text-xs font-semibold tracking-wide text-foreground">{operator.label}</span>
-        <span className="ml-auto text-[10px] uppercase tracking-wider text-muted-foreground">
-          Call success rate{excludeSysRelease && " (excl. SR)"}
+        <span className="ml-auto text-xs font-bold uppercase tracking-wider text-white">
+          GSM+FREE call success rate{excludeSysRelease && " (excl. SR)"}
         </span>
       </div>
 
@@ -535,11 +585,6 @@ const OperatorTile = ({
         ))}
       </dl>
 
-      {hasQualityData && (
-        <p className="mt-3 text-[10px] text-muted-foreground">
-          POLQA avg {formatNumber(stats.mos.avg, 2)} · setup {formatNumber(stats.setupAll.avg, 2)} s
-        </p>
-      )}
     </div>
   );
 };
@@ -550,55 +595,100 @@ const EmptyState = ({ message }: { message: string }) => (
 
 /* ────────────────────────── Το tab ────────────────────────── */
 
-const SummaryTab = ({ allCallsRows, dataCallsRows, database, collections = [] }: SummaryTabProps) => {
+const SummaryTab = ({
+  allCallsRows,
+  dataCallsRows,
+  database,
+  collections = [],
+  databases = [],
+  onDatabaseChange,
+  collectionNames = [],
+  collectionsLoading = false,
+  onToggleCollection,
+  onSelectAllCollections,
+  onClearCollections,
+}: SummaryTabProps) => {
   const [hideEmptyRows, setHideEmptyRows] = useState(false);
   const [markBest, setMarkBest] = useState(true);
   /** "Avoid system release": τα ποσοστά υπολογίζονται χωρίς τις κλήσεις που έκλεισε το σύστημα. */
-  const [excludeSysRelease, setExcludeSysRelease] = useState(false);
+  const [excludeSysRelease, setExcludeSysRelease] = useState(true);
+  /** "Valid calls": κρατάει έξω τις σειρές που έχουν ρητά σημαδευτεί isValid = 0. */
+  const [onlyValidCalls, setOnlyValidCalls] = useState(true);
+  const [collectionsMenuOpen, setCollectionsMenuOpen] = useState(false);
+
+  const validAllCallsRows = useMemo(
+    () => (onlyValidCalls ? allCallsRows.filter((row) => row.isValid !== 0) : allCallsRows),
+    [allCallsRows, onlyValidCalls],
+  );
+  const validDataCallsRows = useMemo(
+    () => (onlyValidCalls ? dataCallsRows.filter((row) => row.isValid !== 0) : dataCallsRows),
+    [dataCallsRows, onlyValidCalls],
+  );
 
   const rows = useMemo(() => voiceRows(excludeSysRelease), [excludeSysRelease]);
 
   const operators = useMemo(
-    () => collectOperators([...allCallsRows.map((row) => row.Location), ...dataCallsRows.map((row) => row.Location)]),
-    [allCallsRows, dataCallsRows],
+    () =>
+      collectOperators([
+        ...validAllCallsRows.map((row) => row.Location),
+        ...validDataCallsRows.map((row) => row.Location),
+      ]),
+    [validAllCallsRows, validDataCallsRows],
   );
 
-  const gsmTable = useMemo(() => buildVoiceTable(allCallsRows, "GSM"), [allCallsRows]);
-  const freeTable = useMemo(() => buildVoiceTable(allCallsRows, "FREE"), [allCallsRows]);
-  const dataSections = useMemo(() => buildDataSections(dataCallsRows), [dataCallsRows]);
+  const gsmTable = useMemo(() => buildVoiceTable(validAllCallsRows, "GSM"), [validAllCallsRows]);
+  const freeTable = useMemo(() => buildVoiceTable(validAllCallsRows, "FREE"), [validAllCallsRows]);
+  const dataSections = useMemo(() => buildDataSections(validDataCallsRows), [validDataCallsRows]);
 
-  const overallStats = useMemo(() => buildVoiceStats(allCallsRows), [allCallsRows]);
+  const overallStats = useMemo(() => buildVoiceStats(validAllCallsRows), [validAllCallsRows]);
 
   /** GSM + FREE μαζί ανά operator — αυτό δείχνουν τα tiles. */
   const voiceByOperator = useMemo(() => {
     const grouped = new Map<string, AllCallsRow[]>();
-    for (const row of allCallsRows) {
+    for (const row of validAllCallsRows) {
       const key = resolveOperator(row.Location).key;
       const bucket = grouped.get(key);
       if (bucket) bucket.push(row);
       else grouped.set(key, [row]);
     }
     return new Map(Array.from(grouped, ([key, rows]) => [key, buildVoiceStats(rows)]));
+  }, [validAllCallsRows]);
+
+  /** Collections με έστω μία dropped/failed κλήση χωρίς comment — γίνονται κόκκινες στην κεφαλίδα. */
+  const flaggedCollections = useMemo(() => {
+    const set = new Set<string>();
+    for (const row of allCallsRows) {
+      if (!row.CollectionName) continue;
+      const outcome = classifyCallStatus(row.status);
+      if ((outcome === "dropped" || outcome === "failed") && !row.comment?.trim()) {
+        set.add(row.CollectionName);
+      }
+    }
+    return set;
   }, [allCallsRows]);
 
   const period = useMemo(
     () =>
       buildReportPeriod([
-        ...allCallsRows.map((row) => row.callStartTimeStamp),
-        ...dataCallsRows.map((row) => row.callStartTimeStamp),
+        ...validAllCallsRows.map((row) => row.callStartTimeStamp),
+        ...validDataCallsRows.map((row) => row.callStartTimeStamp),
       ]),
-    [allCallsRows, dataCallsRows],
+    [validAllCallsRows, validDataCallsRows],
   );
 
   const locations = useMemo(
     () =>
       Array.from(
-        new Set([...allCallsRows.map((row) => row.Location), ...dataCallsRows.map((row) => row.Location)].filter(Boolean)),
+        new Set(
+          [...validAllCallsRows.map((row) => row.Location), ...validDataCallsRows.map((row) => row.Location)].filter(
+            Boolean,
+          ),
+        ),
       ) as string[],
-    [allCallsRows, dataCallsRows],
+    [validAllCallsRows, validDataCallsRows],
   );
 
-  const hasData = allCallsRows.length > 0 || dataCallsRows.length > 0;
+  const hasData = validAllCallsRows.length > 0 || validDataCallsRows.length > 0;
 
   const formatDate = (date: Date | null) =>
     date
@@ -613,21 +703,144 @@ const SummaryTab = ({ allCallsRows, dataCallsRows, database, collections = [] }:
   return (
     <div className="space-y-4">
       {/* ── Κεφαλίδα αναφοράς ── */}
-      <section className="overflow-hidden rounded-xl border border-border bg-card">
-        <div className="flex flex-wrap items-start gap-6 bg-gradient-to-r from-primary/[0.07] via-accent/[0.04] to-transparent px-5 py-5">
+      <section className="rounded-xl border border-border bg-card">
+        <div className="flex flex-wrap items-start gap-6 rounded-t-xl bg-gradient-to-r from-primary/[0.07] via-accent/[0.04] to-transparent px-5 py-5">
           <div className="min-w-[260px] flex-1">
             <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">A-Level Analysis</div>
-            <h1 className="mt-1 text-xl font-semibold tracking-tight text-foreground">Attachment C — Call Statistics Tables</h1>
+            <h1 className="mt-1 text-3xl font-extrabold tracking-tight text-foreground">Attachment C — Call Statistics Tables</h1>
             <p className="mt-1 text-xs text-muted-foreground">
               Παράγεται live από την τρέχουσα επιλογή database / collections / φίλτρων.
             </p>
 
             <div className="mt-4 flex flex-wrap gap-2">
-              <MetaChip icon={Database} label="Route" value={database || "—"} />
               <MetaChip icon={MapPin} label="Subroutes" value={locations.length > 0 ? `${locations.length}` : "—"} />
               <MetaChip label="Week" value={period.week != null ? String(period.week) : "—"} />
               <MetaChip label="Period" value={`${formatDate(period.from)} – ${formatDate(period.to)}`} />
-              {collections.length > 0 && <MetaChip label="Collections" value={String(collections.length)} />}
+            </div>
+          </div>
+
+          {/* Κέντρο: dropdown επιλογής database + collections, δίπλα-δίπλα στο κέντρο του banner. */}
+          <div className="flex min-w-[320px] flex-1 flex-row flex-wrap items-center justify-center gap-4 text-center">
+            <div>
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Database</div>
+              {onDatabaseChange ? (
+                <select
+                  value={database || ""}
+                  onChange={(event) => onDatabaseChange(event.target.value)}
+                  className="mt-1 min-w-[18rem] rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                >
+                  <option value="">Select database</option>
+                  {databases.map((db) => (
+                    <option key={db} value={db}>
+                      {db}
+                    </option>
+                  ))}
+                </select>
+              ) : (
+                <div className="mt-1 min-w-[18rem] rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground">
+                  {database || "—"}
+                </div>
+              )}
+            </div>
+
+            <div className="relative">
+              <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Collections</div>
+              {onToggleCollection ? (
+                <>
+                  <div
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setCollectionsMenuOpen((open) => !open)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        setCollectionsMenuOpen((open) => !open);
+                      }
+                    }}
+                    className="mt-1 flex min-w-[18rem] cursor-pointer items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  >
+                    <span className="truncate">
+                      {collections.length === 0
+                        ? "Select collections"
+                        : collections.length === 1
+                          ? collections[0]
+                          : `${collections.length} collections selected`}
+                    </span>
+                    <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  </div>
+
+                  {collectionsMenuOpen && (
+                    <>
+                      <div className="fixed inset-0 z-20" onClick={() => setCollectionsMenuOpen(false)} />
+                      <div className="absolute left-1/2 top-full z-30 mt-1.5 w-96 -translate-x-1/2 rounded-lg border border-border bg-popover p-3 text-left shadow-lg">
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <span className="text-xs uppercase tracking-wider text-muted-foreground">
+                            {collections.length}/{collectionNames.length} selected
+                          </span>
+                          <div className="flex gap-1.5">
+                            <button
+                              type="button"
+                              onClick={onSelectAllCollections}
+                              disabled={collectionNames.length === 0}
+                              className="rounded border border-border bg-muted px-2 py-1 text-xs hover:bg-muted/70 disabled:opacity-50"
+                            >
+                              Select all
+                            </button>
+                            <button
+                              type="button"
+                              onClick={onClearCollections}
+                              disabled={collectionNames.length === 0}
+                              className="rounded border border-border bg-muted px-2 py-1 text-xs hover:bg-muted/70 disabled:opacity-50"
+                            >
+                              Clear
+                            </button>
+                          </div>
+                        </div>
+                        <div className="max-h-80 space-y-1 overflow-y-auto">
+                          {!database && <p className="px-1 py-1 text-xs text-muted-foreground">Select database first.</p>}
+                          {database && collectionsLoading && <p className="px-1 py-1 text-xs text-muted-foreground">Loading...</p>}
+                          {database && !collectionsLoading && collectionNames.length === 0 && (
+                            <p className="px-1 py-1 text-xs text-muted-foreground">No collections found.</p>
+                          )}
+                          {database &&
+                            !collectionsLoading &&
+                            collectionNames.map((name) => (
+                              <label
+                                key={name}
+                                className="flex cursor-pointer items-center gap-2.5 rounded-md p-2 text-sm text-foreground hover:bg-muted/50"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={collections.includes(name)}
+                                  onChange={() => onToggleCollection(name)}
+                                  className="h-4 w-4 shrink-0 rounded-sm border-primary text-primary focus:ring-primary"
+                                />
+                                <span className={`truncate ${flaggedCollections.has(name) ? "text-red-500" : ""}`}>
+                                  {name}
+                                </span>
+                              </label>
+                            ))}
+                        </div>
+                      </div>
+                    </>
+                  )}
+                </>
+              ) : collections.length > 0 ? (
+                <div className="mt-1 flex flex-wrap items-center justify-center gap-x-1.5 gap-y-1">
+                  {collections.map((name) => (
+                    <span
+                      key={name}
+                      className={`text-sm font-semibold ${
+                        flaggedCollections.has(name) ? "text-red-500" : "text-foreground"
+                      }`}
+                    >
+                      {name}
+                    </span>
+                  ))}
+                </div>
+              ) : (
+                <div className="mt-1 text-sm text-muted-foreground">—</div>
+              )}
             </div>
           </div>
 
@@ -636,7 +849,14 @@ const SummaryTab = ({ allCallsRows, dataCallsRows, database, collections = [] }:
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Overall call success rate{excludeSysRelease && " (excl. SR)"}
             </div>
-            <div className="mt-1 text-5xl font-semibold leading-none tracking-tight text-foreground">
+            <div
+              className="mt-1 text-5xl font-semibold leading-none tracking-tight text-foreground"
+              style={
+                excludeSysRelease && onlyValidCalls
+                  ? { color: heroCsrColor(ratesOf(overallStats, excludeSysRelease).csr) }
+                  : undefined
+              }
+            >
               {formatPercent(ratesOf(overallStats, excludeSysRelease).csr, 1)}
             </div>
             <div className="mt-2 text-[11px] text-muted-foreground">
@@ -649,12 +869,12 @@ const SummaryTab = ({ allCallsRows, dataCallsRows, database, collections = [] }:
                 releases
               </div>
             )}
-            <div className="mt-1 text-[11px] text-muted-foreground">{formatCount(dataCallsRows.length)} data tests</div>
+            <div className="mt-1 text-[11px] text-muted-foreground">{formatCount(validDataCallsRows.length)} data tests</div>
           </div>
         </div>
 
         {/* Legend + controls: μία σειρά πάνω απ' όλα όσα ορίζει. */}
-        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 border-t border-border px-5 py-2.5">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2 rounded-b-xl border-t border-border px-5 py-2.5">
           <span className="text-[10px] uppercase tracking-wider text-muted-foreground">Operators</span>
           {operators.length === 0 && <span className="text-xs text-muted-foreground">—</span>}
           {operators.map((operator) => (
@@ -665,6 +885,18 @@ const SummaryTab = ({ allCallsRows, dataCallsRows, database, collections = [] }:
           ))}
 
           <div className="ml-auto flex items-center gap-4">
+            <label
+              className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground"
+              title="Κρατάει έξω τις σειρές που έχουν σημαδευτεί isValid = 0."
+            >
+              <input
+                type="checkbox"
+                checked={onlyValidCalls}
+                onChange={(event) => setOnlyValidCalls(event.target.checked)}
+                className="h-3 w-3 accent-[hsl(var(--primary))]"
+              />
+              Valid calls
+            </label>
             <label
               className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground"
               title="Τα ποσοστά υπολογίζονται χωρίς τις system release κλήσεις· η τιμή με αυτές μένει ορατή κάτω από κάθε νούμερο."
@@ -706,7 +938,7 @@ const SummaryTab = ({ allCallsRows, dataCallsRows, database, collections = [] }:
       )}
 
       {/* ── KPI tiles ανά operator ── */}
-      {operators.length > 0 && allCallsRows.length > 0 && (
+      {operators.length > 0 && validAllCallsRows.length > 0 && (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {operators.map((operator) => {
             const stats = voiceByOperator.get(operator.key);
@@ -726,7 +958,6 @@ const SummaryTab = ({ allCallsRows, dataCallsRows, database, collections = [] }:
       {/* ── TABLE 20 — GSM ── */}
       {gsmTable.total.attempts > 0 && (
         <ReportCard
-          eyebrow="Table 20 (*)"
           title="GSM Call Stats"
           subtitle={`${formatCount(gsmTable.total.attempts)} call attempts`}
           icon={Radio}
@@ -745,7 +976,6 @@ const SummaryTab = ({ allCallsRows, dataCallsRows, database, collections = [] }:
       {/* ── TABLE 21 — FREE ── */}
       {freeTable.total.attempts > 0 && (
         <ReportCard
-          eyebrow="Table 21 (*)"
           title="Free (2G-3G-LTE) Call Stats"
           subtitle={`${formatCount(freeTable.total.attempts)} call attempts`}
           icon={Phone}
@@ -764,9 +994,8 @@ const SummaryTab = ({ allCallsRows, dataCallsRows, database, collections = [] }:
       {/* ── TABLE 22 — PS DATA ── */}
       {dataSections.length > 0 && (
         <ReportCard
-          eyebrow="Table 22 (*)"
           title="PS Data Stats"
-          subtitle={`${dataSections.length} test sections · ${formatCount(dataCallsRows.length)} tests`}
+          subtitle={`${dataSections.length} test sections · ${formatCount(validDataCallsRows.length)} tests`}
           icon={Wifi}
         >
           <div className="divide-y divide-border/60">
@@ -811,13 +1040,6 @@ const DataSectionBlock = ({
 
   return (
     <div>
-      <div className="flex flex-wrap items-center gap-3 bg-muted/20 px-4 py-2">
-        <h3 className="text-xs font-semibold text-foreground">{section.label}</h3>
-        <span className="text-[10px] text-muted-foreground">
-          {formatCount(section.total.total)} tests · {formatPercent(section.total.successRate, 1)} success
-          {section.total.metrics[0]?.value != null && ` · ${formatMetric(section.total.metrics[0])}`}
-        </span>
-      </div>
       <KpiTable
         operators={present}
         rows={dataRows(section.total)}
@@ -825,6 +1047,15 @@ const DataSectionBlock = ({
         total={section.total}
         hideEmptyRows={hideEmptyRows}
         markBest={markBest}
+        cornerLabel={
+          <div>
+            <div className="text-xs font-bold normal-case tracking-normal text-foreground">{section.label}</div>
+            <div className="mt-0.5 text-[10px] font-normal normal-case tracking-normal text-muted-foreground">
+              {formatCount(section.total.total)} tests · {formatPercent(section.total.successRate, 1)} success
+              {section.total.metrics[0]?.value != null && ` · ${formatMetric(section.total.metrics[0])}`}
+            </div>
+          </div>
+        }
       />
     </div>
   );

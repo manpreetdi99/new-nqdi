@@ -110,20 +110,60 @@ export const classifyDataTest = (row: DataCallRow): DataTestOutcome => {
 export interface Sample {
   avg: number | null;
   samples: number;
+  min: number | null;
+  max: number | null;
 }
 
-const EMPTY_SAMPLE: Sample = { avg: null, samples: 0 };
+const EMPTY_SAMPLE: Sample = { avg: null, samples: 0, min: null, max: null };
 
 const mean = (values: number[]): Sample =>
   values.length === 0
     ? EMPTY_SAMPLE
-    : { avg: values.reduce((sum, v) => sum + v, 0) / values.length, samples: values.length };
+    : {
+        avg: values.reduce((sum, v) => sum + v, 0) / values.length,
+        samples: values.length,
+        min: Math.min(...values),
+        max: Math.max(...values),
+      };
 
 const ratio = (numerator: number, denominator: number): number | null =>
   denominator > 0 ? numerator / denominator : null;
 
 const numeric = (value: number | null | undefined): number | null =>
   value == null || Number.isNaN(Number(value)) ? null : Number(value);
+
+/**
+ * Συνδυάζει per-session αθροίσματα (avg/min/max/count ήδη υπολογισμένα στο backend
+ * πάνω σε raw ResultsLQ08Avg δείγματα) σε ένα group-level Sample. Η στάθμιση με το
+ * count κάθε session κρατάει το avg σωστό ακόμα κι όταν οι κλήσεις έχουν διαφορετικό
+ * πλήθος δειγμάτων (π.χ. μια κλήση με 4 samples δεν μετράει όσο μια με 1).
+ */
+interface WeightedAgg {
+  sum: number;
+  count: number;
+  min: number | null;
+  max: number | null;
+}
+
+const emptyAgg = (): WeightedAgg => ({ sum: 0, count: 0, min: null, max: null });
+
+const addToAgg = (
+  agg: WeightedAgg,
+  avg: number | null,
+  count: number | null,
+  min: number | null,
+  max: number | null,
+): void => {
+  if (avg != null && count != null && count > 0) {
+    agg.sum += avg * count;
+    agg.count += count;
+  }
+  if (min != null) agg.min = agg.min == null ? min : Math.min(agg.min, min);
+  if (max != null) agg.max = agg.max == null ? max : Math.max(agg.max, max);
+};
+
+const aggToSample = (agg: WeightedAgg): Sample =>
+  agg.count > 0 ? { avg: agg.sum / agg.count, samples: agg.count, min: agg.min, max: agg.max } : EMPTY_SAMPLE;
 
 /* ────────────────────────── TABLE 20 / 21 — Voice ────────────────────────── */
 
@@ -166,6 +206,14 @@ export interface VoiceStats {
    */
   withoutSysRelease: VoiceRates;
   mos: Sample;
+  /**
+   * Raw ResultsLQ08Avg δείγματα (OptionalWB σε [1,5], TestInfo.Valid=1) με
+   * TestInfo.direction = A→B — μετράει ως "UL". Πολλά δείγματα ανά κλήση,
+   * όχι ένα ήδη-μέσο-όρο νούμερο ανά session.
+   */
+  mosUl: Sample;
+  /** Ίδιο με το mosUl, για TestInfo.direction = B→A — μετράει ως "DL". */
+  mosDl: Sample;
   /** Low Speech Quality Calls (POLQA < 2.2) */
   lowQualityCalls: number;
   /** Low Speech Quality Calls (POLQA < 1.3) */
@@ -192,6 +240,8 @@ export const EMPTY_VOICE_STATS: VoiceStats = {
   srr: null,
   withoutSysRelease: { attempts: 0, connections: 0, csr: null, dcr: null, afr: null },
   mos: EMPTY_SAMPLE,
+  mosUl: EMPTY_SAMPLE,
+  mosDl: EMPTY_SAMPLE,
   lowQualityCalls: 0,
   badQualityCalls: 0,
   setupAll: EMPTY_SAMPLE,
@@ -211,6 +261,8 @@ const isMtc = (callDir: string | null | undefined): boolean => /b\s*->\s*a/i.tes
 export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
   const counts = { completed: 0, sysRelease: 0, dropped: 0, failed: 0 };
   const mosValues: number[] = [];
+  const mosUlAgg = emptyAgg();
+  const mosDlAgg = emptyAgg();
   const setupAll: number[] = [];
   const setupMoc: number[] = [];
   const setupMtc: number[] = [];
@@ -228,6 +280,10 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
       if (mos < LOW_QUALITY_MOS) lowQualityCalls++;
       if (mos < BAD_QUALITY_MOS) badQualityCalls++;
     }
+
+    // Raw per-session UL/DL δείγματα από το backend (TestInfo.direction) — βλ. σχόλιο στο VoiceStats.
+    addToAgg(mosUlAgg, numeric(row.mosUlAvg), numeric(row.mosUlSamples), numeric(row.mosUlMin), numeric(row.mosUlMax));
+    addToAgg(mosDlAgg, numeric(row.mosDlAvg), numeric(row.mosDlSamples), numeric(row.mosDlMin), numeric(row.mosDlMax));
 
     const setup = numeric(row.setupTime);
     if (setup != null && setup > 0) {
@@ -270,6 +326,8 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
       afr: ratio(counts.failed, attemptsExcl),
     },
     mos: mean(mosValues),
+    mosUl: aggToSample(mosUlAgg),
+    mosDl: aggToSample(mosDlAgg),
     lowQualityCalls,
     badQualityCalls,
     setupAll: mean(setupAll),
