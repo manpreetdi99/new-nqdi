@@ -727,7 +727,7 @@ const SummaryTab = ({
                 <select
                   value={database || ""}
                   onChange={(event) => onDatabaseChange(event.target.value)}
-                  className="mt-1 min-w-[18rem] rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                  className="mt-1 w-72 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
                 >
                   <option value="">Select database</option>
                   {databases.map((db) => (
@@ -737,7 +737,7 @@ const SummaryTab = ({
                   ))}
                 </select>
               ) : (
-                <div className="mt-1 min-w-[18rem] rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground">
+                <div className="mt-1 w-72 truncate rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground">
                   {database || "—"}
                 </div>
               )}
@@ -757,7 +757,7 @@ const SummaryTab = ({
                         setCollectionsMenuOpen((open) => !open);
                       }
                     }}
-                    className="mt-1 flex min-w-[18rem] cursor-pointer items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                    className="mt-1 flex w-72 cursor-pointer items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
                   >
                     <span className="truncate">
                       {collections.length === 0
@@ -768,6 +768,19 @@ const SummaryTab = ({
                     </span>
                     <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
                   </div>
+
+                  {collections.length > 1 && (
+                    <div className="mt-1 flex max-w-[18rem] flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5">
+                      {collections.map((name) => (
+                        <span
+                          key={name}
+                          className={`text-[11px] ${flaggedCollections.has(name) ? "font-semibold text-red-500" : "text-muted-foreground"}`}
+                        >
+                          {name}
+                        </span>
+                      ))}
+                    </div>
+                  )}
 
                   {collectionsMenuOpen && (
                     <>

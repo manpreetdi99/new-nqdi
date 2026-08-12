@@ -614,9 +614,9 @@ const PassFailBar = ({ pass, fail, total }: { pass: number; fail: number; total:
 const GRID_BY_LOCATION =
   "grid grid-cols-[1.75rem_1.75rem_minmax(9rem,1.3fr)_5rem_4rem_4.5rem_minmax(6rem,0.8fr)_4.5rem_4.5rem_4.5rem_4rem_9rem_1.75rem] gap-2 items-center";
 
-/** Χρονολογική προβολή: μπαίνει στήλη Location, όπως στη λίστα των κλήσεων. */
+/** Χρονολογική προβολή: μπαίνει στήλη Location πρώτη, ακολουθούν Session ID και ώρα. */
 const GRID_BY_TIME =
-  "grid grid-cols-[1.75rem_1.75rem_minmax(8rem,1.1fr)_5rem_minmax(7rem,1fr)_4rem_4.5rem_minmax(6rem,0.8fr)_4.5rem_4.5rem_4.5rem_4rem_9rem_1.75rem] gap-2 items-center";
+  "grid grid-cols-[1.75rem_1.75rem_minmax(7rem,1fr)_minmax(8rem,1.1fr)_5rem_4rem_4.5rem_minmax(6rem,0.8fr)_4.5rem_4.5rem_4.5rem_4rem_9rem_1.75rem] gap-2 items-center";
 
 /** Πόσα συνεχόμενα sessions ενός location κάνουν ένα cycle (fallback). */
 const DEFAULT_CYCLE_SIZE = 6;
@@ -1021,9 +1021,9 @@ const DataSessionsList = ({
       >
         <span />
         <span />
+        {byTime && <span>Location</span>}
         <span>Session</span>
         <span>Start</span>
-        {byTime && <span>Location</span>}
         <span title="Διάρκεια session / πλήθος tests">Διάρκεια</span>
         <span>Cycle</span>
         <span>Technology</span>
@@ -1036,7 +1036,7 @@ const DataSessionsList = ({
       </div>
 
       {/* ── Rows: χρονολογικά (ανά ημέρα) ή ανά ASideLocation → ανά cycle ── */}
-      <div className="max-h-[620px] overflow-y-auto overscroll-contain">
+      <div>
         {visible.length === 0 ? (
           <p className="px-4 py-6 text-center text-xs text-muted-foreground">
             Κανένα session δεν ταιριάζει με την αναζήτηση / το φίλτρο.
@@ -1045,7 +1045,7 @@ const DataSessionsList = ({
           dayGroups.map((day) => (
             <div key={day.key}>
               {showDayHeaders && (
-                <div className="sticky top-0 z-10 flex items-center gap-2 px-4 py-1.5 bg-secondary/80 backdrop-blur border-y border-border">
+                <div className="sticky top-[57px] z-10 flex items-center gap-2 px-4 py-1.5 bg-secondary/80 backdrop-blur border-y border-border">
                   <CalendarDays className="h-3.5 w-3.5 text-primary" />
                   <span className="text-xs font-semibold text-foreground capitalize">{day.label}</span>
                   {day.from != null && (
@@ -1124,7 +1124,7 @@ const DataSessionsList = ({
                 {/* Location header */}
                 <div
                   onClick={() => toggleLocation(group.location)}
-                  className="sticky top-0 z-10 flex flex-wrap items-center gap-x-2 gap-y-1 px-3 sm:px-4 py-2 bg-secondary/90 backdrop-blur border-y border-border cursor-pointer hover:bg-secondary"
+                  className="sticky top-[57px] z-10 flex flex-wrap items-center gap-x-2 gap-y-1 px-3 sm:px-4 py-2 bg-secondary/90 backdrop-blur border-y border-border cursor-pointer hover:bg-secondary"
                 >
                   {isCollapsed ? (
                     <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
@@ -1268,6 +1268,14 @@ const SessionRow = ({
         <StatusIcon className={`h-3.5 w-3.5 ${cfg.color}`} />
       </div>
 
+      {/* Location — μόνο στη χρονολογική προβολή, όπου δεν υπάρχει location header */}
+      {showLocation && (
+        <div className="flex items-center gap-1 min-w-0" title={v.location}>
+          <MapPin className="h-3 w-3 text-muted-foreground shrink-0" />
+          <span className="text-xs text-foreground truncate">{v.location}</span>
+        </div>
+      )}
+
       {/* Session ID + collection */}
       <div className="min-w-0">
         <span className="block text-xs font-mono text-foreground truncate">{item.sessionId}</span>
@@ -1293,14 +1301,6 @@ const SessionRow = ({
           {formatDay(item.first?.callStartTimeStamp)}
         </span>
       </div>
-
-      {/* Location — μόνο στη χρονολογική προβολή, όπου δεν υπάρχει location header */}
-      {showLocation && (
-        <div className="flex items-center gap-1 min-w-0" title={v.location}>
-          <MapPin className="h-3 w-3 text-muted-foreground shrink-0" />
-          <span className="text-xs text-foreground truncate">{v.location}</span>
-        </div>
-      )}
 
       {/* Διάρκεια + πλήθος tests */}
       <div className="leading-tight">
@@ -1420,18 +1420,25 @@ const SessionRow = ({
         </div>
 
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
+          {showLocation && (
+            <div className="flex items-center gap-1 text-[11px] text-muted-foreground min-w-0">
+              <MapPin className="h-3 w-3 shrink-0" />
+              <span className="truncate font-medium text-foreground">{v.location}</span>
+            </div>
+          )}
+          <div className="flex items-center gap-2 mt-0.5">
             <span className="text-sm font-mono font-semibold text-foreground truncate">{item.sessionId}</span>
             <span className="text-[10px] font-mono text-muted-foreground whitespace-nowrap">
               {formatClock(item.first?.callStartTimeStamp)} · {formatDay(item.first?.callStartTimeStamp)}
             </span>
           </div>
-          <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground min-w-0">
-            {showLocation && <MapPin className="h-3 w-3 shrink-0" />}
-            <span className="truncate">
-              {showLocation ? v.location : item.first?.CollectionName || v.fileName || "Data session"}
-            </span>
-          </div>
+          {!showLocation && (
+            <div className="mt-0.5 flex items-center gap-1 text-[11px] text-muted-foreground min-w-0">
+              <span className="truncate">
+                {item.first?.CollectionName || v.fileName || "Data session"}
+              </span>
+            </div>
+          )}
         </div>
 
         <button

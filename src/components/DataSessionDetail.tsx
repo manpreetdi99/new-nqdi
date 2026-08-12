@@ -116,20 +116,20 @@ export default function DataSessionDetail({ sessionId, tests, onBack, database }
       {/* Session Summary Card */}
       <div className="bg-card border border-border rounded-lg p-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
         <div>
-          <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Session ID</p>
-          <p className="font-mono text-foreground">{sessionId}</p>
-        </div>
-        <div>
           <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Location</p>
           <p className="text-foreground">{first?.Location ?? "N/A"}</p>
         </div>
         <div>
-          <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Collection</p>
-          <p className="text-foreground">{first?.CollectionName ?? "N/A"}</p>
+          <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Session ID</p>
+          <p className="font-mono text-foreground">{sessionId}</p>
         </div>
         <div>
           <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Start Time</p>
           <p className="font-mono text-foreground">{formatTs(first?.callStartTimeStamp)}</p>
+        </div>
+        <div>
+          <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Collection</p>
+          <p className="text-foreground">{first?.CollectionName ?? "N/A"}</p>
         </div>
         <div>
           <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Technology</p>

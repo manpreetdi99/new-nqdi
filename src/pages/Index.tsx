@@ -91,6 +91,25 @@ const getAllCallsRowClass = (row: AllCallsRow): string => {
   return "hover:bg-muted/20";
 };
 
+const getAllCallsStatusStyle = (row: AllCallsRow): { label: string; className: string } => {
+  if (row.isValid === 0) {
+    return { label: "Invalid", className: "border-red-500/40 bg-red-500/15 text-red-300" };
+  }
+
+  const normalized = (row.status || "").toLowerCase();
+  if (normalized.includes("system release") || normalized.includes("system realase")) {
+    return { label: row.status || "System release", className: "border-violet-500/40 bg-violet-500/15 text-violet-300" };
+  }
+  if (normalized.includes("drop")) {
+    return { label: row.status || "Dropped", className: "border-orange-500/40 bg-orange-500/15 text-orange-300" };
+  }
+  if (normalized.includes("fail")) {
+    return { label: row.status || "Failed", className: "border-red-500/40 bg-red-500/15 text-red-300" };
+  }
+
+  return { label: row.status || "Completed", className: "border-emerald-500/40 bg-emerald-500/15 text-emerald-300" };
+};
+
 const mapAllCallsRows = (rows: AllCallsRow[]): CallRecord[] => {
   return rows.map((row, index) => {
     const status = normalizeStatus(row.status);
@@ -601,6 +620,24 @@ const Index = () => {
     return callRecords.filter((c) => validIds.has(c.callId));
   }, [callRecords, filteredAllCallsRows, sessionValidFilter, statusFilters, selectedFileGroupIds]);
 
+  // Ίδια global φίλτρα με τα voice calls (session valid / location / file group) αλλά για τα data test rows —
+  // ώστε το Summary (Attachment C) να δείχνει την ίδια βάση με το tab "All Calls" αντί για ολόκληρο το dataset.
+  const filteredDataCallsRows = useMemo(() => {
+    return dataCallsRows.filter((row) => {
+      if (sessionValidFilter === "1" && row.isValid !== 1) return false;
+      if (sessionValidFilter === "0" && row.isValid !== 0) return false;
+
+      if (locationTableFilter.length > 0) {
+        const loc = row.Location ?? "";
+        if (!locationTableFilter.includes(loc)) return false;
+      }
+
+      if (selectedFileGroupSessionIds && !selectedFileGroupSessionIds.dataIds.has(String(row.SessionId))) return false;
+
+      return true;
+    });
+  }, [dataCallsRows, sessionValidFilter, locationTableFilter, selectedFileGroupSessionIds]);
+
   const locationSummary = useMemo(() => {
     const map = new Map<string, { complete: number; drop: number; fail: number; sysRelease: number; total: number }>();
     for (const row of filteredAllCallsRows) {
@@ -983,8 +1020,8 @@ const Index = () => {
       )}
 
       <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
-        <div className="w-full px-4 sm:px-6 lg:px-10 mx-auto flex items-center justify-between py-3">
-          <div className="flex items-center gap-3">
+        <div className="w-full px-3 sm:px-6 lg:px-10 mx-auto flex items-center justify-between gap-2 py-3">
+          <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <div className="h-8 w-8 rounded-md bg-primary/10 flex items-center justify-center glow-primary">
               <Activity className="h-4 w-4 text-red-500" />
             </div>
@@ -992,22 +1029,22 @@ const Index = () => {
               <h1 className="text-sm font-bold text-foreground tracking-tight">
                 FASMETRICS <span className="text-red-500">Analytics</span>
               </h1>
-              <p className="text-[10px] text-muted-foreground uppercase tracking-widest">
+              <p className="hidden sm:block text-[10px] text-muted-foreground uppercase tracking-widest">
                 Network Quality Benchmarking
               </p>
             </div>
           </div>
 
-          {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
+          {!["queries", "query-map", "map2", "validation"].includes(activeTab) && (
             <div className="flex items-center gap-2">
               {/* Edit Filters button */}
               <button
                 type="button"
                 onClick={() => setShowFilterPanel(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border bg-muted hover:bg-muted/70 text-xs font-medium text-foreground transition-colors"
+                className="flex items-center gap-1.5 px-2.5 sm:px-3 py-1.5 rounded-md border border-border bg-muted hover:bg-muted/70 text-xs font-medium text-foreground transition-colors"
               >
                 <SlidersHorizontal className="h-3.5 w-3.5 text-primary" />
-                Edit Filters
+                <span className="hidden sm:inline">Edit Filters</span>
                 {(selectedCallsCollections.length > 0 || sessionValidFilter !== "all" || statusFilters.length > 0 || selectedFileGroupIds.length > 0) && (
                   <span className="ml-1 h-4 w-4 rounded-full bg-primary text-primary-foreground text-[9px] flex items-center justify-center font-bold">
                     {selectedCallsCollections.length + (sessionValidFilter !== "all" ? 1 : 0) + statusFilters.length + selectedFileGroupIds.length}
@@ -1015,7 +1052,7 @@ const Index = () => {
                 )}
               </button>
 
-              <div className="bg-card border border-border rounded-lg px-3 py-2">
+              <div className="hidden xl:block bg-card border border-border rounded-lg px-3 py-2">
                 <p className="text-[11px] text-muted-foreground mb-1">Active filters</p>
                 <div className="flex flex-wrap gap-1.5">
                   <Badge variant="secondary" className="text-[10px]">DB: {selectedDatabase || "—"}</Badge>
@@ -1026,12 +1063,12 @@ const Index = () => {
             </div>
           )}
 
-          <div className="flex items-center gap-3 text-xs text-muted-foreground">
-            {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
+          <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
+            {!["queries", "query-map", "map2", "validation"].includes(activeTab) && (
               <button
                 type="button"
                 onClick={clearCallsFilters}
-                className="text-[15px] px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70"
+                className="hidden lg:block text-xs px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70"
               >
                 Clear filters
               </button>
@@ -1045,24 +1082,24 @@ const Index = () => {
                   transition={{ duration: 0.15 }}
                   type="button"
                   onClick={() => window.scrollTo({ top: 0, behavior: "smooth" })}
-                  className="flex items-center gap-1.5 px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70 text-[15px]"
+                  className="flex items-center gap-1.5 px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70 text-xs"
                 >
                   <ArrowUp className="h-3.5 w-3.5" />
-                  Scroll up
+                  <span className="hidden sm:inline">Scroll up</span>
                 </motion.button>
               )}
             </AnimatePresence>
-            {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
-              <span>{filteredCallRecords.length} calls recorded</span>
+            {!["queries", "query-map", "map2", "validation"].includes(activeTab) && (
+              <span className="hidden xl:inline">{filteredCallRecords.length} calls recorded</span>
             )}
           </div>
         </div>
       </header>
 
-      <main className="w-full px-4 sm:px-6 lg:px-10 mx-auto py-6">
+      <main className="w-full px-3 sm:px-6 lg:px-10 mx-auto py-4 sm:py-6">
         <Tabs value={activeTab} onValueChange={setActiveTab} className="w-full">
-          <div className="flex items-center justify-between mb-2">
-            <TabsList className="bg-muted border border-border">
+          <div className="-mx-3 mb-2 overflow-x-auto px-3 sm:mx-0 sm:px-0">
+            <TabsList className="w-max bg-muted border border-border">
               <TabsTrigger value="Summary" className="gap-1.5 text-xs">
                 <Activity className="h-3.5 w-3.5 " /> Summary
               </TabsTrigger>
@@ -1073,7 +1110,7 @@ const Index = () => {
                 <MapPin className="h-3.5 w-3.5 text-emerald-400" /> Query Map
               </TabsTrigger>
               <TabsTrigger value="calls" className="gap-1.5 text-xs">
-                <Phone className="h-3.5 w-3.5" /> All Calls
+                <Phone className="h-3.5 w-3.5" /> All Sessions
               </TabsTrigger>
               <TabsTrigger value="map" className="gap-1.5 text-xs">
                 <MapPin className="h-3.5 w-3.5" /> Map
@@ -1088,10 +1125,11 @@ const Index = () => {
           </div>
 
           <TabsContent value="Summary">
-            {/* Attachment C αγνοεί τα global φίλτρα (session valid / status / file group) — μόνο η επιλογή collection το καθορίζει. */}
+            {/* Attachment C χρησιμοποιεί τα ίδια φιλτραρισμένα rows (session valid / status / location / file group)
+                με το tab "All Calls" — "Edit Filters" στο header είναι διαθέσιμο και εδώ. */}
             <SummaryTab
-              allCallsRows={allCallsRows}
-              dataCallsRows={dataCallsRows}
+              allCallsRows={filteredAllCallsRows}
+              dataCallsRows={filteredDataCallsRows}
               database={selectedDatabase}
               collections={selectedCallsCollections}
               databases={databases}
@@ -1146,23 +1184,23 @@ const Index = () => {
           </TabsContent>
 
           <TabsContent value="calls" className="space-y-4">
-            <div className="flex items-center gap-1 rounded-lg border border-border bg-muted p-1 w-fit">
+            <div className="grid w-full grid-cols-3 items-center gap-1 rounded-lg border border-border bg-muted p-1 sm:flex sm:w-fit">
               <button
                 type="button"
                 onClick={() => setCallsSubTab("list")}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors ${
+                className={`flex min-w-0 items-center justify-center gap-1.5 rounded-md px-2 sm:px-3 py-1.5 text-xs transition-colors ${
                   callsSubTab === "list"
                     ? "bg-background text-foreground font-semibold shadow-sm"
                     : "text-muted-foreground hover:text-foreground"
                 }`}
               >
-                <Phone className="h-3.5 w-3.5" /> All Calls
+                <Phone className="h-3.5 w-3.5" /> All Sessions
               </button>
               <button
                 type="button"
                 onClick={() => setCallsSubTab("detail")}
                 disabled={!selectedCall}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                className={`flex min-w-0 items-center justify-center gap-1.5 rounded-md px-2 sm:px-3 py-1.5 text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                   callsSubTab === "detail"
                     ? "bg-background text-foreground font-semibold shadow-sm"
                     : "text-muted-foreground hover:text-foreground"
@@ -1174,7 +1212,7 @@ const Index = () => {
                 type="button"
                 onClick={() => setCallsSubTab("data-detail")}
                 disabled={!selectedDataSessionId}
-                className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                className={`flex min-w-0 items-center justify-center gap-1.5 rounded-md px-2 sm:px-3 py-1.5 text-xs transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
                   callsSubTab === "data-detail"
                     ? "bg-background text-foreground font-semibold shadow-sm"
                     : "text-muted-foreground hover:text-foreground"
@@ -1186,7 +1224,7 @@ const Index = () => {
 
             {callsSubTab === "list" && (
             <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4 items-start">
-              <aside className="space-y-2 lg:sticky lg:top-24">
+              <aside className="hidden space-y-2 lg:sticky lg:top-24 lg:block">
                 <div className="bg-card border border-border rounded-lg p-2">
                   <div className="mb-1.5 flex items-center justify-between">
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
@@ -1444,18 +1482,23 @@ const Index = () => {
 
               <div className="space-y-4">
 
-              <div className="bg-card border border-border rounded-lg overflow-hidden">
-                <div className="px-4 py-2 border-b border-border flex items-center gap-6 flex-wrap">
-                  <div className="shrink-0">
-                    <h2 className="text-sm font-semibold text-foreground">All Calls</h2>
-                    <p className="text-xs text-muted-foreground">
-                      {callsLoading ? "Loading..." : `${filteredAllCallsRows.length} rows`}
-                    </p>
+              <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
+                <div className="flex flex-col gap-3 border-b border-border bg-gradient-to-r from-primary/[0.07] via-transparent to-transparent px-3 py-3.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6 sm:px-4 sm:py-2">
+                  <div className="flex items-center gap-3 shrink-0">
+                    <div className="flex h-10 w-10 items-center justify-center rounded-xl border border-primary/20 bg-primary/10 sm:hidden">
+                      <Phone className="h-5 w-5 text-primary" />
+                    </div>
+                    <div>
+                      <h2 className="text-sm font-semibold text-foreground">All Calls</h2>
+                      <p className="text-xs text-muted-foreground">
+                        {callsLoading ? "Loading..." : `${filteredAllCallsRows.length} rows`}
+                      </p>
+                    </div>
                   </div>
 
                   {/* ── Location Summary inline ── */}
                   {locationSummary.length > 0 && (
-                    <div className="overflow-x-auto">
+                    <div className="hidden overflow-x-auto sm:block">
                       <table className="text-[9px] border-collapse leading-none">
                         <thead>
                           <tr className="text-muted-foreground uppercase tracking-wider">
@@ -1508,8 +1551,114 @@ const Index = () => {
                       </table>
                     </div>
                   )}
+
+                  {locationSummary.length > 0 && (
+                    <div className="grid grid-cols-4 gap-1.5 sm:hidden">
+                      {[
+                        { label: "Complete", value: locationSummaryTotals.complete, className: "text-emerald-300 bg-emerald-500/10 border-emerald-500/20" },
+                        { label: "Sys rel", value: locationSummaryTotals.sysRelease, className: "text-violet-300 bg-violet-500/10 border-violet-500/20" },
+                        { label: "Drop", value: locationSummaryTotals.drop, className: "text-orange-300 bg-orange-500/10 border-orange-500/20" },
+                        { label: "Fail", value: locationSummaryTotals.fail, className: "text-red-300 bg-red-500/10 border-red-500/20" },
+                      ].map((item) => (
+                        <div key={item.label} className={`rounded-lg border px-1.5 py-2 text-center ${item.className}`}>
+                          <p className="font-mono text-sm font-bold leading-none">{item.value}</p>
+                          <p className="mt-1 truncate text-[9px] font-semibold uppercase tracking-wide">{item.label}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
                 </div>
-                <div className="overflow-x-auto">
+
+                <div className="sm:hidden">
+                  {!callsLoading && filteredAllCallsRows.length === 0 && (
+                    <p className="px-4 py-8 text-center text-xs text-muted-foreground">
+                      {allCallsRows.length === 0 ? "Select a collection to load calls." : "No rows match the selected filters."}
+                    </p>
+                  )}
+
+                  {filteredAllCallsRows.map((row, idx) => {
+                    const currentFileTime = getFileDateTime(row.ASideFileName);
+                    const prevFileTime = idx > 0 ? getFileDateTime(filteredAllCallsRows[idx - 1].ASideFileName) : null;
+                    const showEndOfFile = idx > 0
+                      && statusFilters.length === 0
+                      && sessionValidFilter !== "0"
+                      && prevFileTime !== null
+                      && currentFileTime !== null
+                      && prevFileTime !== currentFileTime;
+                    const rowId = `call-row-${row.SessionId}-${idx}`;
+                    const statusStyle = getAllCallsStatusStyle(row);
+                    const openRow = () => {
+                      setLastClickedRowId(rowId);
+                      const record = callRecords.find((call) => call.callId === row.SessionId);
+                      if (record) openCallDetail(record);
+                    };
+
+                    return (
+                      <Fragment key={`${row.SessionId}-${idx}`}>
+                        {showEndOfFile && (
+                          <div className="border-y border-border bg-muted/50 px-3 py-4 text-center text-[10px] font-semibold uppercase tracking-[0.2em] text-red-400">
+                            End of File
+                          </div>
+                        )}
+                        <button
+                          id={rowId}
+                          type="button"
+                          onClick={openRow}
+                          className={`w-full border-b border-border/60 p-3 text-left transition-colors active:brightness-110 ${getAllCallsRowClass(row)}`}
+                          aria-label={`Open call ${row.SessionId}`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="min-w-0">
+                              <div className="flex items-center gap-2">
+                                <span className="truncate text-sm font-semibold text-foreground">{row.Location ?? "Unknown location"}</span>
+                                <span className={`shrink-0 rounded-full border px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide ${statusStyle.className}`}>
+                                  {statusStyle.label}
+                                </span>
+                              </div>
+                              <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">Session {row.SessionId}</p>
+                            </div>
+                            <ChevronRight className={`mt-1 h-4 w-4 shrink-0 ${lastClickedRowId === rowId ? "text-primary" : "text-muted-foreground"}`} />
+                          </div>
+
+                          <div className="mt-3 grid grid-cols-3 gap-1.5">
+                            <div className="rounded-lg border border-border/70 bg-background/30 px-2 py-2">
+                              <p className="text-[9px] uppercase tracking-wide text-muted-foreground">Setup</p>
+                              <p className="mt-0.5 truncate font-mono text-xs text-foreground">{row.setupTime ?? "N/A"}</p>
+                            </div>
+                            <div className="rounded-lg border border-border/70 bg-background/30 px-2 py-2">
+                              <p className="text-[9px] uppercase tracking-wide text-muted-foreground">Duration</p>
+                              <p className="mt-0.5 truncate font-mono text-xs text-foreground">{row.callDuration ?? "N/A"}</p>
+                            </div>
+                            <div className="rounded-lg border border-border/70 bg-background/30 px-2 py-2">
+                              <p className="text-[9px] uppercase tracking-wide text-muted-foreground">Avg MOS</p>
+                              <p className="mt-0.5 truncate font-mono text-xs font-semibold text-foreground">{row.Avg_mos ?? "N/A"}</p>
+                            </div>
+                          </div>
+
+                          <div className="mt-2 flex flex-wrap gap-1.5">
+                            {[row.technology, row.callMode, row.callType, row.callDir].filter(Boolean).map((value, valueIndex) => (
+                              <span key={`${value}-${valueIndex}`} className="rounded-md border border-border/70 bg-muted/50 px-2 py-1 text-[10px] text-foreground">
+                                {value}
+                              </span>
+                            ))}
+                          </div>
+
+                          <div className="mt-3 flex items-end justify-between gap-3 border-t border-border/50 pt-2">
+                            <div className="min-w-0">
+                              <p className="truncate text-[10px] text-muted-foreground">{row.CollectionName ?? "No collection"}</p>
+                              {row.comment && <p className="mt-0.5 line-clamp-2 text-[11px] text-foreground/80">{row.comment}</p>}
+                            </div>
+                            <time className="shrink-0 font-mono text-[10px] text-muted-foreground">
+                              {formatCallStartTime(row.callStartTimeStamp)}
+                            </time>
+                          </div>
+                        </button>
+                      </Fragment>
+                    );
+                  })}
+                </div>
+
+                <div className="hidden overflow-x-auto sm:block">
                   <table className="w-full text-xs">
                     <thead>
                       <tr className="border-b border-border bg-muted/30 text-left text-muted-foreground uppercase tracking-wider">
@@ -1618,7 +1767,7 @@ const Index = () => {
                     </div>
                     <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-sm font-semibold text-foreground">Data Calls (Mobile)</h2>
+                      <h2 className="text-sm font-semibold text-foreground">Data Session</h2>
                       {!dataCallsLoading && groupedDataSessions.length > 0 && (
                         <span className="rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary">
                           {locationTableFilter.length > 0
