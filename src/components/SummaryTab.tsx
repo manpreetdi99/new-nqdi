@@ -17,6 +17,7 @@ import {
   formatPercent,
   LOW_QUALITY_MOS,
   resolveOperator,
+  type CodecShare,
   type DataTestSection,
   type DataTestStats,
   type OperatorMeta,
@@ -137,6 +138,24 @@ const OutcomeMixBar = ({ stats }: { stats: VoiceStats }) => {
   );
 };
 
+/** Part-to-whole: ίδιο look με το OutcomeMixBar, πάνω στα CodecShare buckets (βλ. buildCodecMix). */
+const CodecMixBar = ({ mix }: { mix: CodecShare[] }) => {
+  if (mix.length === 0) return <span className="text-muted-foreground/40">—</span>;
+
+  return (
+    <div className="flex h-2 w-full gap-[2px]">
+      {mix.map((segment) => (
+        <div
+          key={segment.bucket}
+          className="first:rounded-l-full last:rounded-r-full"
+          style={{ width: `${segment.share * 100}%`, backgroundColor: segment.color }}
+          title={`${segment.bucket}: ${formatCount(segment.count)} (${formatPercent(segment.share, 1)})`}
+        />
+      ))}
+    </div>
+  );
+};
+
 const MetaChip = ({ icon: Icon, label, value }: { icon?: typeof Database; label: string; value: ReactNode }) => (
   <div className="flex items-center gap-2 rounded-md border border-border/70 bg-background/40 px-2.5 py-1.5">
     {Icon && <Icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />}
@@ -161,7 +180,8 @@ type Cell =
       /** Εύρος (min–max) κάτω από την κύρια τιμή — π.χ. MinMOS/MaxMOS. */
       range?: { min: number | null; max: number | null };
     }
-  | { kind: "mix"; stats: VoiceStats };
+  | { kind: "mix"; stats: VoiceStats }
+  | { kind: "codecMix"; mix: CodecShare[] };
 
 interface KpiRowSpec<T> {
   label: string;
@@ -326,6 +346,11 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
     cell: (s) => ({ kind: "value", value: s.duration.avg, decimals: 1, samples: s.duration.samples }),
   },
   { label: "Call outcome mix", cell: (s) => ({ kind: "mix", stats: s }) },
+  {
+    label: "Codec Type Usage %",
+    hint: "FR AMR WB / AMR HR / AMR / EFR / FR / HR — βλ. CallCodecTypeUsageGSM.sql",
+    cell: (s) => ({ kind: "codecMix", mix: s.codecMix }),
+  },
 ];
 
 const dataRows = (stats: DataTestStats): KpiRowSpec<DataTestStats>[] => [
@@ -401,7 +426,7 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
             const numbers = cells.map(cellNumber).filter((value): value is number => value != null);
 
             if (hideEmptyRows && numbers.length > 0 && numbers.every((value) => value === 0)) return null;
-            if (hideEmptyRows && numbers.length === 0 && totalCell.kind !== "mix") return null;
+            if (hideEmptyRows && numbers.length === 0 && totalCell.kind !== "mix" && totalCell.kind !== "codecMix") return null;
 
             // "best" μόνο στις headline γραμμές — αλλιώς γεμίζει ο πίνακας σημάδια.
             const higherIsBetter = cellHigherIsBetter(cells[0] ?? totalCell);
@@ -428,6 +453,8 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                     <td key={operator.key} className="px-4 py-2 align-middle">
                       {cell.kind === "mix" ? (
                         <OutcomeMixBar stats={(cell as Extract<Cell, { kind: "mix" }>).stats} />
+                      ) : cell.kind === "codecMix" ? (
+                        <CodecMixBar mix={(cell as Extract<Cell, { kind: "codecMix" }>).mix} />
                       ) : (
                         <div className="flex items-center justify-end gap-2.5">
                           <span
@@ -479,6 +506,8 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                 <td className="border-l border-border/60 px-4 py-1.5 text-right align-middle">
                   {totalCell.kind === "mix" ? (
                     <OutcomeMixBar stats={(totalCell as Extract<Cell, { kind: "mix" }>).stats} />
+                  ) : totalCell.kind === "codecMix" ? (
+                    <CodecMixBar mix={(totalCell as Extract<Cell, { kind: "codecMix" }>).mix} />
                   ) : (
                     <span className="font-mono text-xs tabular-nums text-foreground/60">{cellText(totalCell)}</span>
                   )}

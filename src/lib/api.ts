@@ -114,6 +114,8 @@ export interface AllCallsRow {
   mosDlMin?: number | null;
   mosDlMax?: number | null;
   mosDlSamples?: number | null;
+  /** Dominant codec name for the session (bucketed client-side, see bucketCodec in attachmentC.ts). */
+  codecName?: string | null;
   latitude: number | null;
   longitude: number | null;
   ASideFileName?: string | null;
@@ -200,6 +202,16 @@ export async function fetchGsmValues(
 ): Promise<{ gsmValues: any[] }> {
   const params = new URLSearchParams({ database, session_id });
   return requestJson(`/api/gsm_values?${params.toString()}`);
+}
+
+// 5G NR serving-cell radio (FactNR5GRadio), για κλήσεις VoNR / VoNR/VoLTE N26 HO
+// όπου το call.callMode δεν είναι πάντα σκέτο LTE anchor.
+export async function fetchNr5gValues(
+  database: string,
+  session_id: string
+): Promise<{ nr5gValues: any[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/nr5g_values?${params.toString()}`);
 }
 
 export interface CallKpiTile {

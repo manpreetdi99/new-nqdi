@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchCallSrvccDetail, fetchTechnologyTimeline, fetchTechnologyPeriods, fetchVoiceCodec, fetchMarkers, fetchCallNeighbors, type TechnologyPeriodRow, type CallNeighbors, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type SrvccDetailResponse, type SrvccEventRow, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchNr5gValues, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchCallSrvccDetail, fetchTechnologyTimeline, fetchTechnologyPeriods, fetchVoiceCodec, fetchMarkers, fetchCallNeighbors, type TechnologyPeriodRow, type CallNeighbors, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type SrvccDetailResponse, type SrvccEventRow, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, technologyColor } from "@/lib/chartStyles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -165,6 +165,7 @@ function formatDateTime(iso: string): string {
 
 const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProps) => {
   // LTE/GSM radio measurement rows (A-side and B-side, for the "Radio Measurements" table + chart)
+  // For VoNR/N26-HO calls, radioValues holds LTE + NR5G rows merged chronologically (see loadRadio below).
   const [radioValues, setRadioValues] = useState<any[]>([]);
   const [gsmValues, setGsmValues] = useState<any[]>([]);
   const [bSideGsmValues, setBSideGsmValues] = useState<any[]>([]);
@@ -226,6 +227,10 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // True when the active table/chart should show GSM columns instead of LTE:
   // CS calls are always GSM; SRVCC calls let the user toggle between LTE and GSM.
   const isGSMMode = call.callMode === "CS" || (call.callMode === "SRVCC" && srvccNetwork === "GSM");
+  // True for calls that touch the 5G NR core (VoNR, VoNR/VoLTE, VoNR/VoLTE N26 HO): these need
+  // FactNR5GRadio on top of (or instead of) the LTE anchor, since the LTE-only query can come back
+  // empty/partial once the UE is camped on NR. Rows from both are merged chronologically below.
+  const isVoNRMode = /VoNR/i.test(call.callMode ?? "");
   const [isLoadingRadio, setIsLoadingRadio] = useState(false);
   // Chart series visibility toggles (strength/quality/scanner overlay)
   const [showStrength, setShowStrength] = useState(true);
@@ -294,9 +299,10 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
-        const [lteRes, gsmRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, pagingBSideRes, deviceRes, lteMeasCompRes, lteScannerCompRes, gsmCtxSignalRes, ctxSignalBSideRes, gsmCtxSignalBSideRes, callKpiTileRes, handoverInfoRes, technologyTimelineRes, voiceCodecRes, markersRes, srvccDetailRes] = await Promise.allSettled([
+        const [lteRes, gsmRes, nr5gRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, pagingBSideRes, deviceRes, lteMeasCompRes, lteScannerCompRes, gsmCtxSignalRes, ctxSignalBSideRes, gsmCtxSignalBSideRes, callKpiTileRes, handoverInfoRes, technologyTimelineRes, voiceCodecRes, markersRes, srvccDetailRes] = await Promise.allSettled([
           call.callMode !== "CS" ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
+          isVoNRMode ? fetchNr5gValues(database, call.callId) : Promise.resolve({ nr5gValues: [] }),
           fetchMosValues(database, call.callId),
           fetchKpiValues(database, call.callId),
           fetchCallSideComparison(database, call.callId),
@@ -326,7 +332,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
         ]);
 
         const namedResults: Array<[string, PromiseSettledResult<unknown>]> = [
-          ["LTE radio", lteRes], ["GSM radio", gsmRes], ["MOS", mosRes], ["KPI", kpiRes],
+          ["LTE radio", lteRes], ["GSM radio", gsmRes], ["NR5G radio", nr5gRes], ["MOS", mosRes], ["KPI", kpiRes],
           ["A/B outcome", comparisonRes], ["B-side LTE", bSideLteRes], ["TraceLog", tracelogRes],
           ["B-side GSM", bSideGsmRes], ["LTE context", ctxSignalRes], ["Technology context", ctxTechRes],
           ["L3 A-side", pagingRes], ["L3 B-side", pagingBSideRes], ["Device", deviceRes],
@@ -336,7 +342,18 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
         ];
         setLoadErrors(namedResults.flatMap(([name, result]) => result.status === "rejected" ? [name] : []));
 
-        if (lteRes.status === "fulfilled") {
+        if (isVoNRMode) {
+          // VoNR / VoNR-VoLTE N26 HO: the UE hops between the LTE anchor and standalone NR
+          // mid-call, so neither query alone tells the full story — merge both row sets (whichever
+          // succeeded) into one chronological series (tagged by Technology) for the radio chart/table.
+          const lteRows = lteRes.status === "fulfilled" ? ((lteRes.value as any).lteValues || []) : [];
+          const nr5gRows = nr5gRes.status === "fulfilled" ? ((nr5gRes.value as any).nr5gValues || []) : [];
+          const merged = [
+            ...lteRows.map((row: any) => ({ ...row, Technology: "LTE" })),
+            ...nr5gRows.map((row: any) => ({ ...row, Technology: "NR5G" })),
+          ].sort((a, b) => new Date(a.MsgTime).getTime() - new Date(b.MsgTime).getTime());
+          setRadioValues(merged);
+        } else if (lteRes.status === "fulfilled") {
           setRadioValues((lteRes.value as any).lteValues || []);
         }
 

@@ -170,6 +170,7 @@ def list_calls(
                 MOS.MosDlMin AS mosDlMin,
                 MOS.MosDlMax AS mosDlMax,
                 MOS.MosDlSamples AS mosDlSamples,
+                CODEC.CodecName AS codecName,
                 (ca.callDuration/1000) as callDuration,
                 {comment_expr} AS comment,
                 DF.ASideFileName,
@@ -204,6 +205,24 @@ def list_calls(
                     AND TI.Valid = 1
                     AND LQ.OptionalWB BETWEEN 1 AND 5
             ) MOS
+            -- Dominant codec type for the session: same bucketing inputs as the
+            -- A-LEVEL "Codec Type Usage %" query (Testinfo.Valid=1, Appl % 10 <> 0,
+            -- direction-matched vVoiceCodecTest), picking the codec with the most
+            -- tests so a session with a couple of stray tests in another codec
+            -- still reads as its dominant one.
+            OUTER APPLY (
+                SELECT TOP (1)
+                    CASE WHEN VVCT.CodecName IS NULL OR VVCT.CodecName = '-' THEN 'no codec rate' ELSE VVCT.CodecName END AS CodecName
+                FROM TestInfo TI2
+                JOIN ResultsLQ08Avg R2 ON TI2.TestId = R2.TestId AND R2.Appl % 10 <> 0
+                LEFT JOIN vVoiceCodecTest VVCT ON TI2.TestID = VVCT.TestID AND (
+                    (TI2.direction = 'A->B' AND VVCT.Direction = 'U') OR
+                    (TI2.direction = 'B->A' AND VVCT.Direction = 'D')
+                )
+                WHERE TI2.SessionID = CA.SessionId AND TI2.Valid = 1
+                GROUP BY CASE WHEN VVCT.CodecName IS NULL OR VVCT.CodecName = '-' THEN 'no codec rate' ELSE VVCT.CodecName END
+                ORDER BY COUNT(*) DESC
+            ) CODEC
             WHERE (S.Valid = 1 or S.Valid = 0)
         """
 

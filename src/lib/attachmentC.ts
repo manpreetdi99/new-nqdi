@@ -225,6 +225,8 @@ export interface VoiceStats {
   setupMtc: Sample;
   duration: Sample;
   technologyMix: { name: string; count: number }[];
+  /** Bucketed codec breakdown — βλ. bucketCodec/buildCodecMix. Table 20's "Codec Type Usage %". */
+  codecMix: CodecShare[];
 }
 
 export const EMPTY_VOICE_STATS: VoiceStats = {
@@ -249,6 +251,75 @@ export const EMPTY_VOICE_STATS: VoiceStats = {
   setupMtc: EMPTY_SAMPLE,
   duration: EMPTY_SAMPLE,
   technologyMix: [],
+  codecMix: [],
+};
+
+/* ────────────────────────── Codec mix ────────────────────────── */
+
+/**
+ * Bucketing rules ίδιες με το CallCodecTypeUsageGSM.sql / "Codec Type Usage %"
+ * query (CASE πάνω σε vvct.CodecName): AMR-WB, AMR HR, AMR, EFR, HR, FR,
+ * "no codec rate" — οτιδήποτε άλλο περνάει ως-έχει.
+ */
+export const bucketCodec = (codecName: string | null | undefined): string => {
+  const raw = (codecName ?? "").trim();
+  if (!raw || raw === "-" || raw.toLowerCase() === "no codec rate") return "no codec rate";
+
+  const upper = raw.toUpperCase();
+  if (upper.includes("AMR") && upper.includes("WB")) return "FR AMR WB";
+  if (upper.includes("AMR") && upper.includes("HR")) return "AMR HR";
+  if (upper.includes("AMR")) return "AMR";
+  if (upper.includes("EFR")) return "EFR";
+  if (upper.startsWith("HR")) return "HR";
+  if (upper.startsWith("FR")) return "FR";
+  return raw;
+};
+
+/** Σταθερά χρώματα για τα γνωστά codec buckets· ό,τι άλλο παίρνει χρώμα από FALLBACK_CODEC_COLORS. */
+const CODEC_BUCKET_COLORS: Record<string, string> = {
+  "FR AMR WB": "#2f8f6e",
+  "AMR HR": "#d99a2b",
+  AMR: "#3568c9",
+  EFR: "#8a4fd1",
+  FR: "#4f6fd1",
+  HR: "#c15fa0",
+  "no codec rate": UNKNOWN_OPERATOR_COLOR,
+};
+
+const FALLBACK_CODEC_COLORS = ["#767a8a", "#9a8f6a", "#6a9a8f", "#9a6a8f", "#8f9a6a"];
+
+/** Σειρά εμφάνισης των γνωστών buckets· ό,τι δεν αναγνωρίζεται πάει αλφαβητικά στο τέλος. */
+const CODEC_BUCKET_ORDER = ["FR AMR WB", "AMR HR", "AMR", "EFR", "FR", "HR", "no codec rate"];
+
+export interface CodecShare {
+  bucket: string;
+  color: string;
+  count: number;
+  share: number;
+}
+
+export const buildCodecMix = (codecNames: (string | null | undefined)[]): CodecShare[] => {
+  const counts = new Map<string, number>();
+  for (const name of codecNames) {
+    const bucket = bucketCodec(name);
+    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+  }
+
+  const total = Array.from(counts.values()).reduce((sum, count) => sum + count, 0);
+  const known = CODEC_BUCKET_ORDER.filter((bucket) => counts.has(bucket));
+  const rest = Array.from(counts.keys())
+    .filter((bucket) => !CODEC_BUCKET_ORDER.includes(bucket))
+    .sort((a, b) => a.localeCompare(b));
+
+  return [...known, ...rest].map((bucket, index) => {
+    const count = counts.get(bucket) ?? 0;
+    return {
+      bucket,
+      color: CODEC_BUCKET_COLORS[bucket] ?? FALLBACK_CODEC_COLORS[index % FALLBACK_CODEC_COLORS.length],
+      count,
+      share: total > 0 ? count / total : 0,
+    };
+  });
 };
 
 /** POLQA thresholds — ίδια με το Attachment C. */
@@ -268,6 +339,7 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
   const setupMtc: number[] = [];
   const durations: number[] = [];
   const technologies = new Map<string, number>();
+  const codecNames: (string | null | undefined)[] = [];
   let lowQualityCalls = 0;
   let badQualityCalls = 0;
 
@@ -297,6 +369,8 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
 
     const technology = (row.technology ?? "").trim();
     if (technology) technologies.set(technology, (technologies.get(technology) ?? 0) + 1);
+
+    codecNames.push(row.codecName);
   }
 
   const attempts = rows.length;
@@ -337,6 +411,7 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
     technologyMix: Array.from(technologies.entries())
       .map(([name, count]) => ({ name, count }))
       .sort((a, b) => b.count - a.count),
+    codecMix: buildCodecMix(codecNames),
   };
 };
 

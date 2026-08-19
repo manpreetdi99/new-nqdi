@@ -1103,23 +1103,23 @@ const Index = () => {
               <TabsTrigger value="Summary" className="gap-1.5 text-xs">
                 <Activity className="h-3.5 w-3.5 " /> Summary
               </TabsTrigger>
-              <TabsTrigger value="queries" className="gap-1.5 text-xs">
-                <Database className="h-3.5 w-3.5" /> Queries
-              </TabsTrigger>
-              <TabsTrigger value="query-map" className="gap-1.5 text-xs">
-                <MapPin className="h-3.5 w-3.5 text-emerald-400" /> Query Map
-              </TabsTrigger>
               <TabsTrigger value="calls" className="gap-1.5 text-xs">
                 <Phone className="h-3.5 w-3.5" /> All Sessions
               </TabsTrigger>
               <TabsTrigger value="map" className="gap-1.5 text-xs">
                 <MapPin className="h-3.5 w-3.5" /> Map
               </TabsTrigger>
-              <TabsTrigger value="map2" className="gap-1.5 text-xs">
-                <MapPin className="h-3.5 w-3.5 text-cyan-400" /> Antennas
+              <TabsTrigger value="query-map" className="gap-1.5 text-xs">
+                <MapPin className="h-3.5 w-3.5 text-emerald-400" /> Query Map
+              </TabsTrigger>
+              <TabsTrigger value="queries" className="gap-1.5 text-xs">
+                <Database className="h-3.5 w-3.5" /> Queries
               </TabsTrigger>
               <TabsTrigger value="validation" className="gap-1.5 text-xs">
                 <Activity className="h-3.5 w-3.5 text-orange-400" /> Validation
+              </TabsTrigger>
+              <TabsTrigger value="map2" className="gap-1.5 text-xs">
+                <MapPin className="h-3.5 w-3.5 text-cyan-400" /> Antennas
               </TabsTrigger>
             </TabsList>
           </div>
