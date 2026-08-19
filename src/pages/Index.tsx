@@ -243,6 +243,11 @@ const Index = () => {
   const [totalTime, setTotalTime] = useState(0);
   const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null);
   const [activeTab, setActiveTab] = useLocalStorage<string>("perf-insights-active-tab", "queries");
+  // Το tab "map2" (Antennas) είναι κρυμμένο για demo· αν κάποιος browser έχει παλιό activeTab
+  // αποθηκευμένο σε localStorage σε αυτή την τιμή, γυρνάμε σε ένα ορατό tab.
+  useEffect(() => {
+    if (activeTab === "map2") setActiveTab("queries");
+  }, [activeTab, setActiveTab]);
   // "Call Detail" and "Data Detail" live as a sub-navbar inside the "All Calls" tab
   const [callsSubTab, setCallsSubTab] = useState<"list" | "detail" | "data-detail">("list");
 
@@ -1115,9 +1120,11 @@ const Index = () => {
               <TabsTrigger value="map" className="gap-1.5 text-xs">
                 <MapPin className="h-3.5 w-3.5" /> Map
               </TabsTrigger>
+              {/* Antennas tab κρυμμένο για demo — under development. Uncomment για επαναφορά.
               <TabsTrigger value="map2" className="gap-1.5 text-xs">
                 <MapPin className="h-3.5 w-3.5 text-cyan-400" /> Antennas
               </TabsTrigger>
+              */}
               <TabsTrigger value="validation" className="gap-1.5 text-xs">
                 <Activity className="h-3.5 w-3.5 text-orange-400" /> Validation
               </TabsTrigger>
@@ -1894,9 +1901,11 @@ const Index = () => {
             />
           </TabsContent>
 
+          {/* Antennas tab κρυμμένο για demo — under development. Uncomment μαζί με το TabsTrigger παραπάνω για επαναφορά.
           <TabsContent value="map2">
             <AntennasMap />
           </TabsContent>
+          */}
 
           <TabsContent value="query-map">
             <QueryMap
