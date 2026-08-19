@@ -12,7 +12,7 @@
  * χωρίς Excel. Ο operator και το mode προκύπτουν από το ASideLocation
  * (π.χ. "Cosmote Free A", "Vodafone GSM A", "Nova Data A").
  */
-import type { AllCallsRow, DataCallRow } from "@/lib/api";
+import type { AllCallsRow, DataCallRow, TechnologyMixRow } from "@/lib/api";
 
 /* ────────────────────────── Operators & modes ────────────────────────── */
 
@@ -224,7 +224,13 @@ export interface VoiceStats {
   /** MTC = B→A (mobile terminated) */
   setupMtc: Sample;
   duration: Sample;
-  technologyMix: { name: string; count: number }[];
+  /**
+   * Ανά-band breakdown από το χοντρικό CA.technology (π.χ. "LTE", "GSM/LTE") — βλ.
+   * buildDetailedTechnologyMix. Fallback μόνο: το SummaryTab προτιμά το πραγματικό
+   * per-sample mix του /api/technology_mix (βλ. buildTechnologyMixTable) όταν
+   * υπάρχει, γιατί αυτό εδώ δεν ξεχωρίζει π.χ. GSM 900 από GSM 1800.
+   */
+  technologyMix: TechnologyShare[];
   /** Bucketed codec breakdown — βλ. bucketCodec/buildCodecMix. Table 20's "Codec Type Usage %". */
   codecMix: CodecShare[];
 }
@@ -325,6 +331,8 @@ export const buildCodecMix = (codecNames: (string | null | undefined)[]): CodecS
 /** POLQA thresholds — ίδια με το Attachment C. */
 export const LOW_QUALITY_MOS = 2.2;
 export const BAD_QUALITY_MOS = 1.3;
+/** Ποσοστό-δειγμάτων threshold του "BadCall" κριτηρίου — βλ. σχόλιο στο buildVoiceStats. */
+export const BAD_CALL_SAMPLE_PCT = 15;
 
 const isMoc = (callDir: string | null | undefined): boolean => /a\s*->\s*b/i.test(callDir ?? "");
 const isMtc = (callDir: string | null | undefined): boolean => /b\s*->\s*a/i.test(callDir ?? "");
@@ -338,7 +346,7 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
   const setupMoc: number[] = [];
   const setupMtc: number[] = [];
   const durations: number[] = [];
-  const technologies = new Map<string, number>();
+  const technologyNames: (string | null | undefined)[] = [];
   const codecNames: (string | null | undefined)[] = [];
   let lowQualityCalls = 0;
   let badQualityCalls = 0;
@@ -349,8 +357,26 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
     const mos = numeric(row.Avg_mos);
     if (mos != null && mos > 0) {
       mosValues.push(mos);
-      if (mos < LOW_QUALITY_MOS) lowQualityCalls++;
-      if (mos < BAD_QUALITY_MOS) badQualityCalls++;
+      // "Low Speech Quality Calls" (< 2.2): προτιμάμε το per-sample "BadCall" που φέρνει
+      // το backend (>15% κακά/silence δείγματα ανά session, ίδιο με το A-LEVEL
+      // LQStatisticData.sql reference query) — ακριβέστερο από το να συγκρίνεις απλά τον
+      // ήδη-μέσο-όρο Avg_mos με το threshold. Fallback στο avg-based κριτήριο μόνο όταν
+      // το backend δεν στέλνει καθόλου badCall (π.χ. παλιότερο API response).
+      if (row.badCall === 1 || row.badCall === 0) {
+        if (row.badCall === 1) lowQualityCalls++;
+      } else if (mos < LOW_QUALITY_MOS) {
+        lowQualityCalls++;
+      }
+    }
+
+    // "Low Speech Quality Calls" (< 1.3): προτιμάμε το backend "BadQualityCall" (ίδιο
+    // κριτήριο με το A-LEVEL "LOW MOS 1_3.sql" reference query — 2 από 3 διαδοχικά
+    // δείγματα κάτω από 1.3/silence σε Completed κλήση), ανεξάρτητο από τον μέσο MOS.
+    // Fallback στο avg-based κριτήριο μόνο όταν λείπει το πεδίο.
+    if (row.badQualityCall === 1 || row.badQualityCall === 0) {
+      if (row.badQualityCall === 1) badQualityCalls++;
+    } else if (mos != null && mos > 0 && mos < BAD_QUALITY_MOS) {
+      badQualityCalls++;
     }
 
     // Raw per-session UL/DL δείγματα από το backend (TestInfo.direction) — βλ. σχόλιο στο VoiceStats.
@@ -367,9 +393,7 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
     const duration = numeric(row.callDuration);
     if (duration != null && duration > 0) durations.push(duration);
 
-    const technology = (row.technology ?? "").trim();
-    if (technology) technologies.set(technology, (technologies.get(technology) ?? 0) + 1);
-
+    technologyNames.push(row.technology);
     codecNames.push(row.codecName);
   }
 
@@ -408,9 +432,7 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
     setupMoc: mean(setupMoc),
     setupMtc: mean(setupMtc),
     duration: mean(durations),
-    technologyMix: Array.from(technologies.entries())
-      .map(([name, count]) => ({ name, count }))
-      .sort((a, b) => b.count - a.count),
+    technologyMix: buildDetailedTechnologyMix(technologyNames),
     codecMix: buildCodecMix(codecNames),
   };
 };
@@ -628,6 +650,110 @@ export const buildTechnologyMix = (technologies: (string | null | undefined)[]):
       const count = counts.get(bucket.key) ?? 0;
       return { bucket: bucket.key, color: bucket.color, count, share: total > 0 ? count / total : 0 };
     });
+};
+
+/**
+ * Σταθερά χρώματα για γνωστά bands (ίδια παλέτα με το QueryMap's "technology_free"
+ * scheme, ώστε το ίδιο band να δείχνει ίδιο χρώμα σε όλη την εφαρμογή)· ό,τι band
+ * δεν αναγνωρίζεται παίρνει χρώμα από FALLBACK_TECHNOLOGY_COLORS.
+ */
+const DETAILED_TECHNOLOGY_COLORS: Record<string, string> = {
+  "GSM 900": "#00ffff",
+  "GSM 1800": "#0000ff",
+  "LTE E-UTRA 1": "#800000",
+  "LTE E-UTRA 3": "#008000",
+  "LTE E-UTRA 7": "#ff0000",
+  "LTE E-UTRA 8": "#A24FFF",
+  "LTE E-UTRA 20": "#ff9900",
+  "LTE E-UTRA 28": "#800080",
+};
+
+const FALLBACK_TECHNOLOGY_COLORS = ["#767a8a", "#9a8f6a", "#6a9a8f", "#9a6a8f", "#8f9a6a"];
+
+/** Γενιά → σειρά εμφάνισης, ίδια σειρά με το TECHNOLOGY_BUCKETS (2G → 5G, "Other" τελευταίο). */
+const GENERATION_RANK = new Map<string, number>(
+  [...TECHNOLOGY_BUCKETS, OTHER_TECHNOLOGY].map((bucket, index) => [bucket.key, index]),
+);
+
+const normalizeTechnologyLabel = (technology: string | null | undefined): string => {
+  const value = (technology ?? "").replace(/\s+/g, " ").trim();
+  return value || OTHER_TECHNOLOGY.key;
+};
+
+/** Κοινός πυρήνας: label -> count map σε ταξινομημένο TechnologyShare[] (γενιά, μετά πλήθος φθίνουσα). */
+const detailedMixFromCounts = (counts: Map<string, number>): TechnologyShare[] => {
+  const total = Array.from(counts.values()).reduce((sum, count) => sum + count, 0);
+  const labels = Array.from(counts.keys()).sort((a, b) => {
+    const rankA = GENERATION_RANK.get(bucketTechnology(a)) ?? GENERATION_RANK.get(OTHER_TECHNOLOGY.key)!;
+    const rankB = GENERATION_RANK.get(bucketTechnology(b)) ?? GENERATION_RANK.get(OTHER_TECHNOLOGY.key)!;
+    if (rankA !== rankB) return rankA - rankB;
+    return (counts.get(b) ?? 0) - (counts.get(a) ?? 0);
+  });
+
+  let fallbackIndex = 0;
+  return labels.map((label) => {
+    const count = counts.get(label) ?? 0;
+    const color =
+      label === OTHER_TECHNOLOGY.key
+        ? OTHER_TECHNOLOGY.color
+        : (DETAILED_TECHNOLOGY_COLORS[label] ?? FALLBACK_TECHNOLOGY_COLORS[fallbackIndex++ % FALLBACK_TECHNOLOGY_COLORS.length]);
+    return { bucket: label, color, count, share: total > 0 ? count / total : 0 };
+  });
+};
+
+/**
+ * Λεπτομερές technology mix — κρατάει το raw band label (π.χ. "GSM 900" vs
+ * "GSM 1800", κάθε "LTE E-UTRA N" ξεχωριστά) αντί να τα μαζεύει σε 2G/3G/4G/5G
+ * όπως το buildTechnologyMix. Ταξινομημένο πρώτα κατά γενιά (ίδια σειρά με τα
+ * buckets), μετά κατά πλήθος φθίνουσα μέσα στην ίδια γενιά.
+ *
+ * ΠΡΟΣΟΧΗ: δουλεύει πάνω στο `AllCallsRow.technology` (CA.technology), που είναι
+ * χοντρικό (π.χ. "LTE", "GSM/LTE") — δεν έχει bands. Για πραγματικό ανά-band mix
+ * («GSM 900» vs «GSM 1800», κ.λπ.) χρησιμοποίησε το buildTechnologyMixTable πάνω
+ * στα δείγματα του /api/technology_mix (βλ. σχόλιο εκεί).
+ */
+export const buildDetailedTechnologyMix = (technologies: (string | null | undefined)[]): TechnologyShare[] => {
+  const counts = new Map<string, number>();
+  for (const technology of technologies) {
+    const label = normalizeTechnologyLabel(technology);
+    counts.set(label, (counts.get(label) ?? 0) + 1);
+  }
+  return detailedMixFromCounts(counts);
+};
+
+/**
+ * Πραγματικό ανά-band technology mix, από τα αθροισμένα GPS samples του
+ * /api/technology_mix (ίδια μεθοδολογία με "bi queries/RadioTech_Voice_newDB.sql":
+ * ένα sample ανά θέση πάνω σε κλήση, technology = NetworkInfo.Technology — πιάνει
+ * και intra-call handovers, σε αντίθεση με το CA.technology του buildDetailedTechnologyMix).
+ * Σπάει σε FREE/GSM ίδιο με το buildVoiceTable (resolveMode πάνω στο location) και μετά
+ * ανά operator (resolveOperator) — ίδιο σχήμα με ένα VoiceTable, χωρίς VoiceStats.
+ */
+export const buildTechnologyMixTable = (
+  rows: TechnologyMixRow[],
+  mode: CallMode,
+): { byOperator: Map<string, TechnologyShare[]>; total: TechnologyShare[] } => {
+  const scoped = rows.filter((row) => resolveMode(row.location) === mode && (row.samples ?? 0) > 0);
+
+  const totalCounts = new Map<string, number>();
+  const perOperatorCounts = new Map<string, Map<string, number>>();
+
+  for (const row of scoped) {
+    const label = normalizeTechnologyLabel(row.technology);
+    const samples = row.samples;
+
+    totalCounts.set(label, (totalCounts.get(label) ?? 0) + samples);
+
+    const operatorKey = resolveOperator(row.location).key;
+    const operatorCounts = perOperatorCounts.get(operatorKey) ?? new Map<string, number>();
+    operatorCounts.set(label, (operatorCounts.get(label) ?? 0) + samples);
+    perOperatorCounts.set(operatorKey, operatorCounts);
+  }
+
+  const byOperator = new Map<string, TechnologyShare[]>();
+  for (const [key, counts] of perOperatorCounts) byOperator.set(key, detailedMixFromCounts(counts));
+
+  return { byOperator, total: detailedMixFromCounts(totalCounts) };
 };
 
 /* ────────────────────────── Report metadata ────────────────────────── */

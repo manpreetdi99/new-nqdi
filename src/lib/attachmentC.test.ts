@@ -3,8 +3,10 @@ import { describe, it, expect } from "vitest";
 import {
   bucketTechnology,
   buildDataSections,
+  buildDetailedTechnologyMix,
   buildReportPeriod,
   buildTechnologyMix,
+  buildTechnologyMixTable,
   buildVoiceStats,
   buildVoiceTable,
   classifyCallStatus,
@@ -282,6 +284,59 @@ describe("technology mix", () => {
 
   it("has no shares at all for an empty input", () => {
     expect(buildTechnologyMix([])).toEqual([]);
+  });
+
+  it("detailed mix keeps individual bands apart instead of collapsing by generation", () => {
+    const mix = buildDetailedTechnologyMix(["GSM 900", "GSM 1800", "GSM 1800", "LTE E-UTRA 3", "LTE E-UTRA 20", "5G NR"]);
+
+    // Γενιά πρώτα (2G πριν 4G πριν 5G), μετά πλήθος φθίνουσα μέσα στην ίδια γενιά.
+    expect(mix.map((entry) => entry.bucket)).toEqual([
+      "GSM 1800",
+      "GSM 900",
+      "LTE E-UTRA 3",
+      "LTE E-UTRA 20",
+      "5G NR",
+    ]);
+    expect(mix.find((entry) => entry.bucket === "GSM 1800")?.share).toBeCloseTo(2 / 6, 12);
+    expect(mix.reduce((sum, entry) => sum + entry.share, 0)).toBeCloseTo(1, 12);
+  });
+
+  it("detailed mix normalizes empty/whitespace-only labels into Other", () => {
+    const mix = buildDetailedTechnologyMix(["LTE E-UTRA 3", null, "  ", undefined]);
+
+    expect(mix.map((entry) => entry.bucket)).toEqual(["LTE E-UTRA 3", "Other"]);
+  });
+
+  it("buildTechnologyMixTable aggregates per-sample rows from /api/technology_mix, split by mode and operator", () => {
+    // Ίδιο σχήμα με τα rows του /api/technology_mix: (location, technology, samples).
+    // "Cosmote GSM A" / "Vodafone GSM A" -> mode GSM· "Cosmote Free A" -> mode FREE.
+    const rows = [
+      { location: "Cosmote GSM A", technology: "GSM 900", samples: 999 },
+      { location: "Cosmote GSM A", technology: "GSM 1800", samples: 1 },
+      { location: "Vodafone GSM A", technology: "GSM 1800", samples: 10 },
+      { location: "Cosmote Free A", technology: "LTE E-UTRA 3", samples: 5 },
+    ];
+
+    const gsm = buildTechnologyMixTable(rows, "GSM");
+    expect(gsm.byOperator.get("COSMOTE")?.map((e) => e.bucket)).toEqual(["GSM 900", "GSM 1800"]);
+    expect(gsm.byOperator.get("COSMOTE")?.find((e) => e.bucket === "GSM 900")?.share).toBeCloseTo(999 / 1000, 12);
+    expect(gsm.byOperator.get("VODAFONE")?.map((e) => e.bucket)).toEqual(["GSM 1800"]);
+    // Total is across both operators, in the same mode — Free rows never leak in.
+    expect(gsm.total.map((e) => e.bucket)).toEqual(["GSM 900", "GSM 1800"]);
+    expect(gsm.total.find((e) => e.bucket === "GSM 1800")?.count).toBe(11);
+
+    const free = buildTechnologyMixTable(rows, "FREE");
+    expect(free.total.map((e) => e.bucket)).toEqual(["LTE E-UTRA 3"]);
+  });
+
+  it("buildTechnologyMixTable ignores zero/negative sample rows", () => {
+    const rows = [
+      { location: "Cosmote GSM A", technology: "GSM 900", samples: 0 },
+      { location: "Cosmote GSM A", technology: "GSM 1800", samples: 3 },
+    ];
+
+    const gsm = buildTechnologyMixTable(rows, "GSM");
+    expect(gsm.total.map((e) => e.bucket)).toEqual(["GSM 1800"]);
   });
 });
 

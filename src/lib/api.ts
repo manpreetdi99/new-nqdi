@@ -116,6 +116,23 @@ export interface AllCallsRow {
   mosDlSamples?: number | null;
   /** Dominant codec name for the session (bucketed client-side, see bucketCodec in attachmentC.ts). */
   codecName?: string | null;
+  /**
+   * "BadCall" — ίδιο κριτήριο με το A-LEVEL LQStatisticData.sql reference query:
+   * 1 αν >15% των ResultsLQ08Avg δειγμάτων του session είναι κακά (OptionalWB < 2.2
+   * ή Silence flag), 0 αν όχι, null αν δεν υπάρχουν έγκυρα δείγματα.
+   */
+  badCall?: number | null;
+  /** Ποσοστό κακών δειγμάτων (0–100) που παρήγαγε το badCall· null όπως το badCall. */
+  badCallPercentage?: number | null;
+  numBadSample?: number | null;
+  numValidSample?: number | null;
+  numSilenceSample?: number | null;
+  /**
+   * "Low Speech Quality Calls (POLQA < 1.3)" — ίδιο κριτήριο με το A-LEVEL
+   * "LOW MOS 1_3.sql" reference query: 1 αν το session (Completed) έχει 2 από 3
+   * διαδοχικά δείγματα "κακά" (βλ. σχόλιο στο calls.py), αλλιώς 0.
+   */
+  badQualityCall?: number | null;
   latitude: number | null;
   longitude: number | null;
   ASideFileName?: string | null;
@@ -136,6 +153,35 @@ export async function fetchAllCalls(
     params.append("location", location);
   }
   const json = await requestJson<{ rows: AllCallsRow[] }>(`/api/calls?${params.toString()}`);
+  return json.rows;
+}
+
+/**
+ * Ένα (location, technology) ζευγάρι με το πλήθος GPS samples — ίδια μεθοδολογία με
+ * το reference report "bi queries/RadioTech_Voice_newDB.sql": ένα sample ανά θέση
+ * GPS πάνω σε φωνητική κλήση, technology = NetworkInfo.Technology. Πιο λεπτομερές
+ * (π.χ. "GSM 900" vs "GSM 1800") και πιο ακριβές (πιάνει intra-call handovers) από
+ * το χοντρικό `AllCallsRow.technology`/`CA.technology` — βλ. /api/technology_mix.
+ */
+export interface TechnologyMixRow {
+  location: string | null;
+  technology: string | null;
+  samples: number;
+}
+
+export async function fetchTechnologyMix(
+  database: string,
+  collections: string[] = [],
+  locations: string[] = [],
+): Promise<TechnologyMixRow[]> {
+  const params = new URLSearchParams({ database });
+  for (const collection of collections) {
+    if (collection) params.append("collection", collection);
+  }
+  for (const location of locations) {
+    params.append("location", location);
+  }
+  const json = await requestJson<{ rows: TechnologyMixRow[] }>(`/api/technology_mix?${params.toString()}`);
   return json.rows;
 }
 

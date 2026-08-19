@@ -1,11 +1,12 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, Database, MapPin, Phone, Radio, Wifi } from "lucide-react";
 
-import type { AllCallsRow, DataCallRow } from "@/lib/api";
+import type { AllCallsRow, DataCallRow, TechnologyMixRow } from "@/lib/api";
 import {
   BAD_QUALITY_MOS,
   buildDataSections,
   buildReportPeriod,
+  buildTechnologyMixTable,
   buildVoiceStats,
   buildVoiceTable,
   classifyCallStatus,
@@ -21,6 +22,7 @@ import {
   type DataTestSection,
   type DataTestStats,
   type OperatorMeta,
+  type TechnologyShare,
   type VoiceRates,
   type VoiceStats,
   type VoiceTable,
@@ -29,6 +31,12 @@ import {
 interface SummaryTabProps {
   allCallsRows: AllCallsRow[];
   dataCallsRows: DataCallRow[];
+  /**
+   * Πραγματικό ανά-band technology mix από /api/technology_mix (βλ.
+   * buildTechnologyMixTable) — προτεραιότητα έναντι του χοντρικού
+   * VoiceStats.technologyMix όταν υπάρχει. Optional/κενό: fallback στο χοντρικό.
+   */
+  technologyMixRows?: TechnologyMixRow[];
   database?: string;
   collections?: string[];
   /** Για το dropdown επιλογής database μέσα στο banner· χωρίς αυτά, το banner δείχνει απλό κείμενο. */
@@ -143,15 +151,53 @@ const CodecMixBar = ({ mix }: { mix: CodecShare[] }) => {
   if (mix.length === 0) return <span className="text-muted-foreground/40">—</span>;
 
   return (
-    <div className="flex h-2 w-full gap-[2px]">
-      {mix.map((segment) => (
-        <div
-          key={segment.bucket}
-          className="first:rounded-l-full last:rounded-r-full"
-          style={{ width: `${segment.share * 100}%`, backgroundColor: segment.color }}
-          title={`${segment.bucket}: ${formatCount(segment.count)} (${formatPercent(segment.share, 1)})`}
-        />
-      ))}
+    <div className="flex flex-col gap-1">
+      <div className="flex h-2 w-full gap-[2px]">
+        {mix.map((segment) => (
+          <div
+            key={segment.bucket}
+            className="first:rounded-l-full last:rounded-r-full"
+            style={{ width: `${segment.share * 100}%`, backgroundColor: segment.color }}
+            title={`${segment.bucket}: ${formatCount(segment.count)} (${formatPercent(segment.share, 1)})`}
+          />
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+        {mix.map((segment) => (
+          <span key={segment.bucket} className="flex items-center gap-1 text-[10px] leading-tight text-muted-foreground">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: segment.color }} />
+            {segment.bucket} <span className="font-mono tabular-nums text-foreground/80">{formatPercent(segment.share, 1)}</span>
+          </span>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+/** Part-to-whole: ίδιο look με το CodecMixBar, πάνω στα 2G/3G/4G/5G buckets (βλ. buildTechnologyMix). */
+const TechnologyMixBar = ({ mix }: { mix: TechnologyShare[] }) => {
+  if (mix.length === 0) return <span className="text-muted-foreground/40">—</span>;
+
+  return (
+    <div className="flex flex-col gap-1">
+      <div className="flex h-2 w-full gap-[2px]">
+        {mix.map((segment) => (
+          <div
+            key={segment.bucket}
+            className="first:rounded-l-full last:rounded-r-full"
+            style={{ width: `${segment.share * 100}%`, backgroundColor: segment.color }}
+            title={`${segment.bucket}: ${formatCount(segment.count)} (${formatPercent(segment.share, 1)})`}
+          />
+        ))}
+      </div>
+      <div className="flex flex-wrap gap-x-2 gap-y-0.5">
+        {mix.map((segment) => (
+          <span key={segment.bucket} className="flex items-center gap-1 text-[10px] leading-tight text-muted-foreground">
+            <span className="h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: segment.color }} />
+            {segment.bucket} <span className="font-mono tabular-nums text-foreground/80">{formatPercent(segment.share, 1)}</span>
+          </span>
+        ))}
+      </div>
     </div>
   );
 };
@@ -181,7 +227,8 @@ type Cell =
       range?: { min: number | null; max: number | null };
     }
   | { kind: "mix"; stats: VoiceStats }
-  | { kind: "codecMix"; mix: CodecShare[] };
+  | { kind: "codecMix"; mix: CodecShare[] }
+  | { kind: "technologyMix"; mix: TechnologyShare[] };
 
 interface KpiRowSpec<T> {
   label: string;
@@ -281,15 +328,17 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
     }),
   },
   { label: "Unsuccessful Call Attempts", cell: (s) => ({ kind: "count", value: s.failed }) },
-  { label: "Normal Releases", cell: (s) => ({ kind: "count", value: s.completed }) },
+  { label: "Normal Releases", emphasis: true, cell: (s) => ({ kind: "count", value: s.completed }) },
   { label: "Dropped Calls", cell: (s) => ({ kind: "count", value: s.dropped }) },
   { label: "System Releases", cell: (s) => ({ kind: "count", value: s.sysRelease }) },
   {
     label: `Low Speech Quality Calls (POLQA < ${LOW_QUALITY_MOS})`,
+    hint: "BadCall: >15% των δειγμάτων του session κάτω από 2.2 ή με Silence flag",
     cell: (s) => ({ kind: "count", value: s.lowQualityCalls }),
   },
   {
     label: `Low Speech Quality Calls (POLQA < ${BAD_QUALITY_MOS})`,
+    hint: "2 από 3 διαδοχικά δείγματα κάτω από 1.3 ή με Silence flag, σε Completed κλήση",
     cell: (s) => ({ kind: "count", value: s.badQualityCalls }),
   },
   {
@@ -304,7 +353,6 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
       kind: "value",
       value: s.mosUl.avg,
       decimals: 2,
-      samples: s.mosUl.samples,
       higherIsBetter: true,
       range: { min: s.mosUl.min, max: s.mosUl.max },
     }),
@@ -316,7 +364,6 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
       kind: "value",
       value: s.mosDl.avg,
       decimals: 2,
-      samples: s.mosDl.samples,
       higherIsBetter: true,
       range: { min: s.mosDl.min, max: s.mosDl.max },
     }),
@@ -341,15 +388,20 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
     hint: "callDir B→A",
     cell: (s) => ({ kind: "value", value: s.setupMtc.avg, decimals: 2, samples: s.setupMtc.samples, higherIsBetter: false }),
   },
-  {
-    label: "Avg Call Duration (sec)",
-    cell: (s) => ({ kind: "value", value: s.duration.avg, decimals: 1, samples: s.duration.samples }),
-  },
+  // {
+  //   label: "Avg Call Duration (sec)",
+  //   cell: (s) => ({ kind: "value", value: s.duration.avg, decimals: 1, samples: s.duration.samples }),
+  // },
   { label: "Call outcome mix", cell: (s) => ({ kind: "mix", stats: s }) },
   {
     label: "Codec Type Usage %",
     hint: "FR AMR WB / AMR HR / AMR / EFR / FR / HR — βλ. CallCodecTypeUsageGSM.sql",
     cell: (s) => ({ kind: "codecMix", mix: s.codecMix }),
+  },
+  {
+    label: "Technology mix",
+    hint: "Ανά band (GSM 900 / GSM 1800 / κάθε LTE E-UTRA band ξεχωριστά) — ένα δείγμα ανά θέση GPS, ίδια μεθοδολογία με bi queries/RadioTech_Voice_newDB.sql",
+    cell: (s) => ({ kind: "technologyMix", mix: s.technologyMix }),
   },
 ];
 
@@ -426,7 +478,14 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
             const numbers = cells.map(cellNumber).filter((value): value is number => value != null);
 
             if (hideEmptyRows && numbers.length > 0 && numbers.every((value) => value === 0)) return null;
-            if (hideEmptyRows && numbers.length === 0 && totalCell.kind !== "mix" && totalCell.kind !== "codecMix") return null;
+            if (
+              hideEmptyRows &&
+              numbers.length === 0 &&
+              totalCell.kind !== "mix" &&
+              totalCell.kind !== "codecMix" &&
+              totalCell.kind !== "technologyMix"
+            )
+              return null;
 
             // "best" μόνο στις headline γραμμές — αλλιώς γεμίζει ο πίνακας σημάδια.
             const higherIsBetter = cellHigherIsBetter(cells[0] ?? totalCell);
@@ -455,6 +514,8 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                         <OutcomeMixBar stats={(cell as Extract<Cell, { kind: "mix" }>).stats} />
                       ) : cell.kind === "codecMix" ? (
                         <CodecMixBar mix={(cell as Extract<Cell, { kind: "codecMix" }>).mix} />
+                      ) : cell.kind === "technologyMix" ? (
+                        <TechnologyMixBar mix={(cell as Extract<Cell, { kind: "technologyMix" }>).mix} />
                       ) : (
                         <div className="flex items-center justify-end gap-2.5">
                           <span
@@ -477,17 +538,19 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                             >
                               {cellText(cell)}
                             </span>
-                            {cell.kind === "value" && cell.samples != null && cell.samples > 0 && (
-                              <span className="block text-[10px] leading-tight text-muted-foreground">
-                                n={formatCount(cell.samples)}
-                                {cell.range && (cell.range.min != null || cell.range.max != null) && (
-                                  <>
-                                    {" "}
-                                    · {formatNumber(cell.range.min, cell.decimals)}–{formatNumber(cell.range.max, cell.decimals)}
-                                  </>
-                                )}
-                              </span>
-                            )}
+                            {cell.kind === "value" &&
+                              ((cell.samples != null && cell.samples > 0) ||
+                                (cell.range && (cell.range.min != null || cell.range.max != null))) && (
+                                <span className="block text-[10px] leading-tight text-muted-foreground">
+                                  {cell.samples != null && cell.samples > 0 && <>n={formatCount(cell.samples)}</>}
+                                  {cell.range && (cell.range.min != null || cell.range.max != null) && (
+                                    <>
+                                      {cell.samples != null && cell.samples > 0 ? " · " : ""}
+                                      {formatNumber(cell.range.min, cell.decimals)}–{formatNumber(cell.range.max, cell.decimals)}
+                                    </>
+                                  )}
+                                </span>
+                              )}
                             {(cell.kind === "rate" || cell.kind === "count") && cell.alt && (
                               <span
                                 className="block text-[10px] leading-tight text-muted-foreground"
@@ -508,6 +571,8 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                     <OutcomeMixBar stats={(totalCell as Extract<Cell, { kind: "mix" }>).stats} />
                   ) : totalCell.kind === "codecMix" ? (
                     <CodecMixBar mix={(totalCell as Extract<Cell, { kind: "codecMix" }>).mix} />
+                  ) : totalCell.kind === "technologyMix" ? (
+                    <TechnologyMixBar mix={(totalCell as Extract<Cell, { kind: "technologyMix" }>).mix} />
                   ) : (
                     <span className="font-mono text-xs tabular-nums text-foreground/60">{cellText(totalCell)}</span>
                   )}
@@ -627,6 +692,7 @@ const EmptyState = ({ message }: { message: string }) => (
 const SummaryTab = ({
   allCallsRows,
   dataCallsRows,
+  technologyMixRows = [],
   database,
   collections = [],
   databases = [],
@@ -668,6 +734,12 @@ const SummaryTab = ({
   const gsmTable = useMemo(() => buildVoiceTable(validAllCallsRows, "GSM"), [validAllCallsRows]);
   const freeTable = useMemo(() => buildVoiceTable(validAllCallsRows, "FREE"), [validAllCallsRows]);
   const dataSections = useMemo(() => buildDataSections(validDataCallsRows), [validDataCallsRows]);
+
+  // Πραγματικό ανά-band technology mix (βλ. σχόλιο στο SummaryTabProps.technologyMixRows) —
+  // άδειο όταν δεν έχει φορτώσει ακόμα ή το schema δεν έχει CallSession, οπότε το
+  // voiceTableFor πέφτει στο χοντρικό VoiceStats.technologyMix.
+  const gsmTechMix = useMemo(() => buildTechnologyMixTable(technologyMixRows, "GSM"), [technologyMixRows]);
+  const freeTechMix = useMemo(() => buildTechnologyMixTable(technologyMixRows, "FREE"), [technologyMixRows]);
 
   const overallStats = useMemo(() => buildVoiceStats(validAllCallsRows), [validAllCallsRows]);
 
@@ -724,10 +796,21 @@ const SummaryTab = ({
       ? `${String(date.getDate()).padStart(2, "0")}/${String(date.getMonth() + 1).padStart(2, "0")}/${date.getFullYear()}`
       : "—";
 
-  const voiceTableFor = (table: VoiceTable) => ({
-    statsFor: (operatorKey: string) => table.byOperator.get(operatorKey) ?? EMPTY_VOICE_STATS,
-    total: table.total,
-  });
+  const voiceTableFor = (
+    table: VoiceTable,
+    techMix: { byOperator: Map<string, TechnologyShare[]>; total: TechnologyShare[] },
+  ) => {
+    // Το πραγματικό ανά-band mix (techMix) κερδίζει το χοντρικό VoiceStats.technologyMix
+    // όταν υπάρχει· άδειο techMix (δεν φόρτωσε ακόμα / schema χωρίς CallSession) → fallback.
+    const withTechMix = (stats: VoiceStats, mix: TechnologyShare[]): VoiceStats =>
+      mix.length > 0 ? { ...stats, technologyMix: mix } : stats;
+
+    return {
+      statsFor: (operatorKey: string) =>
+        withTechMix(table.byOperator.get(operatorKey) ?? EMPTY_VOICE_STATS, techMix.byOperator.get(operatorKey) ?? []),
+      total: withTechMix(table.total, techMix.total),
+    };
+  };
 
   return (
     <div className="space-y-4">
@@ -1010,7 +1093,7 @@ const SummaryTab = ({
             rows={rows}
             hideEmptyRows={hideEmptyRows}
             markBest={markBest}
-            {...voiceTableFor(gsmTable)}
+            {...voiceTableFor(gsmTable, gsmTechMix)}
           />
         </ReportCard>
       )}
@@ -1028,7 +1111,7 @@ const SummaryTab = ({
             rows={rows}
             hideEmptyRows={hideEmptyRows}
             markBest={markBest}
-            {...voiceTableFor(freeTable)}
+            {...voiceTableFor(freeTable, freeTechMix)}
           />
         </ReportCard>
       )}

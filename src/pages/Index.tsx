@@ -23,12 +23,14 @@ import {
   ApiClientError,
   fetchAllCalls,
   fetchDataCalls,
+  fetchTechnologyMix,
   fetchCollectionNames,
   fetchDatabases,
   fetchLocations,
   runBenchmarkApi,
   type AllCallsRow,
   type DataCallRow,
+  type TechnologyMixRow,
 } from "@/lib/api";
 
 const formatApiError = (error: unknown, fallbackTitle: string) => {
@@ -225,6 +227,8 @@ const Index = () => {
   const [callsLoading, setCallsLoading] = useState(false);
   const [allCallsRows, setAllCallsRows] = useState<AllCallsRow[]>([]);
   const [dataCallsRows, setDataCallsRows] = useState<DataCallRow[]>([]);
+  /** Ανά-band technology mix (GSM 900/1800, LTE E-UTRA N, ...) για το SummaryTab — βλ. /api/technology_mix. */
+  const [technologyMixRows, setTechnologyMixRows] = useState<TechnologyMixRow[]>([]);
   const [dataCallsLoading, setDataCallsLoading] = useState(false);
   const [selectedDataSessionId, setSelectedDataSessionId] = useState<string | null>(null);
   const [dataSessionsView, setDataSessionsView] = useLocalStorage<"flat" | "cycle">("perf-insights-data-sessions-view", "flat");
@@ -448,6 +452,7 @@ const Index = () => {
         setCallRecords([]);
         setSelectedCall(null);
         setDataCallsRows([]);
+        setTechnologyMixRows([]);
         return;
       }
 
@@ -459,9 +464,10 @@ const Index = () => {
       setCallsLoading(true);
       setDataCallsLoading(true);
 
-      const [voiceResult, dataResult] = await Promise.allSettled([
+      const [voiceResult, dataResult, technologyMixResult] = await Promise.allSettled([
         fetchAllCalls(selectedDatabase, selectedCallsCollections, effectiveLocations),
         fetchDataCalls(selectedDatabase, selectedCallsCollections, effectiveLocations),
+        fetchTechnologyMix(selectedDatabase, selectedCallsCollections, effectiveLocations),
       ]);
 
       if (voiceResult.status === "fulfilled") {
@@ -482,6 +488,15 @@ const Index = () => {
       } else {
         console.error("Failed to fetch data calls:", dataResult.reason);
         setDataCallsRows([]);
+      }
+
+      // Χωρίς toast σε αποτυχία: το SummaryTab πέφτει σιωπηλά στο χοντρικό
+      // technologyMix του VoiceStats — δεν αξίζει να διακόψει τη σελίδα γι' αυτό.
+      if (technologyMixResult.status === "fulfilled") {
+        setTechnologyMixRows(technologyMixResult.value);
+      } else {
+        console.error("Failed to fetch technology mix:", technologyMixResult.reason);
+        setTechnologyMixRows([]);
       }
 
       setCallsLoading(false);
@@ -1130,6 +1145,7 @@ const Index = () => {
             <SummaryTab
               allCallsRows={filteredAllCallsRows}
               dataCallsRows={filteredDataCallsRows}
+              technologyMixRows={technologyMixRows}
               database={selectedDatabase}
               collections={selectedCallsCollections}
               databases={databases}
