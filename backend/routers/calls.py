@@ -342,48 +342,43 @@ def get_technology_mix(
     collection: list[str] | None = Query(default=None),
     location: list[str] | None = Query(default=None),
 ):
-    """Ποσοστά ανά radio band (π.χ. "GSM 900", "GSM 1800", "LTE E-UTRA 20") για τις
-    φωνητικές κλήσεις — ίδια πηγή/μεθοδολογία με το reference report
-    "bi queries/RadioTech_Voice_newDB.sql", ΟΧΙ το CA.technology του /api/calls (που
-    είναι πολύ χοντρικό, π.χ. "LTE"/"GSM/LTE" — δεν ξεχωρίζει bands).
+    """Ποσοστά ανά radio band (π.χ. "GSM 900", "GSM 1800", "LTE E-UTRA 20") — ίδια
+    πηγή/μεθοδολογία με τον χάρτη ("Technology σημεία (FREE/GSM)" στο
+    QueryMap.tsx / backend/validation_maps/queries.py::query_technology_free), ΟΧΙ
+    το CA.technology του /api/calls (που είναι πολύ χοντρικό, π.χ. "LTE"/"GSM/LTE"
+    — δεν ξεχωρίζει bands).
 
-    Ένα "sample" = μία θέση GPS (Position) πάνω σε μία κλήση, με technology =
+    Ένα "sample" = μία θέση GPS (Position) σε valid Session, με technology =
     NetworkInfo.Technology της πιο πρόσφατης καταγραφής πριν από αυτή τη θέση (ίδιο
-    OUTER APPLY pattern με το backend/validation_maps/queries.py::query_technology_free,
-    εδώ ΟΜΩΣ αθροισμένο με GROUP BY αντί να επιστρέφει ανά-γραμμή rows). Αυτό πιάνει
-    intra-call handovers (π.χ. GSM 900 -> GSM 1800 μέσα στην ίδια κλήση) που ένα
-    ανά-κλήση label θα έχανε εντελώς.
+    OUTER APPLY pattern, εδώ ΟΜΩΣ αθροισμένο με GROUP BY αντί να επιστρέφει
+    ανά-γραμμή rows). Σκόπιμα ΔΕΝ περιορίζεται σε "μέσα σε ενεργή κλήση"
+    (CallSession/callDir) ούτε φιλτράρει DATA locations / Scanner devices — αυτό
+    το endpoint τροφοδοτεί το ίδιο table (SummaryTab technology mix) που πρέπει να
+    ταιριάζει 1:1 με ό,τι δείχνει ο χάρτης για το ίδιο collection/location, αλλιώς
+    βγαίνουν διαφορετικά ποσοστά (π.χ. STR_EVIA SOUTH_TOURISTIC AREAS_2026H2).
     """
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
 
-        # Το CallSession δεν υπάρχει σε κάθε schema — γυρνάμε άδειο αντί για 500,
-        # ίδιο pattern με τα υπόλοιπα optional-table guards αυτού του αρχείου.
-        cursor.execute("SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'CallSession'")
-        if cursor.fetchone() is None:
-            conn.close()
-            return {"rows": []}
-
         query = """
             SELECT
                 FileList.ASideLocation AS location,
-                NetworkInfo.Technology AS technology,
+                ni.technology AS technology,
                 COUNT(*) AS samples
             FROM Sessions
             INNER JOIN FileList ON Sessions.FileId = FileList.FileId
             INNER JOIN Position ON Sessions.SessionId = Position.SessionId
-            INNER JOIN CallSession ON CallSession.SessionId = Sessions.SessionId
-            INNER JOIN NetworkInfo ON NetworkInfo.NetworkId = (
-                SELECT MAX(tech_2.NetworkId)
-                FROM NetworkInfo tech_2
-                WHERE tech_2.FileId = Position.FileId
-                  AND tech_2.MsgTime < Position.MsgTime
-            )
+            OUTER APPLY (
+                SELECT TOP (1) n.*
+                FROM NetworkInfo AS n
+                WHERE n.FileId = Position.FileId
+                  AND n.MsgTime < Position.MsgTime
+                ORDER BY n.MsgTime DESC
+            ) AS ni
             WHERE Sessions.Valid = 1
-              AND FileList.ASideLocation NOT LIKE '%DATA%'
-              AND FileList.ASideDevice NOT LIKE '%Scanner%'
-              AND CallSession.callDir IN ('A->B', 'B->A')
+              AND ni.technology IS NOT NULL
+              AND ni.technology <> 'Unknown'
         """
 
         params: list[object] = []
@@ -399,7 +394,7 @@ def get_technology_mix(
             query += f" AND FileList.ASideLocation IN ({placeholders})"
             params.extend(selected_locations)
 
-        query += " GROUP BY FileList.ASideLocation, NetworkInfo.Technology"
+        query += " GROUP BY FileList.ASideLocation, ni.technology"
 
         cursor.execute(query, tuple(params))
 
