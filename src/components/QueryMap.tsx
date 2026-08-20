@@ -320,6 +320,18 @@ function colorForValue(scheme: ColorScheme, val: CellValue): string {
   return entry ? entry.color : scheme.defaultColor;
 }
 
+// ── Legend bucket/category key for a raw value (drives legend click-to-filter) ─
+function bucketKeyForValue(scheme: ColorScheme, val: CellValue): string | null {
+  if (scheme.type === "range") {
+    const n = Number(val);
+    if (isNaN(n)) return null;
+    const b = scheme.buckets.find((bb) => n >= bb.min && n < bb.max);
+    return b ? b.label : null;
+  }
+  const str = String(val ?? "").trim();
+  return str || null;
+}
+
 // ── Aggregate-mode color (normalized rank 0–1) ────────────────────────────────
 function bubbleColor(rank: number): { fill: string; stroke: string } {
   if (rank >= 0.8) return { fill: "#ef4444", stroke: "#dc2626" };
@@ -327,6 +339,18 @@ function bubbleColor(rank: number): { fill: string; stroke: string } {
   if (rank >= 0.4) return { fill: "#eab308", stroke: "#ca8a04" };
   if (rank >= 0.2) return { fill: "#22c55e", stroke: "#16a34a" };
   return { fill: "#3b82f6", stroke: "#2563eb" };
+}
+
+const BUBBLE_TIERS = [
+  { label: "Πολύ Υψηλό",  fill: "#ef4444", min: 0.8 },
+  { label: "Υψηλό",       fill: "#f97316", min: 0.6 },
+  { label: "Μέτριο",      fill: "#eab308", min: 0.4 },
+  { label: "Χαμηλό",      fill: "#22c55e", min: 0.2 },
+  { label: "Πολύ Χαμηλό", fill: "#3b82f6", min: -Infinity },
+] as const;
+
+function bubbleTierLabel(rank: number): string {
+  return (BUBBLE_TIERS.find((t) => rank >= t.min) ?? BUBBLE_TIERS[BUBBLE_TIERS.length - 1]).label;
 }
 
 // ── Resolve city-name → coords (used in bubble mode) ─────────────────────────
@@ -1433,6 +1457,8 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
   const [filterLocation, setFilterLocation]     = useState("");
   const [filterNRARFCN, setFilterNRARFCN]       = useState("");
   const [mapLoading, setMapLoading]             = useState(false);
+  const [selectedGroup, setSelectedGroup]       = useState<string | null>(null);
+  const [selectedBucket, setSelectedBucket]     = useState<string | null>(null);
   const latestRunQuery = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -1458,7 +1484,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
     setFilterLocation(syncTarget.location);
     setFilterCollection(syncTarget.collection);
     setRows([]); setColumns([]); setError(null); setExecutionTime(null);
-    setFilterNRARFCN("");
+    setFilterNRARFCN(""); setSelectedGroup(null); setSelectedBucket(null);
   }, [syncTarget]);
 
   const currentScheme = COLOR_SCHEMES[colorSchemeKey];
@@ -1478,9 +1504,11 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
 
   const filteredRows = useMemo(() => {
     const nrCol = TEMPLATES[tmplIdx]?.nrarfcnCol;
-    if (!nrCol || !filterNRARFCN) return rows;
-    return rows.filter((r) => String(r[nrCol] ?? "") === filterNRARFCN);
-  }, [rows, tmplIdx, filterNRARFCN]);
+    let out = rows;
+    if (nrCol && filterNRARFCN) out = out.filter((r) => String(r[nrCol] ?? "") === filterNRARFCN);
+    if (selectedGroup !== null && effLabelCol) out = out.filter((r) => String(r[effLabelCol] ?? "") === selectedGroup);
+    return out;
+  }, [rows, tmplIdx, filterNRARFCN, selectedGroup, effLabelCol]);
 
   const availableNRARFCNs = useMemo(() => {
     const nrCol = TEMPLATES[tmplIdx]?.nrarfcnCol;
@@ -1497,7 +1525,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
     setLabelCol(t.labelCol); setLatCol(""); setLngCol("");
     if (t.colorScheme) setColorSchemeKey(t.colorScheme);
     setRows([]); setColumns([]); setError(null); setExecutionTime(null);
-    setFilterNRARFCN("");
+    setFilterNRARFCN(""); setSelectedGroup(null); setSelectedBucket(null);
   };
 
   const currentTemplate = TEMPLATES[tmplIdx];
@@ -1507,7 +1535,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
   const runQuery = async () => {
     if (!localDb) { setError("Επιλέξτε database πρώτα."); return; }
     if (!filtersReady) { setError("Επιλέξτε Collection και ASideLocation πριν εκτελέσετε το query."); return; }
-    setIsRunning(true); setError(null); setMapLoading(true);
+    setIsRunning(true); setError(null); setMapLoading(true); setSelectedGroup(null); setSelectedBucket(null);
     const esc = (s: string) => s.replace(/'/g, "''");
     let effectiveSql = sql;
     if (filterCollection) {
@@ -1572,6 +1600,23 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
     });
   }, [mode, filteredRows, effQtyCol, effLatCol, effLngCol, effLabelCol]);
 
+  // Counts per bubble tier — computed on the full (unfiltered-by-tier) bubble set
+  // so the legend always shows all tiers, even the one currently isolated.
+  const bubbleTierCounts = useMemo(() => {
+    const m = new Map<string, number>();
+    for (const p of bubblePoints) {
+      const t = bubbleTierLabel(p.normalized);
+      m.set(t, (m.get(t) ?? 0) + 1);
+    }
+    return m;
+  }, [bubblePoints]);
+
+  // Legend click-to-filter: isolate one rank tier
+  const visibleBubblePoints = useMemo(() => {
+    if (selectedBucket === null) return bubblePoints;
+    return bubblePoints.filter((p) => bubbleTierLabel(p.normalized) === selectedBucket);
+  }, [bubblePoints, selectedBucket]);
+
   const pointMarkers = useMemo(() => {
     if (mode !== "points" || !effValCol || !effLatCol || !effLngCol || filteredRows.length === 0) return [];
     const raw = filteredRows.flatMap((row) => {
@@ -1579,14 +1624,26 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
       if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) return [];
       const val = row[effValCol];
       if (val == null) return [];
-      return [{ lat, lng, val, color: colorForValue(currentScheme, val), label: effLabelCol ? String(row[effLabelCol] ?? "") : "", row }];
+      return [{
+        lat, lng, val,
+        color: colorForValue(currentScheme, val),
+        bucketKey: bucketKeyForValue(currentScheme, val),
+        label: effLabelCol ? String(row[effLabelCol] ?? "") : "",
+        row,
+      }];
     });
     return decimatePoints(raw);
   }, [mode, filteredRows, effValCol, effLatCol, effLngCol, effLabelCol, currentScheme]);
 
+  // Legend click-to-filter: isolate one value bucket/category
+  const visiblePointMarkers = useMemo(() => {
+    if (selectedBucket === null) return pointMarkers;
+    return pointMarkers.filter((p) => p.bucketKey === selectedBucket);
+  }, [pointMarkers, selectedBucket]);
+
   const allMapPoints = mode === "bubble"
-    ? bubblePoints.map((p) => ({ lat: p.lat, lng: p.lng }))
-    : pointMarkers.map((p) => ({ lat: p.lat, lng: p.lng }));
+    ? visibleBubblePoints.map((p) => ({ lat: p.lat, lng: p.lng }))
+    : visiblePointMarkers.map((p) => ({ lat: p.lat, lng: p.lng }));
 
   const bucketCounters = useMemo(() => {
     if (mode !== "points" || !effValCol || filteredRows.length === 0) return new Map<string, number>();
@@ -1627,12 +1684,12 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
           </select>
 
           {/* mode pills */}
-          <button type="button" onClick={() => setMode("bubble")}
+          <button type="button" onClick={() => { setMode("bubble"); setSelectedBucket(null); }}
             title="Bubble mode"
             className={`p-1.5 rounded border text-xs transition-all ${mode === "bubble" ? "bg-background border-border text-foreground shadow-sm" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
             <Layers className="h-3.5 w-3.5" />
           </button>
-          <button type="button" onClick={() => setMode("points")}
+          <button type="button" onClick={() => { setMode("points"); setSelectedBucket(null); }}
             title="GPS Points mode"
             className={`p-1.5 rounded border text-xs transition-all ${mode === "points" ? "bg-background border-border text-foreground shadow-sm" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
             <MapPin className="h-3.5 w-3.5" />
@@ -1666,7 +1723,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
             <label className="text-[10px] text-muted-foreground block mb-0.5">Collection</label>
             <select
               value={filterCollection}
-              onChange={(e) => setFilterCollection(e.target.value)}
+              onChange={(e) => { setFilterCollection(e.target.value); setSelectedGroup(null); }}
               className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
             >
               <option value="">— Όλα —</option>
@@ -1681,7 +1738,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
             <label className="text-[10px] text-muted-foreground block mb-0.5">ASideLocation</label>
             <select
               value={filterLocation}
-              onChange={(e) => setFilterLocation(e.target.value)}
+              onChange={(e) => { setFilterLocation(e.target.value); setSelectedGroup(null); }}
               className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
             >
               <option value="">— Όλες —</option>
@@ -1745,9 +1802,23 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
             </span>
             <span>/ {filteredRows.length !== rows.length ? `${filteredRows.length} filtered /` : ""} {rows.length} rows</span>
             {executionTime != null && <span className="ml-auto">{executionTime.toFixed(0)} ms</span>}
+            {selectedGroup !== null && (
+              <button type="button" onClick={() => setSelectedGroup(null)}
+                title="Καθαρισμός επιλογής ομάδας — εμφάνιση όλων"
+                className="ml-1 flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 truncate max-w-[160px]">
+                <X className="h-2.5 w-2.5 shrink-0" /> <span className="truncate">{selectedGroup}</span>
+              </button>
+            )}
+            {selectedBucket !== null && (
+              <button type="button" onClick={() => setSelectedBucket(null)}
+                title="Καθαρισμός επιλογής legend — εμφάνιση όλων"
+                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 truncate max-w-[160px]">
+                <X className="h-2.5 w-2.5 shrink-0" /> <span className="truncate">{selectedBucket}</span>
+              </button>
+            )}
             {(filterCollection || filterLocation) && (
-              <button type="button" onClick={() => { setFilterCollection(""); setFilterLocation(""); setFilterNRARFCN(""); }}
-                className="ml-1 text-primary/70 hover:text-primary flex items-center gap-0.5">
+              <button type="button" onClick={() => { setFilterCollection(""); setFilterLocation(""); setFilterNRARFCN(""); setSelectedGroup(null); setSelectedBucket(null); }}
+                className="text-primary/70 hover:text-primary flex items-center gap-0.5">
                 <X className="h-2.5 w-2.5" /> reset
               </button>
             )}
@@ -1782,16 +1853,24 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
           />
           <MapBounds points={allMapPoints} />
 
-          {mode === "bubble" && bubblePoints.map((pt, i) => {
+          {mode === "bubble" && visibleBubblePoints.map((pt, i) => {
             const { fill, stroke } = bubbleColor(pt.normalized);
             const label = effLabelCol ? String(pt.row[effLabelCol] ?? `#${i}`) : `#${i}`;
             const extra = Object.entries(pt.row).filter(([k]) => k !== effLabelCol && k !== effLatCol && k !== effLngCol && k !== effQtyCol);
             return (
               <CircleMarker key={i} center={[pt.lat, pt.lng]} radius={pt.radius}
-                pathOptions={{ fillColor: fill, fillOpacity: 0.78, color: stroke, weight: 2 }}>
+                pathOptions={{ fillColor: fill, fillOpacity: 0.78, color: stroke, weight: 2 }}
+                eventHandlers={{
+                  click: () => effLabelCol && setSelectedGroup((g) => (g === label ? null : label)),
+                }}>
                 <Tooltip direction="top" offset={[0, -pt.radius]} opacity={0.97}>
                   <div className="font-sans text-center space-y-0.5 min-w-[120px]">
                     <div className="font-bold text-xs border-b border-gray-200 pb-1 mb-1">{label}</div>
+                    {effLabelCol && (
+                      <div className="text-[9px] text-gray-400 italic">
+                        {selectedGroup === label ? "κλικ για επαναφορά όλων" : "κλικ για προβολή μόνο αυτής"}
+                      </div>
+                    )}
                     <div className="text-xs">
                       <span className="text-gray-500">{effQtyCol}:</span>{" "}
                       <span className="font-mono font-bold" style={{ color: stroke }}>
@@ -1809,13 +1888,16 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
             );
           })}
 
-          {mode === "points" && pointMarkers.map((pt, i) => {
+          {mode === "points" && visiblePointMarkers.map((pt, i) => {
             const displayVal = typeof pt.val === "number"
               ? (pt.val % 1 === 0 ? pt.val.toLocaleString() : pt.val.toFixed(2))
               : String(pt.val);
             return (
               <CircleMarker key={i} center={[pt.lat, pt.lng]} radius={4}
-                pathOptions={{ fillColor: pt.color, fillOpacity: 0.85, color: pt.color, weight: 1 }}>
+                pathOptions={{ fillColor: pt.color, fillOpacity: 0.85, color: pt.color, weight: 1 }}
+                eventHandlers={{
+                  click: () => pt.label && setSelectedGroup((g) => (g === pt.label ? null : pt.label)),
+                }}>
                 <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
                   <div className="font-sans text-center space-y-0.5">
                     {pt.label && <div className="font-bold text-xs border-b border-gray-200 pb-0.5 mb-0.5">{pt.label}</div>}
@@ -1823,6 +1905,11 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
                       <span className="text-gray-500">{effValCol}:</span>{" "}
                       <span className="font-mono font-bold" style={{ color: pt.color }}>{displayVal}</span>
                     </div>
+                    {pt.label && (
+                      <div className="text-[9px] text-gray-400 italic">
+                        {selectedGroup === pt.label ? "κλικ για επαναφορά όλων" : "κλικ για προβολή μόνο αυτής"}
+                      </div>
+                    )}
                   </div>
                 </Tooltip>
               </CircleMarker>
@@ -1835,29 +1922,53 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
           <div className="absolute bottom-2 right-2 bg-card/95 backdrop-blur-sm border border-border/60 rounded-md p-1.5 space-y-0.5 z-[1000] shadow-md max-h-[220px] overflow-y-auto min-w-[140px]">
             {mode === "bubble" ? (
               <>
-                <p className="text-[8px] font-bold uppercase tracking-widest text-muted-foreground mb-0.5">Κλίμακα</p>
-                {[
-                  { label: "Πολύ Υψηλό",  fill: "#ef4444" },
-                  { label: "Υψηλό",       fill: "#f97316" },
-                  { label: "Μέτριο",      fill: "#eab308" },
-                  { label: "Χαμηλό",      fill: "#22c55e" },
-                  { label: "Πολύ Χαμηλό", fill: "#3b82f6" },
-                ].map(({ label, fill }) => (
-                  <div key={label} className="flex items-center gap-1">
-                    <div className="rounded-full shrink-0" style={{ width: 7, height: 7, backgroundColor: fill }} />
-                    <span className="text-[9px] text-muted-foreground">{label}</span>
-                  </div>
-                ))}
+                <div className="flex items-center justify-between gap-1 mb-0.5">
+                  <p className="text-[8px] font-bold uppercase tracking-widest text-muted-foreground">Κλίμακα</p>
+                  {selectedBucket !== null && (
+                    <button type="button" onClick={() => setSelectedBucket(null)}
+                      title="Εμφάνιση όλων" className="text-primary/70 hover:text-primary">
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  )}
+                </div>
+                {BUBBLE_TIERS.map(({ label, fill }) => {
+                  const cnt = bubbleTierCounts.get(label) ?? 0;
+                  const active = selectedBucket === label;
+                  return (
+                    <button type="button" key={label} disabled={cnt === 0}
+                      title={cnt > 0 ? "Κλικ για προβολή μόνο αυτού του επιπέδου" : undefined}
+                      onClick={() => setSelectedBucket((s) => (s === label ? null : label))}
+                      className={`w-full flex items-center gap-1 rounded px-0.5 text-left transition-colors ${cnt === 0 ? "opacity-25 cursor-default" : "cursor-pointer hover:bg-primary/10"} ${active ? "bg-primary/15 ring-1 ring-inset ring-primary/40" : ""}`}>
+                      <div className="rounded-full shrink-0" style={{ width: 7, height: 7, backgroundColor: fill }} />
+                      <span className="text-[9px] text-muted-foreground flex-1 leading-none">{label}</span>
+                      {cnt > 0 && (
+                        <span className="text-[8px] font-mono text-muted-foreground/60 whitespace-nowrap">{cnt.toLocaleString()}</span>
+                      )}
+                    </button>
+                  );
+                })}
                 <p className="text-[8px] text-muted-foreground border-t border-border/50 pt-0.5 mt-0.5">∝ {effQtyCol || "qty"}</p>
               </>
             ) : (
               <>
-                <p className="text-[8px] font-bold uppercase tracking-widest text-muted-foreground mb-0.5 truncate">{currentScheme.label}</p>
+                <div className="flex items-center justify-between gap-1 mb-0.5">
+                  <p className="text-[8px] font-bold uppercase tracking-widest text-muted-foreground truncate">{currentScheme.label}</p>
+                  {selectedBucket !== null && (
+                    <button type="button" onClick={() => setSelectedBucket(null)}
+                      title="Εμφάνιση όλων" className="text-primary/70 hover:text-primary shrink-0">
+                      <X className="h-2.5 w-2.5" />
+                    </button>
+                  )}
+                </div>
                 {currentScheme.type === "range"
                   ? currentScheme.buckets.map((b) => {
                       const cnt = bucketCounters.get(b.label) ?? 0;
+                      const active = selectedBucket === b.label;
                       return (
-                        <div key={b.label} className={`flex items-center gap-1 ${cnt === 0 ? "opacity-25" : ""}`}>
+                        <button type="button" key={b.label} disabled={cnt === 0}
+                          title={cnt > 0 ? "Κλικ για προβολή μόνο αυτού του εύρους" : undefined}
+                          onClick={() => setSelectedBucket((s) => (s === b.label ? null : b.label))}
+                          className={`w-full flex items-center gap-1 rounded px-0.5 text-left transition-colors ${cnt === 0 ? "opacity-25 cursor-default" : "cursor-pointer hover:bg-primary/10"} ${active ? "bg-primary/15 ring-1 ring-inset ring-primary/40" : ""}`}>
                           <div className="rounded-full shrink-0" style={{ width: 7, height: 7, backgroundColor: b.color }} />
                           <span className="text-[9px] text-muted-foreground flex-1 leading-none">{b.label}</span>
                           {cnt > 0 && (
@@ -1865,13 +1976,17 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
                               {cnt.toLocaleString()} <span className="text-primary/70">{(cnt / pointsTotal * 100).toFixed(1)}%</span>
                             </span>
                           )}
-                        </div>
+                        </button>
                       );
                     })
                   : currentScheme.categories.map((c) => {
                       const cnt = bucketCounters.get(c.value) ?? 0;
+                      const active = selectedBucket === c.value;
                       return (
-                        <div key={c.value} className={`flex items-center gap-1 ${cnt === 0 ? "opacity-25" : ""}`}>
+                        <button type="button" key={c.value} disabled={cnt === 0}
+                          title={cnt > 0 ? "Κλικ για προβολή μόνο αυτής της κατηγορίας" : undefined}
+                          onClick={() => setSelectedBucket((s) => (s === c.value ? null : c.value))}
+                          className={`w-full flex items-center gap-1 rounded px-0.5 text-left transition-colors ${cnt === 0 ? "opacity-25 cursor-default" : "cursor-pointer hover:bg-primary/10"} ${active ? "bg-primary/15 ring-1 ring-inset ring-primary/40" : ""}`}>
                           <div className="rounded-full shrink-0" style={{ width: 7, height: 7, backgroundColor: c.color }} />
                           <span className="text-[9px] text-muted-foreground flex-1 leading-none">{c.value}</span>
                           {cnt > 0 && (
@@ -1879,7 +1994,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
                               {cnt.toLocaleString()} <span className="text-primary/70">{(cnt / pointsTotal * 100).toFixed(1)}%</span>
                             </span>
                           )}
-                        </div>
+                        </button>
                       );
                     })}
                 <p className="text-[8px] text-muted-foreground/60 border-t border-border/50 pt-0.5 mt-0.5 font-mono truncate">
