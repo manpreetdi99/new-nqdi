@@ -23,6 +23,7 @@ import {
   ApiClientError,
   fetchAllCalls,
   fetchDataCalls,
+  fetchServingBandTech,
   fetchTechnologyMix,
   fetchCollectionNames,
   fetchDatabases,
@@ -30,6 +31,7 @@ import {
   runBenchmarkApi,
   type AllCallsRow,
   type DataCallRow,
+  type ServingBandTechRow,
   type TechnologyMixRow,
 } from "@/lib/api";
 
@@ -229,6 +231,21 @@ const Index = () => {
   const [dataCallsRows, setDataCallsRows] = useState<DataCallRow[]>([]);
   /** Ανά-band technology mix (GSM 900/1800, LTE E-UTRA N, ...) για το SummaryTab — βλ. /api/technology_mix. */
   const [technologyMixRows, setTechnologyMixRows] = useState<TechnologyMixRow[]>([]);
+  // Ξεχωριστό dataset για το Summary tab: ίδιο database/collections με το "All Calls" αλλά ΠΑΝΤΑ
+  // όλα τα locations — το Locations φίλτρο του "Edit Filters" panel δεν πρέπει να το περιορίζει
+  // (Attachment C αγνοεί όλα τα global φίλτρα, όχι μόνο session valid / status / file group).
+  const [summaryAllCallsRows, setSummaryAllCallsRows] = useState<AllCallsRow[]>([]);
+  const [summaryDataCallsRows, setSummaryDataCallsRows] = useState<DataCallRow[]>([]);
+  const [summaryTechnologyMixRows, setSummaryTechnologyMixRows] = useState<TechnologyMixRow[]>([]);
+  /** Serving Band (NR) / Serving Technology (per Time) για το "PS Data Stats" block — βλ. /api/serving_band_tech. */
+  const [summaryServingBandTechRows, setSummaryServingBandTechRows] = useState<ServingBandTechRow[]>([]);
+  // Database/collections επιλογή αποκλειστικά για το Summary tab — ΔΕΝ μοιράζεται state με το
+  // selectedDatabase/selectedCallsCollections του "Edit Filters" panel / "All Calls" tab, ώστε η
+  // επιλογή στο ένα tab να μην αλλάζει καθόλου το άλλο.
+  const [summaryDatabase, setSummaryDatabase] = useLocalStorage<string>("perf-insights-summary-db", "");
+  const [summaryCollections, setSummaryCollections] = useLocalStorage<string[]>("perf-insights-summary-collections", []);
+  const [summaryCollectionNames, setSummaryCollectionNames] = useState<string[]>([]);
+  const [summaryCollectionsLoading, setSummaryCollectionsLoading] = useState(false);
   const [dataCallsLoading, setDataCallsLoading] = useState(false);
   const [selectedDataSessionId, setSelectedDataSessionId] = useState<string | null>(null);
   const [dataSessionsView, setDataSessionsView] = useLocalStorage<"flat" | "cycle">("perf-insights-data-sessions-view", "flat");
@@ -293,6 +310,29 @@ const Index = () => {
 
   const clearCollectionSelection = () => {
     setSelectedCallsCollections([]);
+  };
+
+  // Summary tab: ίδιο μοτίβο με toggleCollection/selectAllCollections/clearCollectionSelection
+  // παραπάνω, αλλά πάνω στο δικό του, ανεξάρτητο summaryCollections state.
+  const toggleSummaryCollection = (collectionName: string) => {
+    setSummaryCollections((prev) =>
+      prev.includes(collectionName)
+        ? prev.filter((item) => item !== collectionName)
+        : [...prev, collectionName]
+    );
+  };
+
+  const selectAllSummaryCollections = () => {
+    setSummaryCollections(summaryCollectionNames);
+  };
+
+  const clearSummaryCollectionSelection = () => {
+    setSummaryCollections([]);
+  };
+
+  const handleSummaryDatabaseChange = (newDb: string) => {
+    setSummaryDatabase(newDb);
+    setSummaryCollections([]);
   };
 
   const toggleLocation = (locationName: string) => {
@@ -413,6 +453,31 @@ const Index = () => {
     loadCollections();
   }, [selectedDatabase]);
 
+  // Summary tab: ίδιο fetch με το loadCollections παραπάνω, αλλά κλειδωμένο στο summaryDatabase
+  // (ανεξάρτητο από το selectedDatabase του "Edit Filters" panel).
+  useEffect(() => {
+    const loadSummaryCollections = async () => {
+      if (!summaryDatabase) {
+        setSummaryCollectionNames([]);
+        return;
+      }
+
+      setSummaryCollectionsLoading(true);
+
+      try {
+        const names = await fetchCollectionNames(summaryDatabase);
+        setSummaryCollectionNames(names);
+      } catch (err: any) {
+        console.error("Failed to fetch summary collections:", err);
+        setSummaryCollectionNames([]);
+      } finally {
+        setSummaryCollectionsLoading(false);
+      }
+    };
+
+    loadSummaryCollections();
+  }, [summaryDatabase]);
+
   useEffect(() => {
     const loadLocations = async () => {
       if (!selectedDatabase || selectedCallsCollections.length === 0) {
@@ -505,6 +570,60 @@ const Index = () => {
 
     loadAll();
   }, [selectedDatabase, selectedCallsCollections, selectedLocations, locations]);
+
+  // Summary tab: δικό του database/collections (summaryDatabase/summaryCollections, καθόλου σχέση με
+  // selectedDatabase/selectedCallsCollections) και ΠΑΝΤΑ effectiveLocations = [] (όλα τα locations).
+  // Έτσι δεν ξαναφορτώνει ποτέ όταν αλλάζει κάτι στο "Edit Filters" panel / "All Calls" tab.
+  useEffect(() => {
+    const loadSummary = async () => {
+      if (!summaryDatabase || summaryCollections.length === 0) {
+        setSummaryAllCallsRows([]);
+        setSummaryDataCallsRows([]);
+        setSummaryTechnologyMixRows([]);
+        setSummaryServingBandTechRows([]);
+        return;
+      }
+
+      const [voiceResult, dataResult, technologyMixResult, servingBandTechResult] = await Promise.allSettled([
+        fetchAllCalls(summaryDatabase, summaryCollections, []),
+        fetchDataCalls(summaryDatabase, summaryCollections, []),
+        fetchTechnologyMix(summaryDatabase, summaryCollections, []),
+        fetchServingBandTech(summaryDatabase, summaryCollections, []),
+      ]);
+
+      if (voiceResult.status === "fulfilled") {
+        setSummaryAllCallsRows(voiceResult.value);
+      } else {
+        console.error("Failed to fetch summary voice calls:", voiceResult.reason);
+        setSummaryAllCallsRows([]);
+      }
+
+      if (dataResult.status === "fulfilled") {
+        setSummaryDataCallsRows(dataResult.value);
+      } else {
+        console.error("Failed to fetch summary data calls:", dataResult.reason);
+        setSummaryDataCallsRows([]);
+      }
+
+      if (technologyMixResult.status === "fulfilled") {
+        setSummaryTechnologyMixRows(technologyMixResult.value);
+      } else {
+        console.error("Failed to fetch summary technology mix:", technologyMixResult.reason);
+        setSummaryTechnologyMixRows([]);
+      }
+
+      // Χωρίς toast σε αποτυχία, ίδιο σκεπτικό με το technology mix: το "Serving
+      // Band / Technology" block απλά δεν εμφανίζεται στο PS Data Stats.
+      if (servingBandTechResult.status === "fulfilled") {
+        setSummaryServingBandTechRows(servingBandTechResult.value);
+      } else {
+        console.error("Failed to fetch summary serving band/tech:", servingBandTechResult.reason);
+        setSummaryServingBandTechRows([]);
+      }
+    };
+
+    loadSummary();
+  }, [summaryDatabase, summaryCollections]);
 
   const handleRunQueries = async (queries: string[]) => {
     if (!selectedDatabase) return;
@@ -634,24 +753,6 @@ const Index = () => {
     const validIds = new Set(filteredAllCallsRows.map((r) => r.SessionId));
     return callRecords.filter((c) => validIds.has(c.callId));
   }, [callRecords, filteredAllCallsRows, sessionValidFilter, statusFilters, selectedFileGroupIds]);
-
-  // Ίδια global φίλτρα με τα voice calls (session valid / location / file group) αλλά για τα data test rows —
-  // ώστε το Summary (Attachment C) να δείχνει την ίδια βάση με το tab "All Calls" αντί για ολόκληρο το dataset.
-  const filteredDataCallsRows = useMemo(() => {
-    return dataCallsRows.filter((row) => {
-      if (sessionValidFilter === "1" && row.isValid !== 1) return false;
-      if (sessionValidFilter === "0" && row.isValid !== 0) return false;
-
-      if (locationTableFilter.length > 0) {
-        const loc = row.Location ?? "";
-        if (!locationTableFilter.includes(loc)) return false;
-      }
-
-      if (selectedFileGroupSessionIds && !selectedFileGroupSessionIds.dataIds.has(String(row.SessionId))) return false;
-
-      return true;
-    });
-  }, [dataCallsRows, sessionValidFilter, locationTableFilter, selectedFileGroupSessionIds]);
 
   const locationSummary = useMemo(() => {
     const map = new Map<string, { complete: number; drop: number; fail: number; sysRelease: number; total: number }>();
@@ -1050,7 +1151,7 @@ const Index = () => {
             </div>
           </div>
 
-          {!["queries", "query-map", "map2", "validation"].includes(activeTab) && (
+          {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
             <div className="flex items-center gap-2">
               {/* Edit Filters button */}
               <button
@@ -1079,7 +1180,7 @@ const Index = () => {
           )}
 
           <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-            {!["queries", "query-map", "map2", "validation"].includes(activeTab) && (
+            {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
               <button
                 type="button"
                 onClick={clearCallsFilters}
@@ -1104,7 +1205,7 @@ const Index = () => {
                 </motion.button>
               )}
             </AnimatePresence>
-            {!["queries", "query-map", "map2", "validation"].includes(activeTab) && (
+            {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
               <span className="hidden xl:inline">{filteredCallRecords.length} calls recorded</span>
             )}
           </div>
@@ -1140,21 +1241,26 @@ const Index = () => {
           </div>
 
           <TabsContent value="Summary">
-            {/* Attachment C χρησιμοποιεί τα ίδια φιλτραρισμένα rows (session valid / status / location / file group)
-                με το tab "All Calls" — "Edit Filters" στο header είναι διαθέσιμο και εδώ. */}
+            {/* Attachment C δεν έχει ΚΑΜΙΑ σχέση με το "Edit Filters" panel / "All Sessions" tab:
+                δικό του database/collections state (summaryDatabase/summaryCollections — βλ. πιο πάνω),
+                δικό του dataset (summaryAllCallsRows/summaryDataCallsRows/summaryTechnologyMixRows, fetch
+                με effectiveLocations πάντα []). Αλλάζοντας db/collection εδώ ΔΕΝ αγγίζει το selectedDatabase/
+                selectedCallsCollections του άλλου tab, και το αντίστροφο. Το "Valid calls" checkbox μέσα
+                στο SummaryTab είναι δικό του, ανεξάρτητο φίλτρο. */}
             <SummaryTab
-              allCallsRows={filteredAllCallsRows}
-              dataCallsRows={filteredDataCallsRows}
-              technologyMixRows={technologyMixRows}
-              database={selectedDatabase}
-              collections={selectedCallsCollections}
+              allCallsRows={summaryAllCallsRows}
+              dataCallsRows={summaryDataCallsRows}
+              technologyMixRows={summaryTechnologyMixRows}
+              servingBandTechRows={summaryServingBandTechRows}
+              database={summaryDatabase}
+              collections={summaryCollections}
               databases={databases}
-              onDatabaseChange={handleDatabaseChange}
-              collectionNames={collectionNames}
-              collectionsLoading={collectionsLoading}
-              onToggleCollection={toggleCollection}
-              onSelectAllCollections={selectAllCollections}
-              onClearCollections={clearCollectionSelection}
+              onDatabaseChange={handleSummaryDatabaseChange}
+              collectionNames={summaryCollectionNames}
+              collectionsLoading={summaryCollectionsLoading}
+              onToggleCollection={toggleSummaryCollection}
+              onSelectAllCollections={selectAllSummaryCollections}
+              onClearCollections={clearSummaryCollectionSelection}
             />
           </TabsContent>
 
