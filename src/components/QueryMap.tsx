@@ -10,6 +10,8 @@ import {
   X,
   Layers,
   ArrowRightLeft,
+  Columns3,
+  RectangleHorizontal,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { runBenchmarkApi, fetchCollectionNames, fetchLocations } from "@/lib/api";
@@ -2027,8 +2029,9 @@ interface QueryMapProps {
   defaultDatabase?: string;
 }
 
-// ── Main component — three-panel grid ────────────────────────────────────────
+// ── Main component — starts as 1 map, expandable to 3 ────────────────────────
 const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
+  const [panelCount, setPanelCount] = useState<1 | 3>(1);
   const [syncTargets, setSyncTargets] = useState<[SyncPayload | null, SyncPayload | null]>([null, null]);
   const [runAllTrigger, setRunAllTrigger] = useState(0);
 
@@ -2061,35 +2064,54 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
     <div className="space-y-3">
       <div className="flex items-center gap-2">
         <MapPin className="h-4 w-4 text-primary shrink-0" />
-        <h2 className="text-sm font-semibold">Query Map — Τριπλός Χάρτης</h2>
+        <h2 className="text-sm font-semibold">
+          Query Map{panelCount === 3 ? " — Τριπλός Χάρτης" : ""}
+        </h2>
         <span className="text-[11px] text-muted-foreground">
-          Κάθε χάρτης έχει ανεξάρτητο query, φίλτρα και χρωματική κλίμακα
+          {panelCount === 3
+            ? "Κάθε χάρτης έχει ανεξάρτητο query, φίλτρα και χρωματική κλίμακα"
+            : "Ανεξάρτητο query, φίλτρα και χρωματική κλίμακα"}
         </span>
+
+        <button
+          type="button"
+          onClick={() => setPanelCount((c) => (c === 1 ? 3 : 1))}
+          title={panelCount === 1 ? "Διαίρεση σε 3 χάρτες" : "Επιστροφή σε 1 χάρτη"}
+          className="ml-auto h-7 px-2.5 gap-1.5 flex items-center rounded border border-border text-xs text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all"
+        >
+          {panelCount === 1 ? <Columns3 className="h-3.5 w-3.5" /> : <RectangleHorizontal className="h-3.5 w-3.5" />}
+          {panelCount === 1 ? "3 Χάρτες" : "1 Χάρτης"}
+        </button>
+
         <Button
           size="sm"
-          className="ml-auto h-7 px-3 gap-1.5"
+          className="h-7 px-3 gap-1.5"
           onClick={() => setRunAllTrigger(v => v + 1)}
         >
           <Play className="h-3 w-3" />
           Run All
         </Button>
       </div>
-      <div className="grid grid-cols-3 gap-3">
+      <div className={`grid gap-3 ${panelCount === 3 ? "grid-cols-3" : "grid-cols-1"}`}>
         <SingleMapPanel
           databases={databases} defaultDatabase={defaultDatabase}
-          panelIndex={0} onSyncRequest={handleSyncRequest}
+          panelIndex={0} onSyncRequest={panelCount === 3 ? handleSyncRequest : undefined}
           runTrigger={runAllTrigger}
         />
-        <SingleMapPanel
-          databases={databases} defaultDatabase={defaultDatabase}
-          panelIndex={1} syncTarget={syncTargets[0]}
-          runTrigger={runAllTrigger}
-        />
-        <SingleMapPanel
-          databases={databases} defaultDatabase={defaultDatabase}
-          panelIndex={2} syncTarget={syncTargets[1]}
-          runTrigger={runAllTrigger}
-        />
+        {panelCount === 3 && (
+          <>
+            <SingleMapPanel
+              databases={databases} defaultDatabase={defaultDatabase}
+              panelIndex={1} syncTarget={syncTargets[0]}
+              runTrigger={runAllTrigger}
+            />
+            <SingleMapPanel
+              databases={databases} defaultDatabase={defaultDatabase}
+              panelIndex={2} syncTarget={syncTargets[1]}
+              runTrigger={runAllTrigger}
+            />
+          </>
+        )}
       </div>
     </div>
   );
