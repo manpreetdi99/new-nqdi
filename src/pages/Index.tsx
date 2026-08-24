@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, Fragment } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, SlidersHorizontal, X, Wifi, ArrowUp } from "lucide-react";
+import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import QueryEditor from "@/components/QueryEditor";
 import ResultsTable from "@/components/ResultsTable";
@@ -282,6 +282,7 @@ const Index = () => {
   const [statusFilters, setStatusFilters] = useState<StatusFilterKey[]>([]);
   const [lastClickedRowId, setLastClickedRowId] = useState<string | null>(null);
   const [showFilterPanel, setShowFilterPanel] = useState(false);
+  const [listFiltersCollapsed, setListFiltersCollapsed] = useState(false);
   const [locationTableFilter, setLocationTableFilter] = useState<string[]>([]);
   const [selectedFileGroupIds, setSelectedFileGroupIds] = useState<string[]>([]);
 
@@ -1345,13 +1346,30 @@ const Index = () => {
             </div>
 
             {callsSubTab === "list" && (
-            <div className="grid grid-cols-1 lg:grid-cols-[280px_1fr] gap-4 items-start">
-              <aside className="hidden space-y-2 lg:sticky lg:top-24 lg:block">
+            <div className="flex flex-col gap-4 items-start lg:flex-row">
+              <motion.aside
+                initial={false}
+                animate={{ width: listFiltersCollapsed ? 40 : 280 }}
+                transition={{ type: "spring", stiffness: 320, damping: 32 }}
+                className="hidden shrink-0 overflow-hidden lg:sticky lg:top-24 lg:block"
+              >
+              {listFiltersCollapsed ? (
+                <button
+                  type="button"
+                  onClick={() => setListFiltersCollapsed(false)}
+                  title="Show filters"
+                  className="flex h-9 w-9 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground hover:bg-muted/70 hover:text-foreground transition-colors"
+                >
+                  <SlidersHorizontal className="h-4 w-4" />
+                </button>
+              ) : (
+              <div className="w-[280px] space-y-2">
                 <div className="bg-card border border-border rounded-lg p-2">
                   <div className="mb-1.5 flex items-center justify-between">
                     <h3 className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
                       Filters
                     </h3>
+                    <div className="flex items-center gap-1">
                     <button
                       type="button"
                       onClick={clearCallsFilters}
@@ -1359,6 +1377,15 @@ const Index = () => {
                     >
                       Clear filters
                     </button>
+                    <button
+                      type="button"
+                      onClick={() => setListFiltersCollapsed(true)}
+                      title="Hide filters"
+                      className="p-1 rounded border border-border bg-muted hover:bg-muted/70 text-muted-foreground"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </button>
+                    </div>
                   </div>
 
                   <div className="space-y-2">
@@ -1600,9 +1627,11 @@ const Index = () => {
                     )}
                   </div>
                 </div>
-              </aside>
+              </div>
+              )}
+              </motion.aside>
 
-              <div className="space-y-4">
+              <div className="min-w-0 flex-1 space-y-4">
 
               <div className="overflow-hidden rounded-xl border border-border bg-card shadow-sm">
                 <div className="flex flex-col gap-3 border-b border-border bg-gradient-to-r from-primary/[0.07] via-transparent to-transparent px-3 py-3.5 sm:flex-row sm:flex-wrap sm:items-center sm:gap-6 sm:px-4 sm:py-2">

@@ -408,3 +408,94 @@ def get_technology_mix(
         return {"rows": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/serving_band_tech")
+def get_serving_band_tech(
+    database: str = Query(..., min_length=1),
+    collection: list[str] | None = Query(default=None),
+    location: list[str] | None = Query(default=None),
+):
+    """Serving Band (NR) / Serving Technology (per Time) — ποσοστά για τα PS Data
+    DL tests (Capacity DL / FTP DL / HTTP TRANSFER (DL)), για το SummaryTab "PS Data
+    Stats" block. Ίδια μεθοδολογία με το reference query στο "bi queries" (βλ. Ord
+    list στο buildServingBandTechTable): ένα "sample" = μία Position πάνω σε valid
+    DL data test· Technology = Technology.CurrTechnology της πιο πρόσφατης εγγραφής
+    πριν από το sample (NULL -> '#NODATA' = "No data transfer"). Η στήλη CurrTechnology
+    αποθηκεύει το raw 5G-NSA label ως 'LTE-5G NR' (με κενό) — γίνεται REPLACE σε
+    'LTE-5GNR' (χωρίς κενό, ίδιο με το reference SQL) ώστε να ταιριάζει με το literal
+    code του SERVING_BAND_TECH_METRICS στο frontend. Band = το NR band του
+    FactNR5GRadio/FactNR5GCellInfo πάνω στο ίδιο PosId, κανονικοποιημένο σε
+    "NR28"/"NR1"/"NR78" κ.λπ.
+
+    Επιστρέφει flat (location, kind, code, samples) rows, ΟΧΙ ήδη υπολογισμένα
+    ποσοστά — το ίδιο σχήμα με /api/technology_mix — ώστε το frontend να μπορεί να
+    αθροίσει ανά operator (buildServingBandTechTable) πριν διαιρέσει.
+    """
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        query = """
+            WITH BaseSamples AS (
+                SELECT fl.ASideLocation AS Location, p.PosId, p.TestId, p.MsgTime
+                FROM Sessions s
+                JOIN FileList fl ON fl.FileId = s.FileId
+                JOIN TestInfo ti ON ti.SessionId = s.SessionId
+                JOIN Position p ON p.TestId = ti.TestId
+                WHERE s.Valid = 1 AND ti.Valid = 1
+                  AND ti.TestName IN ('Capacity DL','FTP DL','HTTP TRANSFER (DL)')
+        """
+
+        params: list[object] = []
+        selected_collections = [col for col in (collection or []) if col and col.strip()]
+        if selected_collections:
+            placeholders = ", ".join(["?"] * len(selected_collections))
+            query += f" AND fl.CollectionName IN ({placeholders})"
+            params.extend(selected_collections)
+
+        selected_locations = [loc for loc in (location or []) if loc and loc.strip()]
+        if selected_locations:
+            placeholders = ", ".join(["?"] * len(selected_locations))
+            query += f" AND fl.ASideLocation IN ({placeholders})"
+            params.extend(selected_locations)
+
+        query += """
+            )
+            SELECT 'TECH' AS kind, b.Location AS location,
+                   REPLACE(ISNULL(t.CurrTechnology, '#NODATA'), 'LTE-5G NR', 'LTE-5GNR') AS code,
+                   COUNT(*) AS samples
+            FROM BaseSamples b
+            OUTER APPLY (
+                SELECT TOP 1 t2.CurrTechnology
+                FROM Technology t2
+                WHERE t2.TestId = b.TestId AND t2.MsgTime < b.MsgTime
+                  AND t2.CurrTechnology IS NOT NULL
+                ORDER BY t2.MsgTime DESC
+            ) t
+            GROUP BY b.Location, REPLACE(ISNULL(t.CurrTechnology, '#NODATA'), 'LTE-5G NR', 'LTE-5GNR')
+
+            UNION ALL
+
+            SELECT 'BAND' AS kind, b.Location AS location,
+                   'NR' + REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ci.Band))), 'NR', ''), 'N', '') AS code,
+                   COUNT(*) AS samples
+            FROM BaseSamples b
+            JOIN FactNR5GRadio r ON r.PosId = b.PosId
+            JOIN FactNR5GCellInfo ci ON ci.NR5GCACellInfoId = r.FactIdFactNR5GCellInfo
+            WHERE ci.Band IS NOT NULL
+            GROUP BY b.Location, 'NR' + REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ci.Band))), 'NR', ''), 'N', '')
+        """
+
+        cursor.execute(query, tuple(params))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+
+        data = [{columns[idx]: row[idx] for idx in range(len(columns))} for row in rows]
+
+        conn.close()
+
+        return {"rows": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

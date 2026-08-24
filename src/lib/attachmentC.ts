@@ -12,7 +12,7 @@
  * χωρίς Excel. Ο operator και το mode προκύπτουν από το ASideLocation
  * (π.χ. "Cosmote Free A", "Vodafone GSM A", "Nova Data A").
  */
-import type { AllCallsRow, DataCallRow, TechnologyMixRow } from "@/lib/api";
+import type { AllCallsRow, DataCallRow, ServingBandTechRow, TechnologyMixRow } from "@/lib/api";
 
 /* ────────────────────────── Operators & modes ────────────────────────── */
 
@@ -754,6 +754,105 @@ export const buildTechnologyMixTable = (
   for (const [key, counts] of perOperatorCounts) byOperator.set(key, detailedMixFromCounts(counts));
 
   return { byOperator, total: detailedMixFromCounts(totalCounts) };
+};
+
+/* ────────────────────────── Serving Band / Serving Technology (per Time) ────────────────────────── */
+
+/**
+ * Σταθερή λίστα γραμμών, ίδια σειρά/labels με το reference SQL (Serving Band NR +
+ * Serving Technology, για FTP DL / HTTP TRANSFER (DL) / Capacity DL — βλ.
+ * /api/serving_band_tech). Το ποσοστό κάθε γραμμής υπολογίζεται πάνω στο δικό της
+ * σύνολο: οι 3 πρώτες (BAND) πάνω στα δείγματα με γνωστό NR band, οι υπόλοιπες
+ * (TECH, incl. "No data transfer") πάνω σε ΟΛΑ τα δείγματα του test scope.
+ */
+export interface ServingBandTechMetricDef {
+  ord: number;
+  label: string;
+  kind: "BAND" | "TECH";
+  code: string;
+}
+
+export const SERVING_BAND_TECH_METRICS: ServingBandTechMetricDef[] = [
+  { ord: 1, label: "Serving Band (per Time) NR28 (%)", kind: "BAND", code: "NR28" },
+  { ord: 2, label: "Serving Band (per Time) NR1 (%)", kind: "BAND", code: "NR1" },
+  { ord: 3, label: "Serving Band (per Time) NR78 (%)", kind: "BAND", code: "NR78" },
+  { ord: 5, label: "Serving Technology (per Time) LTE-5GNR (%)", kind: "TECH", code: "LTE-5GNR" },
+  { ord: 6, label: "Serving Technology (per Time) LTE CA (%)", kind: "TECH", code: "LTE CA" },
+  { ord: 7, label: "Serving Technology (per Time) LTE (%)", kind: "TECH", code: "LTE" },
+  { ord: 8, label: "Serving Technology (per Time) HSPA+ (%)", kind: "TECH", code: "HSPA+" },
+  { ord: 9, label: "Serving Technology (per Time) HSPA (%)", kind: "TECH", code: "HSPA" },
+  { ord: 10, label: "Serving Technology (per Time) HSDPA (%)", kind: "TECH", code: "HSDPA" },
+  { ord: 11, label: "Serving Technology (per Time) R99(CELL_FACH) (%)", kind: "TECH", code: "R99(CELL_FACH)" },
+  { ord: 12, label: "Serving Technology (per Time) R99 (%)", kind: "TECH", code: "R99" },
+  { ord: 13, label: "Serving Technology (per Time) HSUPA (%)", kind: "TECH", code: "HSUPA" },
+  { ord: 14, label: "Serving Technology (per Time) GPRS (%)", kind: "TECH", code: "GPRS" },
+  { ord: 15, label: "Serving Technology (per Time) HSPA-DC (%)", kind: "TECH", code: "HSPA-DC" },
+  { ord: 16, label: "No data transfer (%)", kind: "TECH", code: "#NODATA" },
+];
+
+export interface ServingBandTechShare {
+  ord: number;
+  label: string;
+  kind: "BAND" | "TECH";
+  pct: number | null;
+  samples: number;
+  total: number;
+}
+
+const sumCounts = (counts: Map<string, number>): number => Array.from(counts.values()).reduce((sum, count) => sum + count, 0);
+
+const servingBandTechSharesFor = (bandCounts: Map<string, number>, techCounts: Map<string, number>): ServingBandTechShare[] => {
+  const bandTotal = sumCounts(bandCounts);
+  const techTotal = sumCounts(techCounts);
+
+  return SERVING_BAND_TECH_METRICS.map((metric) => {
+    const counts = metric.kind === "BAND" ? bandCounts : techCounts;
+    const total = metric.kind === "BAND" ? bandTotal : techTotal;
+    const samples = counts.get(metric.code) ?? 0;
+    return { ord: metric.ord, label: metric.label, kind: metric.kind, pct: total > 0 ? samples / total : null, samples, total };
+  });
+};
+
+/**
+ * Ίδιο σχήμα με buildTechnologyMixTable, πάνω στα (location, kind, code, samples)
+ * counts του /api/serving_band_tech: αθροίζει ανά operator (resolveOperator στο
+ * location) και υπολογίζει τα 16 σταθερά ποσοστά ανά operator + σύνολο.
+ */
+export const buildServingBandTechTable = (
+  rows: ServingBandTechRow[],
+): { byOperator: Map<string, ServingBandTechShare[]>; total: ServingBandTechShare[] } => {
+  const totalBandCounts = new Map<string, number>();
+  const totalTechCounts = new Map<string, number>();
+  const perOperatorBandCounts = new Map<string, Map<string, number>>();
+  const perOperatorTechCounts = new Map<string, Map<string, number>>();
+
+  for (const row of rows) {
+    const code = (row.code ?? "").trim();
+    if (!code || !(row.samples > 0)) continue;
+
+    const totalCounts = row.kind === "BAND" ? totalBandCounts : totalTechCounts;
+    totalCounts.set(code, (totalCounts.get(code) ?? 0) + row.samples);
+
+    const perOperatorCounts = row.kind === "BAND" ? perOperatorBandCounts : perOperatorTechCounts;
+    const operatorKey = resolveOperator(row.location).key;
+    const operatorCounts = perOperatorCounts.get(operatorKey) ?? new Map<string, number>();
+    operatorCounts.set(code, (operatorCounts.get(code) ?? 0) + row.samples);
+    perOperatorCounts.set(operatorKey, operatorCounts);
+  }
+
+  const operatorKeys = new Set<string>([...perOperatorBandCounts.keys(), ...perOperatorTechCounts.keys()]);
+  const byOperator = new Map<string, ServingBandTechShare[]>();
+  for (const operatorKey of operatorKeys) {
+    byOperator.set(
+      operatorKey,
+      servingBandTechSharesFor(
+        perOperatorBandCounts.get(operatorKey) ?? new Map<string, number>(),
+        perOperatorTechCounts.get(operatorKey) ?? new Map<string, number>(),
+      ),
+    );
+  }
+
+  return { byOperator, total: servingBandTechSharesFor(totalBandCounts, totalTechCounts) };
 };
 
 /* ────────────────────────── Report metadata ────────────────────────── */

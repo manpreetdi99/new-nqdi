@@ -10,8 +10,7 @@ import {
   X,
   Layers,
   ArrowRightLeft,
-  Columns3,
-  RectangleHorizontal,
+  Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { runBenchmarkApi, fetchCollectionNames, fetchLocations } from "@/lib/api";
@@ -908,25 +907,29 @@ ORDER BY ni.MsgTime`,
     colorScheme: "technology_data",
     labelCol: "Location",
     sql: `SELECT
-  P.latitude  AS latitude,
-  P.longitude AS longitude,
+  p.Latitude   AS latitude,
+  p.Longitude  AS longitude,
   t.CurrTechnology AS technology_data,
-  fl.ASideLocation AS Location
+  fl.ASideLocation AS Location,
+  p.MsgTime
 FROM Sessions AS s
-JOIN FileList AS fl ON fl.FileId = s.FileId
+JOIN FileList AS fl ON fl.FileId    = s.FileId
 JOIN TestInfo AS ti ON ti.SessionId = s.SessionId
-JOIN Position AS p  ON p.TestId = ti.TestId
-JOIN Technology AS t ON t.TestId = p.TestId
-  AND t.MsgTime = (
-    SELECT MAX(t2.MsgTime)
+JOIN Position AS p  ON p.TestId     = ti.TestId
+OUTER APPLY (
+    SELECT TOP 1 t2.CurrTechnology
     FROM Technology AS t2
-    WHERE t2.TestId = p.TestId
+    WHERE t2.TestId  = p.TestId
       AND t2.MsgTime < p.MsgTime
       AND t2.CurrTechnology IS NOT NULL
-  )
+    ORDER BY t2.MsgTime DESC
+) AS t
 WHERE s.Valid = 1 AND ti.Valid = 1
   AND fl.CollectionName = '{collection}'
   AND fl.ASideLocation  = '{location}'
+  AND ti.TestName IN ('Capacity DL','FTP DL','HTTP TRANSFER (DL)')   -- <<< Test Data Server DL
+  AND p.Latitude  IS NOT NULL AND p.Latitude  <> 0
+  AND p.Longitude IS NOT NULL AND p.Longitude <> 0
 ORDER BY p.MsgTime`,
   },
   {
@@ -1419,12 +1422,14 @@ interface SingleMapPanelProps {
   databases: string[];
   defaultDatabase?: string;
   panelIndex?: number;
+  label?: string;
+  onRemove?: () => void;
   syncTarget?: SyncPayload | null;
   onSyncRequest?: (payload: SyncPayload, collections: string[], locations: string[]) => void;
   runTrigger?: number;
 }
 
-const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncTarget, onSyncRequest, runTrigger }: SingleMapPanelProps) => {
+const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label, onRemove, syncTarget, onSyncRequest, runTrigger }: SingleMapPanelProps) => {
   // ── Local database + collections ──────────────────────────────────────────
   const [localDb, setLocalDb]               = useState(defaultDatabase);
   const [localCollections, setLocalCollections] = useState<string[]>([]);
@@ -1659,6 +1664,25 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, syncT
 
       {/* ── Controls ── */}
       <div className="p-2.5 space-y-2 border-b border-border bg-muted/20">
+
+        {/* Row -1: Panel label + remove (only when part of a multi-map split) */}
+        {(label || onRemove) && (
+          <div className="flex items-center justify-between -mt-0.5 -mb-1">
+            <span className="text-[10px] font-semibold text-muted-foreground/80 uppercase tracking-wide">
+              {label}
+            </span>
+            {onRemove && (
+              <button
+                type="button"
+                onClick={onRemove}
+                title="Αφαίρεση χάρτη"
+                className="p-1 -mr-1 -mt-1 rounded text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 transition-all"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+        )}
 
         {/* Row 0: Database selector */}
         <select
@@ -2029,18 +2053,45 @@ interface QueryMapProps {
   defaultDatabase?: string;
 }
 
-// ── Main component — starts as 1 map, expandable to 3 ────────────────────────
+// ── Uniform split grid: same column count keeps every panel the same size ────
+const MAX_PANELS = 4;
+
+function gridColsClass(n: number): string {
+  if (n <= 1) return "grid-cols-1";
+  if (n === 2) return "grid-cols-2";
+  if (n === 3) return "grid-cols-3";
+  return "grid-cols-2"; // 4 panels → uniform 2×2
+}
+
+// ── Main component — starts as 1 map, freely split into up to MAX_PANELS ────
 const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
-  const [panelCount, setPanelCount] = useState<1 | 3>(1);
-  const [syncTargets, setSyncTargets] = useState<[SyncPayload | null, SyncPayload | null]>([null, null]);
+  const [panels, setPanels] = useState<number[]>([0]);
+  const nextPanelId = useRef(1);
+  const [syncTargets, setSyncTargets] = useState<Record<number, SyncPayload | null>>({});
   const [runAllTrigger, setRunAllTrigger] = useState(0);
+
+  const addPanel = () => {
+    setPanels((prev) => (prev.length >= MAX_PANELS ? prev : [...prev, nextPanelId.current++]));
+  };
+
+  const removePanel = (id: number) => {
+    setPanels((prev) => (prev.length <= 1 ? prev : prev.filter((p) => p !== id)));
+    setSyncTargets((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
+  };
 
   const handleSyncRequest = (payload: SyncPayload, collections: string[], locations: string[]) => {
     // Detect operator from location first (e.g. "Cosmote Free A"), fall back to collection
     const refOp = detectOperator(payload.location) || detectOperator(payload.collection);
     const others = OPERATOR_GROUPS.filter(g => g.name !== refOp);
-    const targets: [SyncPayload | null, SyncPayload | null] = [null, null];
-    for (let i = 0; i < 2; i++) {
+    // Sync targets are the 2nd and 3rd map panels, if present
+    const targetIds = panels.slice(1, 3);
+    const updates: Record<number, SyncPayload | null> = {};
+    targetIds.forEach((id, i) => {
       const targetOp = others[i];
       // Swap location to the matching operator location (e.g. "Vodafone Free A")
       const locCandidates = locations.filter(l => detectOperator(l) === targetOp?.name);
@@ -2055,9 +2106,9 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
       const bestColl = collRefOp && targetOp && collCandidates.length > 0
         ? bestCollectionForOperator(payload.collection, collRefOp, targetOp.name, collCandidates) ?? payload.collection
         : payload.collection;
-      targets[i] = { ...payload, collection: bestColl, location: bestLoc };
-    }
-    setSyncTargets(targets);
+      updates[id] = { ...payload, collection: bestColl, location: bestLoc };
+    });
+    setSyncTargets((prev) => ({ ...prev, ...updates }));
   };
 
   return (
@@ -2065,22 +2116,23 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
       <div className="flex items-center gap-2">
         <MapPin className="h-4 w-4 text-primary shrink-0" />
         <h2 className="text-sm font-semibold">
-          Query Map{panelCount === 3 ? " — Τριπλός Χάρτης" : ""}
+          Query Map{panels.length > 1 ? ` — ${panels.length} Χάρτες` : ""}
         </h2>
         <span className="text-[11px] text-muted-foreground">
-          {panelCount === 3
+          {panels.length > 1
             ? "Κάθε χάρτης έχει ανεξάρτητο query, φίλτρα και χρωματική κλίμακα"
             : "Ανεξάρτητο query, φίλτρα και χρωματική κλίμακα"}
         </span>
 
         <button
           type="button"
-          onClick={() => setPanelCount((c) => (c === 1 ? 3 : 1))}
-          title={panelCount === 1 ? "Διαίρεση σε 3 χάρτες" : "Επιστροφή σε 1 χάρτη"}
-          className="ml-auto h-7 px-2.5 gap-1.5 flex items-center rounded border border-border text-xs text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all"
+          onClick={addPanel}
+          disabled={panels.length >= MAX_PANELS}
+          title={panels.length >= MAX_PANELS ? `Μέγιστο ${MAX_PANELS} χάρτες` : "Προσθήκη χάρτη"}
+          className="ml-auto h-7 px-2.5 gap-1.5 flex items-center rounded border border-border text-xs text-muted-foreground hover:text-foreground hover:border-primary/50 transition-all disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:text-muted-foreground disabled:hover:border-border"
         >
-          {panelCount === 1 ? <Columns3 className="h-3.5 w-3.5" /> : <RectangleHorizontal className="h-3.5 w-3.5" />}
-          {panelCount === 1 ? "3 Χάρτες" : "1 Χάρτης"}
+          <Plus className="h-3.5 w-3.5" />
+          Χάρτης
         </button>
 
         <Button
@@ -2092,26 +2144,19 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
           Run All
         </Button>
       </div>
-      <div className={`grid gap-3 ${panelCount === 3 ? "grid-cols-3" : "grid-cols-1"}`}>
-        <SingleMapPanel
-          databases={databases} defaultDatabase={defaultDatabase}
-          panelIndex={0} onSyncRequest={panelCount === 3 ? handleSyncRequest : undefined}
-          runTrigger={runAllTrigger}
-        />
-        {panelCount === 3 && (
-          <>
-            <SingleMapPanel
-              databases={databases} defaultDatabase={defaultDatabase}
-              panelIndex={1} syncTarget={syncTargets[0]}
-              runTrigger={runAllTrigger}
-            />
-            <SingleMapPanel
-              databases={databases} defaultDatabase={defaultDatabase}
-              panelIndex={2} syncTarget={syncTargets[1]}
-              runTrigger={runAllTrigger}
-            />
-          </>
-        )}
+      <div className={`grid gap-3 ${gridColsClass(panels.length)}`}>
+        {panels.map((id, idx) => (
+          <SingleMapPanel
+            key={id}
+            databases={databases} defaultDatabase={defaultDatabase}
+            panelIndex={idx}
+            label={panels.length > 1 ? `Χάρτης ${idx + 1}` : undefined}
+            onRemove={panels.length > 1 ? () => removePanel(id) : undefined}
+            onSyncRequest={idx === 0 ? handleSyncRequest : undefined}
+            syncTarget={idx > 0 ? syncTargets[id] ?? null : undefined}
+            runTrigger={runAllTrigger}
+          />
+        ))}
       </div>
     </div>
   );

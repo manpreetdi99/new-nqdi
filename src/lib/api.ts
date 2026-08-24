@@ -185,6 +185,36 @@ export async function fetchTechnologyMix(
   return json.rows;
 }
 
+/**
+ * Ένα (location, kind, code, samples) row για τα "Serving Band (per Time)" / "Serving
+ * Technology (per Time)" ποσοστά των PS Data DL tests (Capacity DL / FTP DL / HTTP
+ * TRANSFER (DL)) — βλ. /api/serving_band_tech. `kind` = "BAND" (NR band, π.χ. "NR28")
+ * ή "TECH" (Technology.CurrTechnology, π.χ. "LTE-5GNR"· "#NODATA" = χωρίς data transfer).
+ * Flat counts, όχι ποσοστά — βλ. buildServingBandTechTable στο attachmentC.ts.
+ */
+export interface ServingBandTechRow {
+  location: string | null;
+  kind: "BAND" | "TECH";
+  code: string | null;
+  samples: number;
+}
+
+export async function fetchServingBandTech(
+  database: string,
+  collections: string[] = [],
+  locations: string[] = [],
+): Promise<ServingBandTechRow[]> {
+  const params = new URLSearchParams({ database });
+  for (const collection of collections) {
+    if (collection) params.append("collection", collection);
+  }
+  for (const location of locations) {
+    params.append("location", location);
+  }
+  const json = await requestJson<{ rows: ServingBandTechRow[] }>(`/api/serving_band_tech?${params.toString()}`);
+  return json.rows;
+}
+
 export interface DataCallRow {
   Location: string | null;
   SessionId: string;

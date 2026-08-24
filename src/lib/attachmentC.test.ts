@@ -5,6 +5,7 @@ import {
   buildDataSections,
   buildDetailedTechnologyMix,
   buildReportPeriod,
+  buildServingBandTechTable,
   buildTechnologyMix,
   buildTechnologyMixTable,
   buildVoiceStats,
@@ -337,6 +338,48 @@ describe("technology mix", () => {
 
     const gsm = buildTechnologyMixTable(rows, "GSM");
     expect(gsm.total.map((e) => e.bucket)).toEqual(["GSM 1800"]);
+  });
+
+  it("buildServingBandTechTable computes per-kind percentages (BAND / TECH have separate totals) per operator", () => {
+    // Ίδιο σχήμα με τα rows του /api/serving_band_tech: (location, kind, code, samples).
+    const rows = [
+      { location: "Cosmote Data A", kind: "TECH" as const, code: "LTE-5GNR", samples: 90 },
+      { location: "Cosmote Data A", kind: "TECH" as const, code: "LTE", samples: 10 },
+      { location: "Cosmote Data A", kind: "BAND" as const, code: "NR28", samples: 60 },
+      { location: "Cosmote Data A", kind: "BAND" as const, code: "NR78", samples: 40 },
+      { location: "Vodafone Data A", kind: "TECH" as const, code: "#NODATA", samples: 5 },
+      { location: "Vodafone Data A", kind: "TECH" as const, code: "LTE", samples: 15 },
+    ];
+
+    const table = buildServingBandTechTable(rows);
+
+    const cosmote = table.byOperator.get("COSMOTE")!;
+    // BAND % is over the BAND total (100), TECH % is over the TECH total (100) — independent bases.
+    expect(cosmote.find((s) => s.label.includes("NR28"))?.pct).toBeCloseTo(60 / 100, 12);
+    expect(cosmote.find((s) => s.label.includes("NR78"))?.pct).toBeCloseTo(40 / 100, 12);
+    expect(cosmote.find((s) => s.label.includes("LTE-5GNR"))?.pct).toBeCloseTo(90 / 100, 12);
+    // No NR1 samples for Cosmote -> 0, not null (band total > 0).
+    expect(cosmote.find((s) => s.label.includes("NR1 ("))?.pct).toBe(0);
+
+    const vodafone = table.byOperator.get("VODAFONE")!;
+    // No BAND rows at all for Vodafone -> band total is 0 -> pct null (not 0).
+    expect(vodafone.find((s) => s.label.includes("NR28"))?.pct).toBeNull();
+    expect(vodafone.find((s) => s.label === "No data transfer (%)")?.pct).toBeCloseTo(5 / 20, 12);
+
+    // Total combines both operators' TECH counts (LTE: 10 + 15 = 25 out of 120).
+    expect(table.total.find((s) => s.label.includes("Serving Technology (per Time) LTE (%)"))?.pct).toBeCloseTo(25 / 120, 12);
+  });
+
+  it("buildServingBandTechTable ignores zero/negative-sample and blank-code rows", () => {
+    const rows = [
+      { location: "Cosmote Data A", kind: "TECH" as const, code: "LTE", samples: 0 },
+      { location: "Cosmote Data A", kind: "TECH" as const, code: "", samples: 5 },
+      { location: "Cosmote Data A", kind: "TECH" as const, code: "GPRS", samples: 3 },
+    ];
+
+    const table = buildServingBandTechTable(rows);
+    expect(table.total.find((s) => s.label.includes("GPRS"))?.pct).toBe(1);
+    expect(table.total.find((s) => s.label.includes("LTE ("))?.pct).toBe(0);
   });
 });
 

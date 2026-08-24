@@ -1,11 +1,14 @@
 import { useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, Database, MapPin, Phone, Radio, Wifi } from "lucide-react";
+import { Cell as PieCell, Legend as PieLegend, Pie, PieChart, ResponsiveContainer, Tooltip as PieRTooltip } from "recharts";
 
-import type { AllCallsRow, DataCallRow, TechnologyMixRow } from "@/lib/api";
+import type { AllCallsRow, DataCallRow, ServingBandTechRow, TechnologyMixRow } from "@/lib/api";
+import { CHART_PALETTE } from "@/lib/chartStyles";
 import {
   BAD_QUALITY_MOS,
   buildDataSections,
   buildReportPeriod,
+  buildServingBandTechTable,
   buildTechnologyMixTable,
   buildVoiceStats,
   buildVoiceTable,
@@ -22,6 +25,7 @@ import {
   type DataTestSection,
   type DataTestStats,
   type OperatorMeta,
+  type ServingBandTechShare,
   type TechnologyShare,
   type VoiceRates,
   type VoiceStats,
@@ -37,6 +41,8 @@ interface SummaryTabProps {
    * VoiceStats.technologyMix όταν υπάρχει. Optional/κενό: fallback στο χοντρικό.
    */
   technologyMixRows?: TechnologyMixRow[];
+  /** Serving Band (NR) / Serving Technology (per Time) για PS Data DL tests — βλ. /api/serving_band_tech. */
+  servingBandTechRows?: ServingBandTechRow[];
   database?: string;
   collections?: string[];
   /** Για το dropdown επιλογής database μέσα στο banner· χωρίς αυτά, το banner δείχνει απλό κείμενο. */
@@ -201,6 +207,178 @@ const TechnologyMixBar = ({ mix }: { mix: TechnologyShare[] }) => {
     </div>
   );
 };
+
+/* ────────────────────────── Serving Band / Tech — 2 pies (5G mix + total tech mix) ────────────────────────── */
+
+interface PieSlice {
+  name: string;
+  value: number;
+  pct: number;
+  color: string;
+}
+
+const pieSliceName = (label: string): string =>
+  label.replace(/^Serving (Band|Technology) \(per Time\) /, "").replace(/ \(%\)$/, "");
+
+/**
+ * Το ποσοστό ζωγραφίζεται ΜΕΣΑ στη φέτα (όχι έξω με connector line) — έτσι μένει
+ * εγγυημένα μέσα στα όρια του ίδιου του pie, που ήδη χωράει στο container: καμία
+ * πιθανότητα να κοπεί στην άκρη του chart, όσο στενή κι αν είναι η στήλη.
+ * Λευκό fill (σταθερά μεσαία/σκούρα χρώματα στο PIE_PALETTE, βλ. παρακάτω) + λεπτό
+ * σκούρο περίγραμμα (paintOrder stroke) για αντίθεση ανεξαρτήτως χρώματος φέτας.
+ * Πολύ μικρές φέτες (<6%) δεν παίρνουν label — δεν χωράει κείμενο, μένει στο legend.
+ */
+const PIE_LABEL_RADIAN = Math.PI / 180;
+const renderPieLabel = (props: { cx: number; cy: number; midAngle: number; innerRadius: number; outerRadius: number; pct: number }) => {
+  const { cx, cy, midAngle, innerRadius, outerRadius, pct } = props;
+  if (pct < 0.06) return null;
+  const radius = innerRadius + (outerRadius - innerRadius) * 0.62;
+  const x = cx + radius * Math.cos(-midAngle * PIE_LABEL_RADIAN);
+  const y = cy + radius * Math.sin(-midAngle * PIE_LABEL_RADIAN);
+  return (
+    <text
+      x={x}
+      y={y}
+      fill="#fff"
+      stroke="rgba(0,0,0,0.55)"
+      strokeWidth={3}
+      paintOrder="stroke"
+      fontSize={11}
+      fontWeight={700}
+      textAnchor="middle"
+      dominantBaseline="central"
+    >
+      {formatPercent(pct, 1)}
+    </text>
+  );
+};
+
+/** Legend entry: όνομα + ποσοστό — εδώ φαίνεται πάντα καθαρά, ό,τι κι αν κόβει το radial label πάνω στο pie. */
+const fmtPieLegend = (value: string, entry: { payload?: PieSlice }) => (
+  <span className="text-xs text-foreground">
+    {value}
+    {entry.payload ? ` — ${formatPercent(entry.payload.pct, 1)}` : ""}
+  </span>
+);
+
+const PieSliceTooltip = ({ active, payload }: { active?: boolean; payload?: { payload: PieSlice }[] }) => {
+  if (!active || !payload?.length) return null;
+  const slice = payload[0].payload;
+  return (
+    <div className="rounded-lg border border-border bg-popover px-3 py-2 text-xs shadow-xl">
+      <p className="mb-0.5 truncate font-semibold text-foreground">{slice.name}</p>
+      <p className="font-mono" style={{ color: slice.color }}>
+        {formatCount(slice.value)} <span className="text-muted-foreground">({formatPercent(slice.pct, 1)})</span>
+      </p>
+    </div>
+  );
+};
+
+/** Ένα part-to-whole pie πάνω σε μη-μηδενικά slices — ίδιο look/tooltip σε όλη την εφαρμογή (βλ. ResultCharts). */
+const MiniPie = ({ title, slices }: { title: string; slices: PieSlice[] }) => {
+  if (slices.length === 0) return null;
+  return (
+    <div className="flex min-w-0 flex-col items-center">
+      <div className="mb-1 text-xs font-semibold text-foreground">{title}</div>
+      <ResponsiveContainer width="100%" height={220}>
+        <PieChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+          <Pie data={slices} dataKey="value" nameKey="name" cx="50%" cy="46%" outerRadius={72} label={renderPieLabel} labelLine={false}>
+            {slices.map((slice, index) => (
+              <PieCell key={slice.name ?? index} fill={slice.color} />
+            ))}
+          </Pie>
+          <PieRTooltip content={<PieSliceTooltip />} />
+          <PieLegend formatter={fmtPieLegend} wrapperStyle={{ fontSize: 11 }} />
+        </PieChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
+
+/**
+ * CHART_PALETTE χωρίς το amber (index 2) — αποτυγχάνει το lightness-band check του
+ * dataviz validator (βλ. `node scripts/validate_palette.js`). Το "LTE"/"LTE CA" με
+ * τα δύο μπλε του technologyColor() επίσης αποτυγχάνουν το normal-vision floor
+ * (ΔE 13.9 < 15, δύσκολο να ξεχωρίσουν ακόμα και με πλήρη έγχρωμη όραση) — γι' αυτό
+ * τα δύο pies εδώ παίρνουν χρώμα θέσης (fixed order πάνω στο SERVING_BAND_TECH_METRICS),
+ * ΟΧΙ το semantic technologyColor.
+ */
+const PIE_PALETTE = CHART_PALETTE.filter((_, index) => index !== 2);
+const NO_DATA_COLOR = "#64748b";
+
+/** Φτιάχνει τα (μη-μηδενικά) BAND/TECH slices ενός operator, σταθερή σειρά χρωμάτων (βλ. PIE_PALETTE). */
+const buildServingPieSlices = (shares: ServingBandTechShare[]): { bandSlices: PieSlice[]; techSlices: PieSlice[] } => {
+  const bandSlices: PieSlice[] = shares
+    .filter((share) => share.kind === "BAND" && share.samples > 0)
+    .map((share, index) => ({
+      name: pieSliceName(share.label),
+      value: share.samples,
+      pct: share.pct ?? 0,
+      color: PIE_PALETTE[index % PIE_PALETTE.length],
+    }));
+
+  let techColorIndex = 0;
+  const techSlices: PieSlice[] = shares
+    .filter((share) => share.kind === "TECH" && share.samples > 0)
+    .map((share) => {
+      const name = pieSliceName(share.label);
+      const color = name === "No data transfer" ? NO_DATA_COLOR : PIE_PALETTE[techColorIndex++ % PIE_PALETTE.length];
+      return { name, value: share.samples, pct: share.pct ?? 0, color };
+    });
+
+  return { bandSlices, techSlices };
+};
+
+/** Μία στήλη operator: τα 2 pies του (5G band mix / total tech mix) το ένα κάτω απ' το άλλο. */
+const ServingBandTechPieColumn = ({
+  label,
+  color,
+  shares,
+}: {
+  label: string;
+  color?: string;
+  shares: ServingBandTechShare[];
+}) => {
+  const { bandSlices, techSlices } = buildServingPieSlices(shares);
+
+  return (
+    <div className="flex flex-col items-center gap-4 px-4 py-4">
+      <div className="flex items-center gap-1.5 self-start">
+        {color && <OperatorSwatch color={color} />}
+        <span className="text-xs font-bold tracking-wide text-foreground">{label}</span>
+      </div>
+      {bandSlices.length > 0 ? (
+        <MiniPie title="Serving Band (5G, per Time)" slices={bandSlices} />
+      ) : (
+        <span className="text-xs text-muted-foreground/40">Serving Band — —</span>
+      )}
+      {techSlices.length > 0 ? (
+        <MiniPie title="Serving Technology (per Time)" slices={techSlices} />
+      ) : (
+        <span className="text-xs text-muted-foreground/40">Serving Technology — —</span>
+      )}
+    </div>
+  );
+};
+
+/**
+ * "5G pie" (Serving Band NR28/NR1/NR78) + "total tech pie" (Serving Technology,
+ * incl. "No data transfer") ανά operator — μία στήλη ο καθένας, ίδιο layout με τις
+ * στήλες operator των υπόλοιπων πινάκων. Χωρίς στήλη "Total" — μόνο οι operators.
+ */
+const ServingBandTechPies = ({
+  operators,
+  byOperator,
+}: {
+  operators: OperatorMeta[];
+  byOperator: Map<string, ServingBandTechShare[]>;
+}) => (
+  <div className="grid" style={{ gridTemplateColumns: `repeat(${operators.length}, minmax(0, 1fr))` }}>
+    {operators.map((operator) => (
+      <ServingBandTechPieColumn key={operator.key} label={operator.label} color={operator.color} shares={byOperator.get(operator.key) ?? []} />
+    ))}
+  </div>
+);
 
 const MetaChip = ({ icon: Icon, label, value }: { icon?: typeof Database; label: string; value: ReactNode }) => (
   <div className="flex items-center gap-2 rounded-md border border-border/70 bg-background/40 px-2.5 py-1.5">
@@ -693,6 +871,7 @@ const SummaryTab = ({
   allCallsRows,
   dataCallsRows,
   technologyMixRows = [],
+  servingBandTechRows = [],
   database,
   collections = [],
   databases = [],
@@ -740,6 +919,9 @@ const SummaryTab = ({
   // voiceTableFor πέφτει στο χοντρικό VoiceStats.technologyMix.
   const gsmTechMix = useMemo(() => buildTechnologyMixTable(technologyMixRows, "GSM"), [technologyMixRows]);
   const freeTechMix = useMemo(() => buildTechnologyMixTable(technologyMixRows, "FREE"), [technologyMixRows]);
+
+  // "Serving Band (NR) / Serving Technology (per Time)" — κορυφή του "PS Data Stats" card.
+  const servingBandTech = useMemo(() => buildServingBandTechTable(servingBandTechRows), [servingBandTechRows]);
 
   const overallStats = useMemo(() => buildVoiceStats(validAllCallsRows), [validAllCallsRows]);
 
@@ -1124,6 +1306,22 @@ const SummaryTab = ({
           icon={Wifi}
         >
           <div className="divide-y divide-border/60">
+            {servingBandTech.total.some((share) => share.total > 0) && (
+              <div>
+                <div className="px-4 pt-4">
+                  <div className="text-xs font-bold text-foreground">Serving Band / Serving Technology (per Time)</div>
+                  <div className="mt-0.5 text-[10px] font-normal text-muted-foreground">
+                    FTP, HTTP, CAPACITY DL (Test Data Server) — ανά operator
+                  </div>
+                </div>
+                <ServingBandTechPies
+                  operators={operators.filter((operator) =>
+                    (servingBandTech.byOperator.get(operator.key) ?? []).some((share) => share.total > 0),
+                  )}
+                  byOperator={servingBandTech.byOperator}
+                />
+              </div>
+            )}
             {dataSections.map((section) => (
               <DataSectionBlock
                 key={section.key}
