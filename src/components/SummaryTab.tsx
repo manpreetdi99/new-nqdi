@@ -2,7 +2,7 @@ import { useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, Database, MapPin, Phone, Radio, Wifi } from "lucide-react";
 import { Cell as PieCell, Legend as PieLegend, Pie, PieChart, ResponsiveContainer, Tooltip as PieRTooltip } from "recharts";
 
-import type { AllCallsRow, DataCallRow, ServingBandTechRow, TechnologyMixRow } from "@/lib/api";
+import type { AllCallsRow, CellBandCountRow, DataCallRow, ServingBandTechRow, SrvccRow, TechnologyMixRow } from "@/lib/api";
 import { CHART_PALETTE } from "@/lib/chartStyles";
 import {
   BAD_QUALITY_MOS,
@@ -43,6 +43,10 @@ interface SummaryTabProps {
   technologyMixRows?: TechnologyMixRow[];
   /** Serving Band (NR) / Serving Technology (per Time) για PS Data DL tests — βλ. /api/serving_band_tech. */
   servingBandTechRows?: ServingBandTechRow[];
+  /** "Number of 900/1800 band Cells" (μόνο GSM table) — βλ. /api/cell_band_count / buildCellBandCountTable. */
+  cellBandCountRows?: CellBandCountRow[];
+  /** "Total/Successful/Failed SRVCC attempts" (μόνο FREE table) — βλ. /api/srvcc / buildSrvccTable. */
+  srvccRows?: SrvccRow[];
   database?: string;
   collections?: string[];
   /** Για το dropdown επιλογής database μέσα στο banner· χωρίς αυτά, το banner δείχνει απλό κείμενο. */
@@ -506,8 +510,28 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
     }),
   },
   { label: "Unsuccessful Call Attempts", cell: (s) => ({ kind: "count", value: s.failed }) },
+  {
+    label: "Unsuccessful Call Attempts VoLTE",
+    hint: "CustomCallMode VoLTE Call, μόνο FREE table — βλ. LQCallData.sql / LQCallExtend_1PT",
+    cell: (s) => ({ kind: "count", value: s.volte.failed }),
+  },
+  {
+    label: "Unsuccessful Call Attempts CS",
+    hint: "CustomCallMode CS call, μόνο FREE table — βλ. LQCallData.sql / LQCallExtend_1PT",
+    cell: (s) => ({ kind: "count", value: s.cs.failed }),
+  },
   { label: "Normal Releases", emphasis: true, cell: (s) => ({ kind: "count", value: s.completed }) },
   { label: "Dropped Calls", cell: (s) => ({ kind: "count", value: s.dropped }) },
+  {
+    label: "Dropped Calls VoLTE",
+    hint: "CustomCallMode VoLTE Call, μόνο FREE table — βλ. LQCallData.sql / LQCallExtend_1PT",
+    cell: (s) => ({ kind: "count", value: s.volte.dropped }),
+  },
+  {
+    label: "Dropped Calls CS",
+    hint: "CustomCallMode CS call, μόνο FREE table — βλ. LQCallData.sql / LQCallExtend_1PT",
+    cell: (s) => ({ kind: "count", value: s.cs.dropped }),
+  },
   { label: "System Releases", cell: (s) => ({ kind: "count", value: s.sysRelease }) },
   {
     label: `Low Speech Quality Calls (POLQA < ${LOW_QUALITY_MOS})`,
@@ -566,6 +590,22 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
     hint: "callDir B→A",
     cell: (s) => ({ kind: "value", value: s.setupMtc.avg, decimals: 2, samples: s.setupMtc.samples, higherIsBetter: false }),
   },
+ 
+  {
+    label: "CS Call Setup Time (sec)",
+    hint: "callMode CSFB/CS — βλ. LQCallData.sql",
+    cell: (s) => ({ kind: "value", value: s.csSetup.avg, decimals: 2, samples: s.csSetup.samples, higherIsBetter: false }),
+  },
+  {
+    label: "Number of 900 band Cells",
+    hint: "COUNT(DISTINCT CID), μόνο GSM table — βλ. CELL ID GSM.sql",
+    cell: (s) => ({ kind: "value", value: s.cellCount900, decimals: 0 }),
+  },
+  {
+    label: "Number of 1800 band Cells",
+    hint: "COUNT(DISTINCT CID), μόνο GSM table — βλ. CELL ID GSM.sql",
+    cell: (s) => ({ kind: "value", value: s.cellCount1800, decimals: 0 }),
+  },
   // {
   //   label: "Avg Call Duration (sec)",
   //   cell: (s) => ({ kind: "value", value: s.duration.avg, decimals: 1, samples: s.duration.samples }),
@@ -580,6 +620,22 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
     label: "Technology mix",
     hint: "Ανά band (GSM 900 / GSM 1800 / κάθε LTE E-UTRA band ξεχωριστά) — ένα δείγμα ανά θέση GPS, ίδια μεθοδολογία με bi queries/RadioTech_Voice_newDB.sql",
     cell: (s) => ({ kind: "technologyMix", mix: s.technologyMix }),
+  },
+  {
+    label: "Total SRVCC attempts",
+    emphasis: true,
+    hint: "Distinct HO events, KPIId 38040/38050, μόνο FREE table — βλ. SRVCC RAW.sql",
+    cell: (s) => ({ kind: "value", value: s.srvcc?.attempts ?? null, decimals: 0 }),
+  },
+  {
+    label: "Successful SRVCC attempts",
+    hint: "ErrorCode=0, μόνο FREE table — βλ. SRVCC RAW.sql",
+    cell: (s) => ({ kind: "value", value: s.srvcc?.successful ?? null, decimals: 0 }),
+  },
+  {
+    label: "Failed SRVCC attempts",
+    hint: "ErrorCode=108003, μόνο FREE table — βλ. SRVCC RAW.sql",
+    cell: (s) => ({ kind: "value", value: s.srvcc?.failed ?? null, decimals: 0 }),
   },
 ];
 
@@ -872,6 +928,8 @@ const SummaryTab = ({
   dataCallsRows,
   technologyMixRows = [],
   servingBandTechRows = [],
+  cellBandCountRows = [],
+  srvccRows = [],
   database,
   collections = [],
   databases = [],
@@ -910,8 +968,14 @@ const SummaryTab = ({
     [validAllCallsRows, validDataCallsRows],
   );
 
-  const gsmTable = useMemo(() => buildVoiceTable(validAllCallsRows, "GSM"), [validAllCallsRows]);
-  const freeTable = useMemo(() => buildVoiceTable(validAllCallsRows, "FREE"), [validAllCallsRows]);
+  const gsmTable = useMemo(
+    () => buildVoiceTable(validAllCallsRows, "GSM", cellBandCountRows),
+    [validAllCallsRows, cellBandCountRows],
+  );
+  const freeTable = useMemo(
+    () => buildVoiceTable(validAllCallsRows, "FREE", [], srvccRows),
+    [validAllCallsRows, srvccRows],
+  );
   const dataSections = useMemo(() => buildDataSections(validDataCallsRows), [validDataCallsRows]);
 
   // Πραγματικό ανά-band technology mix (βλ. σχόλιο στο SummaryTabProps.technologyMixRows) —

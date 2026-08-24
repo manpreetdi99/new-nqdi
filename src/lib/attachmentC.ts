@@ -12,7 +12,7 @@
  * χωρίς Excel. Ο operator και το mode προκύπτουν από το ASideLocation
  * (π.χ. "Cosmote Free A", "Vodafone GSM A", "Nova Data A").
  */
-import type { AllCallsRow, DataCallRow, ServingBandTechRow, TechnologyMixRow } from "@/lib/api";
+import type { AllCallsRow, CellBandCountRow, DataCallRow, ServingBandTechRow, SrvccRow, TechnologyMixRow } from "@/lib/api";
 
 /* ────────────────────────── Operators & modes ────────────────────────── */
 
@@ -94,6 +94,32 @@ export const classifyCallStatus = (status: string | null | undefined): CallOutco
   if (s.includes("drop")) return "dropped";
   if (s.includes("fail")) return "failed";
   return "completed";
+};
+
+export type CustomCallModeKey = "volte" | "cs";
+
+/**
+ * VoLTE Call / CS call — ίδιο "CustomCallMode" CASE με το A-LEVEL "LQCallData.sql"
+ * reference query, απλοποιημένο όπως το volteSetupTime/csSetupTime (βλ.
+ * backend/routers/calls.py): εδώ είναι ένα row ανά κλήση (CallAnalysis), όχι A/B-side
+ * ζευγάρι σαν CallSession.CallMode/CallModeB, οπότε αρκεί το callMode/technology της
+ * γραμμής χωρίς το callDir. null όταν η κλήση δεν πληροί κανένα κριτήριο.
+ */
+export const classifyCustomCallMode = (
+  row: Pick<AllCallsRow, "callMode" | "technology">,
+): CustomCallModeKey | null => {
+  const mode = (row.callMode ?? "").trim();
+  const tech = (row.technology ?? "").toLowerCase();
+
+  if (mode === "VoLTE" || mode === "SRVCC") return "volte";
+  if (mode === "CSFB" || mode === "CS") return "cs";
+  if (mode === "-") {
+    if (tech.includes("lte")) return "volte";
+    if (tech.includes("umts") || tech.includes("gsm")) return "cs";
+    return null;
+  }
+  if (mode.toLowerCase().includes("unknown") && tech.includes("5g")) return "volte";
+  return null;
 };
 
 export type DataTestOutcome = "success" | "failed" | "other";
@@ -190,6 +216,13 @@ export interface VoiceStats {
   /** Unsuccessful Call Attempts (access failures) */
   failed: number;
   sysRelease: number;
+  /**
+   * Attempts/Dropped/Unsuccessful σπασμένα σε VoLTE Call / CS call (classifyCustomCallMode)
+   * — ίδιο σχήμα με το LQCallExtend_1PT pivot του Summary Voice (A-LEVEL "LQCallData.sql"
+   * reference query's CustomCallMode). Ουσιαστικό μόνο στο FREE table — βλ. SummaryTab.
+   */
+  volte: CustomCallModeCounts;
+  cs: CustomCallModeCounts;
   /** Total Calls = attempts − unsuccessful attempts */
   connections: number;
   /** Call Success Rate = normal releases / attempts */
@@ -219,10 +252,37 @@ export interface VoiceStats {
   /** Low Speech Quality Calls (POLQA < 1.3) */
   badQualityCalls: number;
   setupAll: Sample;
-  /** MOC = A→B (mobile originated) */
+  /**
+   * MOC = A→B (mobile originated) — ίδιο κριτήριο με το A-LEVEL "LQCallDataGSM.sql"
+   * reference query's MOCSetupTime (Callstatus in Completed/Dropped, Technology σε
+   * UMTS 2100/900 GSM 900/1800· βλ. AllCallsRow.mocSetupTime / calls.py).
+   */
   setupMoc: Sample;
-  /** MTC = B→A (mobile terminated) */
+  /** MTC = B→A (mobile terminated) — ίδιο κριτήριο, βλ. setupMoc. */
   setupMtc: Sample;
+  /**
+   * VoLTE Call setup time — ίδιο κριτήριο με το A-LEVEL "LQCallData.sql" reference
+   * query's CallSetupTimeVoLTE (Callstatus in Completed/Dropped, callMode σε
+   * VoLTE/SRVCC· βλ. AllCallsRow.volteSetupTime / calls.py).
+   */
+  volteSetup: Sample;
+  /** CS Call setup time — ίδιο κριτήριο, βλ. volteSetup (callMode σε CSFB/CS). */
+  csSetup: Sample;
+  /**
+   * Πλήθος ΔΙΑΚΡΙΤΩΝ GSM 900/1800 band cells — μόνο για το GSM table (buildVoiceTable
+   * περνάει cellBandCountRows μόνο εκεί)· null στο FREE table ή όταν δεν έχουν φτάσει
+   * ακόμα τα δεδομένα του /api/cell_band_count. Ίδιο query/μεθοδολογία με το A-LEVEL
+   * "CELL ID GSM.sql" reference query — βλ. buildCellBandCountTable.
+   */
+  cellCount900: number | null;
+  cellCount1800: number | null;
+  /**
+   * "Total/Successful/Failed SRVCC attempts" — 3 γραμμές στο τέλος ΜΟΝΟ του FREE table
+   * (buildVoiceTable περνάει srvccRows μόνο εκεί, ίδιο σχήμα με cellCount900/1800 στο
+   * GSM table)· null όταν δεν έχουν φτάσει ακόμα τα δεδομένα του /api/srvcc. Ίδιο
+   * query/μεθοδολογία με το A-LEVEL "SRVCC RAW.sql" reference query — βλ. buildSrvccTable.
+   */
+  srvcc: SrvccStats | null;
   duration: Sample;
   /**
    * Ανά-band breakdown από το χοντρικό CA.technology (π.χ. "LTE", "GSM/LTE") — βλ.
@@ -231,9 +291,18 @@ export interface VoiceStats {
    * υπάρχει, γιατί αυτό εδώ δεν ξεχωρίζει π.χ. GSM 900 από GSM 1800.
    */
   technologyMix: TechnologyShare[];
-  /** Bucketed codec breakdown — βλ. bucketCodec/buildCodecMix. Table 20's "Codec Type Usage %". */
+  /** Bucketed codec breakdown — βλ. buildCodecMix / CallCodecTypeUsageGSM.sql. Table 20's "Codec Type Usage %". */
   codecMix: CodecShare[];
 }
+
+/** Πλήθος-0 δομή, ξαναχρησιμοποιείται σαν immutable "κενό" σε EMPTY_VOICE_STATS. */
+export interface CustomCallModeCounts {
+  attempts: number;
+  dropped: number;
+  failed: number;
+}
+
+const EMPTY_CUSTOM_CALL_MODE_COUNTS: CustomCallModeCounts = { attempts: 0, dropped: 0, failed: 0 };
 
 export const EMPTY_VOICE_STATS: VoiceStats = {
   attempts: 0,
@@ -241,6 +310,8 @@ export const EMPTY_VOICE_STATS: VoiceStats = {
   dropped: 0,
   failed: 0,
   sysRelease: 0,
+  volte: EMPTY_CUSTOM_CALL_MODE_COUNTS,
+  cs: EMPTY_CUSTOM_CALL_MODE_COUNTS,
   connections: 0,
   csr: null,
   dcr: null,
@@ -255,31 +326,17 @@ export const EMPTY_VOICE_STATS: VoiceStats = {
   setupAll: EMPTY_SAMPLE,
   setupMoc: EMPTY_SAMPLE,
   setupMtc: EMPTY_SAMPLE,
+  volteSetup: EMPTY_SAMPLE,
+  csSetup: EMPTY_SAMPLE,
+  cellCount900: null,
+  cellCount1800: null,
+  srvcc: null,
   duration: EMPTY_SAMPLE,
   technologyMix: [],
   codecMix: [],
 };
 
 /* ────────────────────────── Codec mix ────────────────────────── */
-
-/**
- * Bucketing rules ίδιες με το CallCodecTypeUsageGSM.sql / "Codec Type Usage %"
- * query (CASE πάνω σε vvct.CodecName): AMR-WB, AMR HR, AMR, EFR, HR, FR,
- * "no codec rate" — οτιδήποτε άλλο περνάει ως-έχει.
- */
-export const bucketCodec = (codecName: string | null | undefined): string => {
-  const raw = (codecName ?? "").trim();
-  if (!raw || raw === "-" || raw.toLowerCase() === "no codec rate") return "no codec rate";
-
-  const upper = raw.toUpperCase();
-  if (upper.includes("AMR") && upper.includes("WB")) return "FR AMR WB";
-  if (upper.includes("AMR") && upper.includes("HR")) return "AMR HR";
-  if (upper.includes("AMR")) return "AMR";
-  if (upper.includes("EFR")) return "EFR";
-  if (upper.startsWith("HR")) return "HR";
-  if (upper.startsWith("FR")) return "FR";
-  return raw;
-};
 
 /** Σταθερά χρώματα για τα γνωστά codec buckets· ό,τι άλλο παίρνει χρώμα από FALLBACK_CODEC_COLORS. */
 const CODEC_BUCKET_COLORS: Record<string, string> = {
@@ -304,11 +361,36 @@ export interface CodecShare {
   share: number;
 }
 
-export const buildCodecMix = (codecNames: (string | null | undefined)[]): CodecShare[] => {
+/**
+ * Ποιο πεδίο του AllCallsRow τροφοδοτεί κάθε bucket — τα counts έρχονται ήδη
+ * bucketed από το backend (CODEC OUTER APPLY στο calls.py), με το ίδιο CASE
+ * που έχει το A-LEVEL "CallCodecTypeUsageGSM.sql" reference query.
+ */
+const CODEC_COUNT_FIELDS: { bucket: string; field: keyof AllCallsRow }[] = [
+  { bucket: "FR AMR WB", field: "codecFrAmrWbCount" },
+  { bucket: "AMR HR", field: "codecAmrHrCount" },
+  { bucket: "AMR", field: "codecAmrCount" },
+  { bucket: "EFR", field: "codecEfrCount" },
+  { bucket: "FR", field: "codecFrCount" },
+  { bucket: "HR", field: "codecHrCount" },
+  { bucket: "other", field: "codecOtherCount" },
+  { bucket: "no codec rate", field: "codecNoRateCount" },
+];
+
+/**
+ * Αθροίζει τα per-session codec-bucket test counts (βλ. CODEC_COUNT_FIELDS)
+ * σε ένα mix ανά bucket — ίδιο κριτήριο/βάρος με το "Codec Type Usage %" του
+ * A-LEVEL CallCodecTypeUsageGSM.sql query: το % κάθε bucket είναι το μερίδιό
+ * του στο σύνολο των tests, όχι το ποσοστό των sessions με αυτόν ως "dominant".
+ */
+export const buildCodecMix = (rows: AllCallsRow[]): CodecShare[] => {
   const counts = new Map<string, number>();
-  for (const name of codecNames) {
-    const bucket = bucketCodec(name);
-    counts.set(bucket, (counts.get(bucket) ?? 0) + 1);
+  for (const row of rows) {
+    for (const { bucket, field } of CODEC_COUNT_FIELDS) {
+      const n = numeric(row[field] as number | null | undefined);
+      if (!n) continue;
+      counts.set(bucket, (counts.get(bucket) ?? 0) + n);
+    }
   }
 
   const total = Array.from(counts.values()).reduce((sum, count) => sum + count, 0);
@@ -334,25 +416,40 @@ export const BAD_QUALITY_MOS = 1.3;
 /** Ποσοστό-δειγμάτων threshold του "BadCall" κριτηρίου — βλ. σχόλιο στο buildVoiceStats. */
 export const BAD_CALL_SAMPLE_PCT = 15;
 
-const isMoc = (callDir: string | null | undefined): boolean => /a\s*->\s*b/i.test(callDir ?? "");
-const isMtc = (callDir: string | null | undefined): boolean => /b\s*->\s*a/i.test(callDir ?? "");
-
 export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
   const counts = { completed: 0, sysRelease: 0, dropped: 0, failed: 0 };
+  const customCounts: Record<CustomCallModeKey, CustomCallModeCounts> = {
+    volte: { attempts: 0, dropped: 0, failed: 0 },
+    cs: { attempts: 0, dropped: 0, failed: 0 },
+  };
   const mosValues: number[] = [];
   const mosUlAgg = emptyAgg();
   const mosDlAgg = emptyAgg();
   const setupAll: number[] = [];
   const setupMoc: number[] = [];
   const setupMtc: number[] = [];
+  const volteSetup: number[] = [];
+  const csSetup: number[] = [];
   const durations: number[] = [];
   const technologyNames: (string | null | undefined)[] = [];
-  const codecNames: (string | null | undefined)[] = [];
   let lowQualityCalls = 0;
   let badQualityCalls = 0;
 
   for (const row of rows) {
-    counts[classifyCallStatus(row.status)]++;
+    const outcome = classifyCallStatus(row.status);
+    counts[outcome]++;
+
+    // CustomCallMode (VoLTE Call / CS call) — βλ. LQCallExtend_1PT στο VoiceStats.
+    // CallAttemps/CallDropped/CallFailed του A-LEVEL "LQCallData.sql" reference query,
+    // απλά σπασμένα ανά mode αντί για ανά operator.
+    const customMode = classifyCustomCallMode(row);
+    if (customMode) {
+      if (outcome === "completed" || outcome === "dropped" || outcome === "failed") {
+        customCounts[customMode].attempts++;
+      }
+      if (outcome === "dropped") customCounts[customMode].dropped++;
+      else if (outcome === "failed") customCounts[customMode].failed++;
+    }
 
     const mos = numeric(row.Avg_mos);
     if (mos != null && mos > 0) {
@@ -384,17 +481,30 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
     addToAgg(mosDlAgg, numeric(row.mosDlAvg), numeric(row.mosDlSamples), numeric(row.mosDlMin), numeric(row.mosDlMax));
 
     const setup = numeric(row.setupTime);
-    if (setup != null && setup > 0) {
-      setupAll.push(setup);
-      if (isMoc(row.callDir)) setupMoc.push(setup);
-      else if (isMtc(row.callDir)) setupMtc.push(setup);
-    }
+    if (setup != null && setup > 0) setupAll.push(setup);
+
+    // MOC/MTC setup time: ήδη φιλτραρισμένα/χωρισμένα από το backend (Callstatus
+    // Completed/Dropped, Technology σε UMTS 2100/900 GSM 900/1800 — ίδιο κριτήριο με
+    // το A-LEVEL "LQCallDataGSM.sql" reference query, βλ. VoiceStats.setupMoc/setupMtc).
+    const moc = numeric(row.mocSetupTime);
+    if (moc != null && moc > 0) setupMoc.push(moc);
+
+    const mtc = numeric(row.mtcSetupTime);
+    if (mtc != null && mtc > 0) setupMtc.push(mtc);
+
+    // VoLTE/CS Call setup time: ήδη φιλτραρισμένα/χωρισμένα από το backend (Callstatus
+    // Completed/Dropped, callMode σε VoLTE/SRVCC ή CSFB/CS — ίδιο κριτήριο με το
+    // A-LEVEL "LQCallData.sql" reference query, βλ. VoiceStats.volteSetup/csSetup).
+    const volte = numeric(row.volteSetupTime);
+    if (volte != null && volte > 0) volteSetup.push(volte);
+
+    const cs = numeric(row.csSetupTime);
+    if (cs != null && cs > 0) csSetup.push(cs);
 
     const duration = numeric(row.callDuration);
     if (duration != null && duration > 0) durations.push(duration);
 
     technologyNames.push(row.technology);
-    codecNames.push(row.codecName);
   }
 
   const attempts = rows.length;
@@ -411,6 +521,8 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
     dropped: counts.dropped,
     failed: counts.failed,
     sysRelease: counts.sysRelease,
+    volte: customCounts.volte,
+    cs: customCounts.cs,
     connections,
     csr: ratio(counts.completed, attempts),
     dcr: ratio(counts.dropped, connections),
@@ -431,10 +543,97 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
     setupAll: mean(setupAll),
     setupMoc: mean(setupMoc),
     setupMtc: mean(setupMtc),
+    volteSetup: mean(volteSetup),
+    csSetup: mean(csSetup),
+    // buildVoiceTable τα γεμίζει μετά (μόνο για το GSM table) — βλ. σχόλιο στο VoiceStats.
+    cellCount900: null,
+    cellCount1800: null,
+    // buildVoiceTable το γεμίζει μετά (μόνο για το FREE table) — βλ. σχόλιο στο VoiceStats.
+    srvcc: null,
     duration: mean(durations),
     technologyMix: buildDetailedTechnologyMix(technologyNames),
-    codecMix: buildCodecMix(codecNames),
+    codecMix: buildCodecMix(rows),
   };
+};
+
+interface CellBandCounts {
+  band900: number;
+  band1800: number;
+}
+
+const EMPTY_CELL_BAND_COUNTS: CellBandCounts = { band900: 0, band1800: 0 };
+
+/**
+ * Πλήθος ΔΙΑΚΡΙΤΩΝ GSM 900/1800 band cells ανά operator, από τα (location, technology,
+ * cellCount) rows του /api/cell_band_count — ίδιο query/μεθοδολογία με το A-LEVEL
+ * "CELL ID GSM.sql" reference query. Total = άθροισμα των per-operator counts (ασφαλές
+ * εδώ: το CID είναι μοναδικό μόνο μέσα στο δίκτυο ενός operator, όχι global, οπότε ένα
+ * "φρέσκο" COUNT(DISTINCT CID) σε όλα τα operators μαζί θα συγχώνευε λάθος διαφορετικά
+ * cells με τυχαία ίδιο αριθμό CID).
+ */
+export const buildCellBandCountTable = (
+  rows: CellBandCountRow[],
+): { byOperator: Map<string, CellBandCounts>; total: CellBandCounts } => {
+  const byOperator = new Map<string, CellBandCounts>();
+  const total: CellBandCounts = { band900: 0, band1800: 0 };
+
+  for (const row of rows) {
+    if (resolveMode(row.location) !== "GSM") continue;
+    const technology = (row.technology ?? "").trim();
+    if (technology !== "GSM 900" && technology !== "GSM 1800") continue;
+
+    const key = resolveOperator(row.location).key;
+    const current = byOperator.get(key) ?? { band900: 0, band1800: 0 };
+    if (technology === "GSM 900") {
+      current.band900 += row.cellCount;
+      total.band900 += row.cellCount;
+    } else {
+      current.band1800 += row.cellCount;
+      total.band1800 += row.cellCount;
+    }
+    byOperator.set(key, current);
+  }
+
+  return { byOperator, total };
+};
+
+export interface SrvccStats {
+  /** COUNT όλων των distinct (session, ErrorCode) HO events — success + fail + other. */
+  attempts: number;
+  successful: number;
+  /** Μόνο ErrorCode=108003 — άλλα ErrorCode που δεν είναι 0 μπαίνουν στο attempts αλλά όχι εδώ. */
+  failed: number;
+}
+
+const EMPTY_SRVCC_STATS: SrvccStats = { attempts: 0, successful: 0, failed: 0 };
+
+/**
+ * "Total/Successful/Failed SRVCC attempts" ανά operator, από τα ήδη-αθροισμένα
+ * (location, status, count) rows του /api/srvcc — ίδιο σχήμα με buildCellBandCountTable.
+ */
+export const buildSrvccTable = (rows: SrvccRow[]): { byOperator: Map<string, SrvccStats>; total: SrvccStats } => {
+  const byOperator = new Map<string, SrvccStats>();
+  const total: SrvccStats = { attempts: 0, successful: 0, failed: 0 };
+
+  for (const row of rows) {
+    if (!(row.count > 0)) continue;
+
+    const key = resolveOperator(row.location).key;
+    const current = byOperator.get(key) ?? { attempts: 0, successful: 0, failed: 0 };
+
+    current.attempts += row.count;
+    total.attempts += row.count;
+    if (row.status === "success") {
+      current.successful += row.count;
+      total.successful += row.count;
+    } else if (row.status === "fail") {
+      current.failed += row.count;
+      total.failed += row.count;
+    }
+    byOperator.set(key, current);
+  }
+
+  return { byOperator, total };
 };
 
 export interface VoiceTable {
@@ -443,7 +642,17 @@ export interface VoiceTable {
   total: VoiceStats;
 }
 
-export const buildVoiceTable = (rows: AllCallsRow[], mode: CallMode): VoiceTable => {
+/**
+ * `cellBandCountRows` (βλ. buildCellBandCountTable) εφαρμόζεται μόνο όταν mode="GSM" —
+ * το "Number of 900/1800 band Cells" δεν βγάζει νόημα στο FREE table. `srvccRows` (βλ.
+ * buildSrvccTable) εφαρμόζεται μόνο όταν mode="FREE" — το αντίστροφο.
+ */
+export const buildVoiceTable = (
+  rows: AllCallsRow[],
+  mode: CallMode,
+  cellBandCountRows: CellBandCountRow[] = [],
+  srvccRows: SrvccRow[] = [],
+): VoiceTable => {
   const scoped = rows.filter((row) => resolveMode(row.Location) === mode);
   const grouped = new Map<string, AllCallsRow[]>();
 
@@ -454,12 +663,36 @@ export const buildVoiceTable = (rows: AllCallsRow[], mode: CallMode): VoiceTable
     else grouped.set(key, [row]);
   }
 
+  const applyCellCounts = mode === "GSM" && cellBandCountRows.length > 0;
+  const cellBandCounts = applyCellCounts ? buildCellBandCountTable(cellBandCountRows) : null;
+
+  const applySrvcc = mode === "FREE" && srvccRows.length > 0;
+  const srvccTable = applySrvcc ? buildSrvccTable(srvccRows) : null;
+
   const byOperator = new Map<string, VoiceStats>();
   for (const [key, operatorRows] of grouped) {
-    byOperator.set(key, buildVoiceStats(operatorRows));
+    const stats = buildVoiceStats(operatorRows);
+    if (cellBandCounts) {
+      const counts = cellBandCounts.byOperator.get(key) ?? EMPTY_CELL_BAND_COUNTS;
+      stats.cellCount900 = counts.band900;
+      stats.cellCount1800 = counts.band1800;
+    }
+    if (srvccTable) {
+      stats.srvcc = srvccTable.byOperator.get(key) ?? EMPTY_SRVCC_STATS;
+    }
+    byOperator.set(key, stats);
   }
 
-  return { mode, byOperator, total: buildVoiceStats(scoped) };
+  const total = buildVoiceStats(scoped);
+  if (cellBandCounts) {
+    total.cellCount900 = cellBandCounts.total.band900;
+    total.cellCount1800 = cellBandCounts.total.band1800;
+  }
+  if (srvccTable) {
+    total.srvcc = srvccTable.total;
+  }
+
+  return { mode, byOperator, total };
 };
 
 /* ────────────────────────── TABLE 22 — PS Data ────────────────────────── */

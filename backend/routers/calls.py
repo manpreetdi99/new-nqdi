@@ -170,7 +170,53 @@ def list_calls(
                 MOS.MosDlMin AS mosDlMin,
                 MOS.MosDlMax AS mosDlMax,
                 MOS.MosDlSamples AS mosDlSamples,
-                CODEC.CodecName AS codecName,
+                -- MOC/MTC setup time: ίδιο κριτήριο ΚΑΙ ίδια πηγή τιμής με το A-LEVEL
+                -- "LQCallDataGSM.sql" reference query's MOCSetupTime/MTCSetupTime — απευθείας
+                -- vResultsKPI.Duration (KPIID=10100, ErrorCode=0), όχι CA.setupTime (δοκιμάστηκε
+                -- και ΔΕΝ ταιριάζει 1:1 με το pivot — βλ. VKPI OUTER APPLY). Callstatus in
+                -- Completed/Dropped, Technology σε UMTS 2100/900 GSM 900/1800 (NETTECH, ίδιο
+                -- "latest NetworkInfo πριν το session" pattern με το SessionCTE των A-LEVEL
+                -- queries / /api/technology_mix). Επαληθεύτηκε 1:1 (τιμή ΚΑΙ sample count) στο
+                -- STR_EVIA SOUTH_TOURISTIC AREAS_2026H2 / STEREA_26H2.
+                CASE
+                    WHEN CA.callDir LIKE 'A->B'
+                     AND CA.callStatus IN ('Completed', 'Dropped')
+                     AND NETTECH.Technology IN ('UMTS 2100', 'UMTS 900', 'GSM 900', 'GSM 1800')
+                    THEN VKPI.Kpi10100Duration ELSE NULL
+                END AS mocSetupTime,
+                CASE
+                    WHEN CA.callDir LIKE 'B->A'
+                     AND CA.callStatus IN ('Completed', 'Dropped')
+                     AND NETTECH.Technology IN ('UMTS 2100', 'UMTS 900', 'GSM 900', 'GSM 1800')
+                    THEN VKPI.Kpi10100Duration ELSE NULL
+                END AS mtcSetupTime,
+                -- VoLTE/CS Call setup time: ίδιο κριτήριο με το A-LEVEL "LQCallData.sql"
+                -- reference query's CallSetupTimeVoLTE/CallSetupTimeCS — απευθείας
+                -- vResultsKPI.Duration, ΟΧΙ CA.setupTime (ίδιο πρόβλημα με το MOC/MTC
+                -- παραπάνω). Real-data check στο ίδιο dataset: VoLTE/SRVCC rows έχουν
+                -- ErrorCode=0 στο KPIID=11013 (η reference's KPIId), ενώ CS/CSFB rows δεν
+                -- έχουν σχεδόν καθόλου KPIID=10108 (η reference's KPIId για CS) — αντ' αυτού
+                -- έχουν KPIID=10100 (το ΙΔΙΟ KPI με το MOC/MTC), οπότε το CS setup διαβάζει
+                -- από εκεί (10108 μένει σαν fallback για τις σπάνιες γραμμές που το έχουν).
+                -- Callstatus in Completed/Dropped όπως στη reference. Ένα row ανά κλήση εδώ
+                -- (όχι A/B-side ζευγάρι σαν CallSession.CallMode/CallModeB), οπότε αρκεί το
+                -- CA.CallMode.
+                CASE
+                    WHEN CA.callStatus IN ('Completed', 'Dropped') AND CA.callmode IN ('VoLTE', 'SRVCC')
+                    THEN VKPI.Kpi11013Duration ELSE NULL
+                END AS volteSetupTime,
+                CASE
+                    WHEN CA.callStatus IN ('Completed', 'Dropped') AND CA.callmode IN ('CSFB', 'CS')
+                    THEN VKPI.KpiCsDuration ELSE NULL
+                END AS csSetupTime,
+                CODEC.CodecFrAmrWbCount AS codecFrAmrWbCount,
+                CODEC.CodecAmrHrCount AS codecAmrHrCount,
+                CODEC.CodecAmrCount AS codecAmrCount,
+                CODEC.CodecEfrCount AS codecEfrCount,
+                CODEC.CodecFrCount AS codecFrCount,
+                CODEC.CodecHrCount AS codecHrCount,
+                CODEC.CodecOtherCount AS codecOtherCount,
+                CODEC.CodecNoRateCount AS codecNoRateCount,
                 BADCALL.BadCall AS badCall,
                 BADCALL.BadCallPct AS badCallPercentage,
                 BADCALL.NumBadSample AS numBadSample,
@@ -211,31 +257,87 @@ def list_calls(
                     AND TI.Valid = 1
                     AND LQ.OptionalWB BETWEEN 1 AND 5
             ) MOS
-            -- Dominant codec type for the session: same bucketing inputs as the
-            -- A-LEVEL "Codec Type Usage %" query (Testinfo.Valid=1, Appl % 10 <> 0,
-            -- direction-matched vVoiceCodecTest), picking the codec with the most
-            -- tests so a session with a couple of stray tests in another codec
-            -- still reads as its dominant one.
+            -- Session's radio band (π.χ. "GSM 900", "UMTS 2100") για το MOC/MTC setup
+            -- time φίλτρο παραπάνω — ίδιο "latest NetworkInfo πριν το session start"
+            -- pattern με το SessionCTE των A-LEVEL queries και με το OUTER APPLY του
+            -- /api/technology_mix, εδώ όμως keyed στο session start αντί σε Position.
             OUTER APPLY (
-                SELECT TOP (1)
-                    CASE WHEN VVCT.CodecName IS NULL OR VVCT.CodecName = '-' THEN 'no codec rate' ELSE VVCT.CodecName END AS CodecName
-                FROM TestInfo TI2
-                JOIN ResultsLQ08Avg R2 ON TI2.TestId = R2.TestId AND R2.Appl % 10 <> 0
-                LEFT JOIN vVoiceCodecTest VVCT ON TI2.TestID = VVCT.TestID AND (
-                    (TI2.direction = 'A->B' AND VVCT.Direction = 'U') OR
-                    (TI2.direction = 'B->A' AND VVCT.Direction = 'D')
-                )
-                WHERE TI2.SessionID = CA.SessionId AND TI2.Valid = 1
-                GROUP BY CASE WHEN VVCT.CodecName IS NULL OR VVCT.CodecName = '-' THEN 'no codec rate' ELSE VVCT.CodecName END
-                ORDER BY COUNT(*) DESC
+                SELECT TOP (1) n.Technology
+                FROM NetworkInfo AS n
+                WHERE n.FileId = CA.FileId
+                  AND n.MsgTime < COALESCE(S.startTime, SB.startTime)
+                ORDER BY n.MsgTime DESC
+            ) NETTECH
+            -- Setup-time KPI durations για MOC/MTC/VoLTE/CS setup time παραπάνω —
+            -- vResultsKPI (υπάρχει σ' αυτό το schema, βλ. σχόλια στα CASE) φιλτραρισμένο σε
+            -- ErrorCode=0, MIN ανά KPIID (μπορεί να υπάρχουν πολλαπλές γραμμές/session).
+            -- KpiCsDuration παίρνει KPIID 10100 (πραγματική πηγή του "CS" setup σ' αυτά τα
+            -- δεδομένα) με fallback στο 10108 (το KPIId της reference query, σπάνιο εδώ).
+            OUTER APPLY (
+                SELECT
+                    MIN(CASE WHEN VK.KPIID = 10100 AND VK.ErrorCode = 0 THEN VK.Duration * 0.001 END) AS Kpi10100Duration,
+                    MIN(CASE WHEN VK.KPIID = 11013 AND VK.ErrorCode = 0 THEN VK.Duration * 0.001 END) AS Kpi11013Duration,
+                    MIN(CASE WHEN VK.KPIID IN (10100, 10108) AND VK.ErrorCode = 0 THEN VK.Duration * 0.001 END) AS KpiCsDuration
+                FROM vResultsKPI VK
+                WHERE VK.SessionID = CA.SessionId
+            ) VKPI
+            -- Codec Type Usage % inputs for the session: per-test counts bucketed
+            -- exactly like the A-LEVEL "CallCodecTypeUsageGSM.sql" reference query /
+            -- bucketCodec() in attachmentC.ts (Testinfo.Valid=1, Appl % 10 <> 0,
+            -- direction-matched vVoiceCodecTest; AMR+WB -> FR AMR WB, AMR+HR -> AMR HR,
+            -- AMR -> AMR, *EFR* -> EFR, HR%/FR% -> HR/FR, unrecognized -> other,
+            -- NULL/'-' -> no codec rate). Returned as counts (not one dominant name) so
+            -- the frontend can weight "Codec Type Usage %" by actual test volume.
+            OUTER APPLY (
+                SELECT
+                    SUM(CASE WHEN Bucketed.CodecBucket = 'FR AMR WB' THEN Bucketed.Cnt ELSE 0 END) AS CodecFrAmrWbCount,
+                    SUM(CASE WHEN Bucketed.CodecBucket = 'AMR HR' THEN Bucketed.Cnt ELSE 0 END) AS CodecAmrHrCount,
+                    SUM(CASE WHEN Bucketed.CodecBucket = 'AMR' THEN Bucketed.Cnt ELSE 0 END) AS CodecAmrCount,
+                    SUM(CASE WHEN Bucketed.CodecBucket = 'EFR' THEN Bucketed.Cnt ELSE 0 END) AS CodecEfrCount,
+                    SUM(CASE WHEN Bucketed.CodecBucket = 'FR' THEN Bucketed.Cnt ELSE 0 END) AS CodecFrCount,
+                    SUM(CASE WHEN Bucketed.CodecBucket = 'HR' THEN Bucketed.Cnt ELSE 0 END) AS CodecHrCount,
+                    SUM(CASE WHEN Bucketed.CodecBucket = 'other' THEN Bucketed.Cnt ELSE 0 END) AS CodecOtherCount,
+                    SUM(CASE WHEN Bucketed.CodecBucket = 'no codec rate' THEN Bucketed.Cnt ELSE 0 END) AS CodecNoRateCount
+                FROM (
+                    SELECT
+                        CASE
+                            WHEN VVCT.CodecName IS NULL OR VVCT.CodecName = '-' THEN 'no codec rate'
+                            WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('WB', UPPER(VVCT.CodecName)) > 0 THEN 'FR AMR WB'
+                            WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('HR', UPPER(VVCT.CodecName)) > 0 THEN 'AMR HR'
+                            WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 THEN 'AMR'
+                            WHEN CHARINDEX('EFR', UPPER(VVCT.CodecName)) > 0 THEN 'EFR'
+                            WHEN UPPER(VVCT.CodecName) LIKE 'HR%' THEN 'HR'
+                            WHEN UPPER(VVCT.CodecName) LIKE 'FR%' THEN 'FR'
+                            ELSE 'other'
+                        END AS CodecBucket,
+                        COUNT(*) AS Cnt
+                    FROM TestInfo TI2
+                    JOIN ResultsLQ08Avg R2 ON TI2.TestId = R2.TestId AND R2.Appl % 10 <> 0
+                    LEFT JOIN vVoiceCodecTest VVCT ON TI2.TestID = VVCT.TestID AND (
+                        (TI2.direction = 'A->B' AND VVCT.Direction = 'U') OR
+                        (TI2.direction = 'B->A' AND VVCT.Direction = 'D')
+                    )
+                    WHERE TI2.SessionID = CA.SessionId AND TI2.Valid = 1
+                    GROUP BY CASE
+                        WHEN VVCT.CodecName IS NULL OR VVCT.CodecName = '-' THEN 'no codec rate'
+                        WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('WB', UPPER(VVCT.CodecName)) > 0 THEN 'FR AMR WB'
+                        WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('HR', UPPER(VVCT.CodecName)) > 0 THEN 'AMR HR'
+                        WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 THEN 'AMR'
+                        WHEN CHARINDEX('EFR', UPPER(VVCT.CodecName)) > 0 THEN 'EFR'
+                        WHEN UPPER(VVCT.CodecName) LIKE 'HR%' THEN 'HR'
+                        WHEN UPPER(VVCT.CodecName) LIKE 'FR%' THEN 'FR'
+                        ELSE 'other'
+                    END
+                ) Bucketed
             ) CODEC
             -- "BadCall" — ίδιο κριτήριο με το A-LEVEL LQStatisticData.sql reference query
             -- (Attachment C): ανά session, δείγμα-προς-δείγμα (όχι μέσος όρος). Ένα
             -- δείγμα είναι "κακό" αν OptionalWB < 2.2 ή έχει Silence flag (bit 10 του
             -- reversed QualityCode). BadCall = 1 αν το ποσοστό κακών δειγμάτων στα
             -- έγκυρα δείγματα ξεπερνά 15%. Ίδιο Valid/Appl φίλτρο με το MOS OUTER APPLY
-            -- παραπάνω, μεταφρασμένο στο CallAnalysis (η reference χρησιμοποιεί τον
-            -- παλιό πίνακα Callsession/vResultsKPI, που δεν υπάρχει σ' αυτό το schema).
+            -- παραπάνω, μεταφρασμένο στο CallAnalysis (η reference υπολογίζει το BadCall
+            -- πάνω σε Callsession/vResultsKPI QualityCode/Silence bits — δεν έχει
+            -- επαληθευτεί 1:1 σαν το MOC/MTC/VoLTE/CS setup time παρακάτω, βλ. VKPI).
             OUTER APPLY (
                 SELECT
                     CASE
@@ -410,6 +512,74 @@ def get_technology_mix(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/cell_band_count")
+def get_cell_band_count(
+    database: str = Query(..., min_length=1),
+    collection: list[str] | None = Query(default=None),
+):
+    """"Number of 900/1800 band Cells" (Attachment C, GSM) — πλήθος ΔΙΑΚΡΙΤΩΝ cells ανά
+    (ASideLocation, NetworkInfo.Technology). Ίδιο query και μεθοδολογία με το A-LEVEL
+    "CELL ID GSM.sql" reference query (κοινό πλέον για τους 3 operators, πριν ήταν 3
+    ξεχωριστά αρχεία ένα ανά ASideLocation), με COUNT(DISTINCT NetworkInfo.CID) — ΟΧΙ
+    CGI, που έχει μικρές ασυνέπειες LAC/MCC/MNC formatting και φουσκώνει το count κατά
+    1-2. Επαληθεύτηκε 1:1 στο STR_EVIA SOUTH_TOURISTIC AREAS_2026H2 / STEREA_26H2
+    (GSM 1800: 1/24/8, GSM 900: 70/66/72 για Cosmote/Vodafone/Nova).
+
+    Το "latest NetworkInfo πριν από κάθε Position" εδώ ΔΕΝ είναι το OUTER APPLY
+    MsgTime<Position.MsgTime pattern του /api/technology_mix — είναι το
+    NetworkIdRelation nr1/nr2 boundary-by-PosId pattern της reference query. Δύο
+    διαφορετικές μεθοδολογίες για «ποιο δίκτυο ήταν ενεργό σ' αυτή τη θέση» — κρατάμε
+    εδώ ακριβώς αυτή της reference γιατί είναι αυτή που επαληθεύτηκε 1:1.
+    """
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT
+                FileList.ASideLocation AS location,
+                NetworkInfo.Technology AS technology,
+                COUNT(DISTINCT NetworkInfo.CID) AS cellCount
+            FROM
+                Sessions AS Sessions, Position, FileList,
+                NetworkIdRelation nr1, NetworkIdRelation nr2,
+                NetworkInfo
+            WHERE FileList.CollectionName like '%%' AND
+                Sessions.FileId = FileList.FileId and
+                Sessions.Valid = 1 And
+                Sessions.SessionId = Position.SessionId And
+                FileList.FileId = NetworkInfo.FileId and
+                NetworkInfo.FileId = Position.FileId And
+                (NetworkInfo.NetworkId = nr1.NetworkId and Position.PosId > nr1.PosId) and
+                (NetworkInfo.NetworkId + 1 = nr2.NetworkId and Position.PosId <= nr2.PosId) and
+                nr2.type = 'NetworkId' and nr1.type = 'NetworkId' and
+                NetworkInfo.CId > 0 and
+                FileList.ASideLocation LIKE '%GSM'
+        """
+
+        params: list[object] = []
+        selected_collections = [col for col in (collection or []) if col and col.strip()]
+        if selected_collections:
+            placeholders = ", ".join(["?"] * len(selected_collections))
+            query += f" AND FileList.CollectionName IN ({placeholders})"
+            params.extend(selected_collections)
+
+        query += " GROUP BY FileList.ASideLocation, NetworkInfo.Technology"
+
+        cursor.execute(query, tuple(params))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+
+        data = [{columns[idx]: row[idx] for idx in range(len(columns))} for row in rows]
+
+        conn.close()
+
+        return {"rows": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/serving_band_tech")
 def get_serving_band_tech(
     database: str = Query(..., min_length=1),
@@ -485,6 +655,91 @@ def get_serving_band_tech(
             JOIN FactNR5GCellInfo ci ON ci.NR5GCACellInfoId = r.FactIdFactNR5GCellInfo
             WHERE ci.Band IS NOT NULL
             GROUP BY b.Location, 'NR' + REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ci.Band))), 'NR', ''), 'N', '')
+        """
+
+        cursor.execute(query, tuple(params))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+
+        data = [{columns[idx]: row[idx] for idx in range(len(columns))} for row in rows]
+
+        conn.close()
+
+        return {"rows": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/srvcc")
+def get_srvcc(
+    database: str = Query(..., min_length=1),
+    collection: list[str] | None = Query(default=None),
+):
+    """"Total/Successful/Failed SRVCC attempts" — 3 γραμμές στο τέλος του FREE table
+    (Attachment C). Ίδιο query/μεθοδολογία με το A-LEVEL "SRVCC RAW.sql" reference
+    query: ένα "attempt" = ένα distinct (SessionId, ResultsKPI.KPIId, ErrorCode) HO
+    event, KPIId 38040 (4G->3G) ή 38050 (4G->2G) — το ίδιο HO (handover) KPI, όχι
+    το vResultsKPI/Kpi11013 που τροφοδοτεί το VoLTE call setup time. ErrorCode=0
+    -> success, ErrorCode=108003 -> fail (η reference query ονομάζει "N/A" κάθε
+    άλλο ErrorCode — δεν το μετράμε ως fail, αλλά μπαίνει στο "attempts" total).
+
+    Ίδιο "latest NetworkInfo πριν το session start" pattern (FileId + StartTime >
+    MsgTime) με το A-LEVEL "LQCallData.sql" reference query's WHERE clause — ΔΕΝ
+    είναι το Position.MsgTime OUTER APPLY του /api/technology_mix ούτε το
+    NetworkIdRelation boundary pattern του /api/cell_band_count, κρατάμε το ίδιο
+    με τη reference query.
+
+    Επιστρέφει ήδη-αθροισμένα (location, status, count) rows — το frontend τα
+    αθροίζει ανά operator (buildSrvccTable).
+    """
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        query = """
+            WITH SrvccEvents AS (
+                SELECT DISTINCT
+                    Sessions.SessionId,
+                    FileList.ASideLocation AS Location,
+                    ResultsKPI.ErrorCode
+                FROM NetworkInfo, CallSession
+                JOIN Sessions ON CallSession.SessionId = Sessions.SessionId
+                JOIN FileList ON FileList.FileId = Sessions.FileId
+                JOIN ResultsKPI ON CallSession.SessionId = ResultsKPI.SessionId
+                WHERE Sessions.Valid = 1
+                  AND CallSession.callStatus IN ('Completed', 'Failed', 'Dropped')
+                  AND FileList.ASideLocation LIKE '%Free A%'
+                  AND ResultsKPI.KPIId IN (38040, 38050)
+                  AND NetworkInfo.NetworkId = (
+                        SELECT MAX(nf.NetworkId) FROM NetworkInfo nf
+                        WHERE FileList.FileId = nf.FileId AND Sessions.StartTime > nf.MsgTime
+                  )
+        """
+
+        params: list[object] = []
+        selected_collections = [col for col in (collection or []) if col and col.strip()]
+        if selected_collections:
+            placeholders = ", ".join(["?"] * len(selected_collections))
+            query += f" AND FileList.CollectionName IN ({placeholders})"
+            params.extend(selected_collections)
+
+        query += """
+            )
+            SELECT
+                Location AS location,
+                CASE
+                    WHEN ErrorCode = 0 THEN 'success'
+                    WHEN ErrorCode = 108003 THEN 'fail'
+                    ELSE 'other'
+                END AS status,
+                COUNT(*) AS count
+            FROM SrvccEvents
+            GROUP BY Location, CASE
+                    WHEN ErrorCode = 0 THEN 'success'
+                    WHEN ErrorCode = 108003 THEN 'fail'
+                    ELSE 'other'
+                END
         """
 
         cursor.execute(query, tuple(params))

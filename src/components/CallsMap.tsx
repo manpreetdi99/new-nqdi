@@ -1,5 +1,5 @@
 import { useMemo, useEffect, useState } from "react";
-import { MapPin, Phone, PhoneOff, PhoneForwarded, X, Wifi } from "lucide-react";
+import { MapPin, Phone, PhoneOff, PhoneForwarded, X, Wifi, LayoutGrid, Map as MapIcon } from "lucide-react";
 import type { CallRecord } from "@/lib/callData";
 import type { DataSessionItem } from "@/components/DataSessionsList";
 import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from "react-leaflet";
@@ -201,11 +201,113 @@ function DataSessionCard({ location, sessions, totalTests, passCount, failCount,
   );
 }
 
+// ── shared marker renderers (used by both the single map and split-by-location maps) ──
+function renderCallMarker(point: { lat: number; lng: number; call: CallRecord }, onSelectCall: (call: CallRecord) => void) {
+  const status = point.call.status;
+  let fillColor = "#048104ff";
+  let color     = "#048104ff";
+  let statusLabel = "Ολοκληρώθηκε";
+  if (status === "dropped") {
+    fillColor = "#f59e0b"; color = "#d97706"; statusLabel = "Διακόπηκε";
+  } else if (status === "failed") {
+    fillColor = "#ef4444"; color = "#dc2626"; statusLabel = "Απέτυχε";
+  } else if (status === "system release") {
+    fillColor = "#a855f7"; color = "#9333ea"; statusLabel = "System Release";
+  }
+  return (
+    <CircleMarker
+      key={point.call.callId}
+      center={[point.lat, point.lng]}
+      radius={6}
+      pathOptions={{ fillColor, fillOpacity: 0.7, color, weight: 2 }}
+      eventHandlers={{ click: () => onSelectCall(point.call) }}
+    >
+      <Tooltip direction="top" offset={[0, -10]} opacity={0.95}>
+        <div className="font-sans space-y-0.5 text-center">
+          <div className="font-bold text-sm">#{point.call.callId}</div>
+          {point.call.region && (
+            <div className="text-xs text-muted-foreground">📍 {point.call.region}</div>
+          )}
+          <div className="text-xs">{statusLabel}</div>
+        </div>
+      </Tooltip>
+    </CircleMarker>
+  );
+}
+
+function renderDataMarker(point: { lat: number; lng: number; item: DataSessionItem }) {
+  const { fill, stroke } = dataSessionColor(point.item.passCount, point.item.tests.length);
+  const pct = point.item.tests.length > 0
+    ? Math.round((point.item.passCount / point.item.tests.length) * 100)
+    : 0;
+  return (
+    <CircleMarker
+      key={`data-${point.item.sessionId}`}
+      center={[point.lat, point.lng]}
+      radius={7}
+      pathOptions={{ fillColor: fill, fillOpacity: 0.85, color: stroke, weight: 2, dashArray: "4 2" }}
+    >
+      <Tooltip direction="top" offset={[0, -10]} opacity={0.95}>
+        <div className="font-sans space-y-0.5 text-center">
+          <div className="font-bold text-sm">Data #{point.item.sessionId}</div>
+          {point.item.first?.Location && (
+            <div className="text-xs text-muted-foreground">📍 {point.item.first.Location}</div>
+          )}
+          <div className="text-xs">
+            {point.item.passCount}/{point.item.tests.length} tests — {pct}%
+          </div>
+          <div className="text-[10px] text-muted-foreground">
+            {pct >= 90 ? "✅ Excellent" : pct >= 70 ? "🟡 Good" : pct >= 50 ? "🟠 Marginal" : "🔴 Poor"}
+          </div>
+        </div>
+      </Tooltip>
+    </CircleMarker>
+  );
+}
+
+// ── one small map for a single location, used in the split view ───────────────
+interface LocationMiniMapProps {
+  location: string;
+  calls: Array<{ lat: number; lng: number; call: CallRecord }>;
+  data: Array<{ lat: number; lng: number; item: DataSessionItem }>;
+  onSelectCall: (call: CallRecord) => void;
+}
+
+function LocationMiniMap({ location, calls, data, onSelectCall }: LocationMiniMapProps) {
+  const allPoints = useMemo(() => [...calls, ...data], [calls, data]);
+  return (
+    <div className="rounded-lg overflow-hidden border border-border bg-muted/10">
+      <div className="px-2.5 py-1.5 bg-muted/40 border-b border-border flex items-center justify-between gap-2">
+        <span className="text-[11px] font-semibold text-foreground truncate" title={location}>
+          {location}
+        </span>
+        <span className="text-[10px] text-muted-foreground font-mono shrink-0">
+          {calls.length + data.length} pts
+        </span>
+      </div>
+      <div className="h-[240px]">
+        <MapContainer center={[39.07, 23.73]} zoom={6} scrollWheelZoom={true} style={{ height: "100%", width: "100%" }}>
+          <MapBounds points={allPoints} />
+          <TileLayer
+            attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+            url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+          />
+          {calls.map(p => renderCallMarker(p, onSelectCall))}
+          {data.map(p => renderDataMarker(p))}
+        </MapContainer>
+      </div>
+    </div>
+  );
+}
+
 // ── main component ────────────────────────────────────────────────────────────
 const CallsMap = ({ calls, onSelectCall, dataSessions = [] }: CallsMapProps) => {
 
   // Selected locations: [] = All (no filter)
   const [selLocations, setSelLocations] = useState<string[]>([]);
+
+  // Split view: one small map per location instead of a single combined map
+  const [splitView, setSplitView] = useState(false);
 
   // Reset filter when the calls dataset changes
   useEffect(() => { setSelLocations([]); }, [calls]);
@@ -324,6 +426,33 @@ const CallsMap = ({ calls, onSelectCall, dataSessions = [] }: CallsMapProps) => 
 
   const hasFilter = selLocations.length > 0;
 
+  // ── Points grouped by location, for the split-map view (respects the current filter) ──
+  const pointsByLocation = useMemo(() => {
+    const map: Record<string, {
+      calls: Array<{ lat: number; lng: number; call: CallRecord }>;
+      data: Array<{ lat: number; lng: number; item: DataSessionItem }>;
+    }> = {};
+    mapPoints.forEach(p => {
+      const loc = p.call.region || "Unknown";
+      if (!map[loc]) map[loc] = { calls: [], data: [] };
+      map[loc].calls.push(p);
+    });
+    dataPoints.forEach(p => {
+      const loc = p.item.first?.Location || "Unknown";
+      if (!map[loc]) map[loc] = { calls: [], data: [] };
+      map[loc].data.push(p);
+    });
+    return map;
+  }, [mapPoints, dataPoints]);
+
+  const splitLocations = useMemo(
+    () => Object.keys(pointsByLocation).sort(
+      (a, b) => (pointsByLocation[b].calls.length + pointsByLocation[b].data.length)
+              - (pointsByLocation[a].calls.length + pointsByLocation[a].data.length),
+    ),
+    [pointsByLocation],
+  );
+
   // ── render ────────────────────────────────────────────────────────────────
   return (
     <div className="bg-card border border-border rounded-lg p-5">
@@ -333,15 +462,31 @@ const CallsMap = ({ calls, onSelectCall, dataSessions = [] }: CallsMapProps) => 
           <MapPin className="h-4 w-4 text-primary" />
           Χάρτης Κλήσεων — Ελλάδα
         </h2>
-        {hasFilter && (
+        <div className="flex items-center gap-2">
           <button
             type="button"
-            onClick={() => setSelLocations([])}
-            className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border border-border bg-muted hover:bg-muted/70"
+            onClick={() => setSplitView(v => !v)}
+            title={splitView ? "Επιστροφή σε ενιαίο χάρτη" : "Διαχωρισμός σε χάρτες ανά τοποθεσία"}
+            className={[
+              "flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border transition-colors",
+              splitView
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-border bg-muted hover:bg-muted/70 text-foreground",
+            ].join(" ")}
           >
-            <X className="h-3 w-3" /> Clear filter
+            {splitView ? <MapIcon className="h-3 w-3" /> : <LayoutGrid className="h-3 w-3" />}
+            {splitView ? "Ενιαίος χάρτης" : "Split ανά τοποθεσία"}
           </button>
-        )}
+          {hasFilter && (
+            <button
+              type="button"
+              onClick={() => setSelLocations([])}
+              className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded border border-border bg-muted hover:bg-muted/70"
+            >
+              <X className="h-3 w-3" /> Clear filter
+            </button>
+          )}
+        </div>
       </div>
       <p className="text-xs text-muted-foreground mb-4">
         Κλικ σε location για φίλτρο · κλικ σε marker για λεπτομέρειες
@@ -419,83 +564,44 @@ const CallsMap = ({ calls, onSelectCall, dataSessions = [] }: CallsMapProps) => 
         </div>
 
         {/* ── Real Map ─────────────────────────────────────────────────── */}
-        <div className="flex-1 relative h-[520px] min-h-[520px] rounded-lg overflow-hidden border border-border">
-          <MapContainer
-            center={[39.07, 23.73]}
-            zoom={6}
-            scrollWheelZoom={true}
-            style={{ height: "100%", width: "100%" }}
-          >
-            <MapBounds points={mapPoints} />
-            <TileLayer
-              attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
-              url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-            />
-            {mapPoints.map((point) => {
-              const status = point.call.status;
-              let fillColor = "#048104ff";
-              let color     = "#048104ff";
-              let statusLabel = "Ολοκληρώθηκε";
-              if (status === "dropped") {
-                fillColor = "#f59e0b"; color = "#d97706"; statusLabel = "Διακόπηκε";
-              } else if (status === "failed") {
-                fillColor = "#ef4444"; color = "#dc2626"; statusLabel = "Απέτυχε";
-              } else if (status === "system release") {
-                fillColor = "#a855f7"; color = "#9333ea"; statusLabel = "System Release";
-              }
-              return (
-                <CircleMarker
-                  key={point.call.callId}
-                  center={[point.lat, point.lng]}
-                  radius={6}
-                  pathOptions={{ fillColor, fillOpacity: 0.7, color, weight: 2 }}
-                  eventHandlers={{ click: () => onSelectCall(point.call) }}
-                >
-                  <Tooltip direction="top" offset={[0, -10]} opacity={0.95}>
-                    <div className="font-sans space-y-0.5 text-center">
-                      <div className="font-bold text-sm">#{point.call.callId}</div>
-                      {point.call.region && (
-                        <div className="text-xs text-muted-foreground">📍 {point.call.region}</div>
-                      )}
-                      <div className="text-xs">{statusLabel}</div>
-                    </div>
-                  </Tooltip>
-                </CircleMarker>
-              );
-            })}
-
-            {/* ── Data session markers ── */}
-            {dataPoints.map((point) => {
-              const { fill, stroke } = dataSessionColor(point.item.passCount, point.item.tests.length);
-              const pct = point.item.tests.length > 0
-                ? Math.round((point.item.passCount / point.item.tests.length) * 100)
-                : 0;
-              return (
-                <CircleMarker
-                  key={`data-${point.item.sessionId}`}
-                  center={[point.lat, point.lng]}
-                  radius={7}
-                  pathOptions={{ fillColor: fill, fillOpacity: 0.85, color: stroke, weight: 2, dashArray: "4 2" }}
-                >
-                  <Tooltip direction="top" offset={[0, -10]} opacity={0.95}>
-                    <div className="font-sans space-y-0.5 text-center">
-                      <div className="font-bold text-sm">Data #{point.item.sessionId}</div>
-                      {point.item.first?.Location && (
-                        <div className="text-xs text-muted-foreground">📍 {point.item.first.Location}</div>
-                      )}
-                      <div className="text-xs">
-                        {point.item.passCount}/{point.item.tests.length} tests — {pct}%
-                      </div>
-                      <div className="text-[10px] text-muted-foreground">
-                        {pct >= 90 ? "✅ Excellent" : pct >= 70 ? "🟡 Good" : pct >= 50 ? "🟠 Marginal" : "🔴 Poor"}
-                      </div>
-                    </div>
-                  </Tooltip>
-                </CircleMarker>
-              );
-            })}
-          </MapContainer>
-        </div>
+        {splitView ? (
+          <div className="flex-1 h-[520px] min-h-[520px] overflow-y-auto pr-0.5">
+            {splitLocations.length > 0 ? (
+              <div className="grid grid-cols-2 gap-3">
+                {splitLocations.map(loc => (
+                  <LocationMiniMap
+                    key={loc}
+                    location={loc}
+                    calls={pointsByLocation[loc].calls}
+                    data={pointsByLocation[loc].data}
+                    onSelectCall={onSelectCall}
+                  />
+                ))}
+              </div>
+            ) : (
+              <div className="h-full flex items-center justify-center text-xs text-muted-foreground italic border border-border rounded-lg">
+                Δεν υπάρχουν δεδομένα για διαχωρισμό.
+              </div>
+            )}
+          </div>
+        ) : (
+          <div className="flex-1 relative h-[520px] min-h-[520px] rounded-lg overflow-hidden border border-border">
+            <MapContainer
+              center={[39.07, 23.73]}
+              zoom={6}
+              scrollWheelZoom={true}
+              style={{ height: "100%", width: "100%" }}
+            >
+              <MapBounds points={mapPoints} />
+              <TileLayer
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors'
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              />
+              {mapPoints.map(point => renderCallMarker(point, onSelectCall))}
+              {dataPoints.map(point => renderDataMarker(point))}
+            </MapContainer>
+          </div>
+        )}
 
       </div>
     </div>

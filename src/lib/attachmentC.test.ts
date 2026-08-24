@@ -2,15 +2,18 @@ import { describe, it, expect } from "vitest";
 
 import {
   bucketTechnology,
+  buildCellBandCountTable,
   buildDataSections,
   buildDetailedTechnologyMix,
   buildReportPeriod,
   buildServingBandTechTable,
+  buildSrvccTable,
   buildTechnologyMix,
   buildTechnologyMixTable,
   buildVoiceStats,
   buildVoiceTable,
   classifyCallStatus,
+  classifyCustomCallMode,
   collectOperators,
   isoWeek,
   resolveMode,
@@ -152,15 +155,32 @@ describe("voice KPIs", () => {
   });
 
   it("splits setup time into MOC (A->B) and MTC (B->A)", () => {
+    // Το backend στέλνει ήδη τα mocSetupTime/mtcSetupTime pre-filtered/split (βλ.
+    // CASE στο calls.py, ίδιο κριτήριο με το A-LEVEL "LQCallDataGSM.sql" reference
+    // query) — το buildVoiceStats απλά τα μαζεύει, δεν ξαναφιλτράρει με το callDir.
     const stats = buildVoiceStats([
-      call({ callDir: "A->B", setupTime: 3 }),
-      call({ callDir: "A->B", setupTime: 5 }),
-      call({ callDir: "B->A", setupTime: 2 }),
+      call({ setupTime: 3, mocSetupTime: 3 }),
+      call({ setupTime: 5, mocSetupTime: 5 }),
+      call({ setupTime: 2, mtcSetupTime: 2 }),
     ]);
 
     expect(stats.setupMoc).toEqual({ avg: 4, samples: 2, min: 3, max: 5 });
     expect(stats.setupMtc).toEqual({ avg: 2, samples: 1, min: 2, max: 2 });
     expect(stats.setupAll.avg).toBeCloseTo(10 / 3, 12);
+  });
+
+  it("splits setup time into VoLTE Call and CS Call", () => {
+    // Ίδιο pattern με το MOC/MTC test: το backend στέλνει ήδη τα volteSetupTime/
+    // csSetupTime pre-filtered/split (callMode VoLTE/SRVCC vs CSFB/CS, ίδιο κριτήριο
+    // με το A-LEVEL "LQCallData.sql" reference query's CallSetupTimeVoLTE/CS).
+    const stats = buildVoiceStats([
+      call({ volteSetupTime: 4 }),
+      call({ volteSetupTime: 6 }),
+      call({ csSetupTime: 5 }),
+    ]);
+
+    expect(stats.volteSetup).toEqual({ avg: 5, samples: 2, min: 4, max: 6 });
+    expect(stats.csSetup).toEqual({ avg: 5, samples: 1, min: 5, max: 5 });
   });
 
   it("counts low speech quality calls at the POLQA thresholds", () => {
@@ -217,6 +237,38 @@ describe("voice KPIs", () => {
     expect(table.byOperator.get("COSMOTE")?.attempts).toBe(2);
     expect(table.byOperator.get("VODAFONE")?.attempts).toBe(1);
     expect(table.byOperator.get("COSMOTE")?.dropped).toBe(1);
+  });
+});
+
+describe("custom call mode (VoLTE / CS) split — FREE table LQCallExtend_1PT", () => {
+  it("classifies VoLTE / CS from callMode, with a '-' callMode falling back to technology", () => {
+    expect(classifyCustomCallMode({ callMode: "VoLTE", technology: null })).toBe("volte");
+    expect(classifyCustomCallMode({ callMode: "SRVCC", technology: null })).toBe("volte");
+    expect(classifyCustomCallMode({ callMode: "CSFB", technology: null })).toBe("cs");
+    expect(classifyCustomCallMode({ callMode: "CS", technology: null })).toBe("cs");
+    expect(classifyCustomCallMode({ callMode: "-", technology: "LTE" })).toBe("volte");
+    expect(classifyCustomCallMode({ callMode: "-", technology: "UMTS 2100" })).toBe("cs");
+    expect(classifyCustomCallMode({ callMode: "-", technology: "GSM 900" })).toBe("cs");
+    expect(classifyCustomCallMode({ callMode: "Unknown", technology: "5G NR" })).toBe("volte");
+    // '-' callMode with no matching technology, or nothing at all -> unclassified.
+    expect(classifyCustomCallMode({ callMode: "-", technology: "5G NR" })).toBeNull();
+    expect(classifyCustomCallMode({ callMode: null, technology: null })).toBeNull();
+  });
+
+  it("splits attempts/dropped/unsuccessful by VoLTE vs CS call, same base as classifyCallStatus", () => {
+    // Ίδιο σενάριο με το "Vodafone Free A" της οθόνης 66-73 του Summary Voice: 1 dropped
+    // VoLTE call (γρ.72 "D" = 1) και 1 unsuccessful CS call.
+    const stats = buildVoiceStats([
+      call({ Location: "Vodafone Free A", status: "completed", callMode: "VoLTE" }),
+      call({ Location: "Vodafone Free A", status: "completed", callMode: "CSFB" }),
+      call({ Location: "Vodafone Free A", status: "Dropped", callMode: "VoLTE" }),
+      call({ Location: "Vodafone Free A", status: "Failed", callMode: "CSFB" }),
+      // System releases don't count toward either base, same as CallAttemps in the reference query.
+      call({ Location: "Vodafone Free A", status: "System Realase", callMode: "VoLTE" }),
+    ]);
+
+    expect(stats.volte).toEqual({ attempts: 2, dropped: 1, failed: 0 });
+    expect(stats.cs).toEqual({ attempts: 2, dropped: 0, failed: 1 });
   });
 });
 
@@ -338,6 +390,93 @@ describe("technology mix", () => {
 
     const gsm = buildTechnologyMixTable(rows, "GSM");
     expect(gsm.total.map((e) => e.bucket)).toEqual(["GSM 1800"]);
+  });
+
+  it("buildCellBandCountTable sums distinct-CID counts per operator, ignoring non-900/1800 rows", () => {
+    // Ίδιο σχήμα με τα rows του /api/cell_band_count: (location, technology, cellCount).
+    // Ground truth επαληθευμένο 1:1 στο STR_EVIA SOUTH_TOURISTIC AREAS_2026H2.
+    const rows = [
+      { location: "Cosmote GSM", technology: "GSM 1800", cellCount: 1 },
+      { location: "Cosmote GSM", technology: "GSM 900", cellCount: 70 },
+      { location: "Vodafone GSM", technology: "GSM 1800", cellCount: 24 },
+      { location: "Vodafone GSM", technology: "GSM 900", cellCount: 66 },
+      { location: "Nova GSM", technology: "GSM 1800", cellCount: 8 },
+      { location: "Nova GSM", technology: "GSM 900", cellCount: 72 },
+      // Άσχετο band/mode — δεν πρέπει να μπει στα totals.
+      { location: "Cosmote GSM", technology: "GSM 1900", cellCount: 999 },
+      { location: "Cosmote Free A", technology: "GSM 900", cellCount: 999 },
+    ];
+
+    const { byOperator, total } = buildCellBandCountTable(rows);
+
+    expect(byOperator.get("COSMOTE")).toEqual({ band900: 70, band1800: 1 });
+    expect(byOperator.get("VODAFONE")).toEqual({ band900: 66, band1800: 24 });
+    expect(byOperator.get("NOVA")).toEqual({ band900: 72, band1800: 8 });
+    expect(total).toEqual({ band900: 208, band1800: 33 });
+  });
+
+  it("buildVoiceTable only wires cellCount900/1800 into the GSM table, not FREE", () => {
+    const rows = [
+      { Location: "Cosmote GSM", SessionId: "1", callMode: null, callType: null, technology: "GSM", callDir: "A->B", status: "completed", setupTime: null, CollectionName: null, callDuration: null, callStartTimeStamp: null, Avg_mos: null, latitude: null, longitude: null, comment: null } as AllCallsRow,
+      { Location: "Cosmote Free A", SessionId: "2", callMode: null, callType: null, technology: "LTE", callDir: "A->B", status: "completed", setupTime: null, CollectionName: null, callDuration: null, callStartTimeStamp: null, Avg_mos: null, latitude: null, longitude: null, comment: null } as AllCallsRow,
+    ];
+    const cellBandCountRows = [{ location: "Cosmote GSM", technology: "GSM 900", cellCount: 70 }];
+
+    const gsm = buildVoiceTable(rows, "GSM", cellBandCountRows);
+    expect(gsm.byOperator.get("COSMOTE")?.cellCount900).toBe(70);
+    expect(gsm.byOperator.get("COSMOTE")?.cellCount1800).toBe(0);
+    expect(gsm.total.cellCount900).toBe(70);
+
+    const free = buildVoiceTable(rows, "FREE", cellBandCountRows);
+    expect(free.byOperator.get("COSMOTE")?.cellCount900).toBeNull();
+    expect(free.total.cellCount900).toBeNull();
+  });
+
+  it("buildSrvccTable sums attempts/successful/failed per operator from pre-aggregated (location, status, count) rows", () => {
+    // Ίδιο σενάριο με το "3 γραμμές στο τέλος του FREE table": Cosmote 4/4/0, Vodafone
+    // 0/0/0, Nova 12/12/0.
+    const rows = [
+      { location: "Cosmote Free A", status: "success" as const, count: 4 },
+      { location: "Nova Free A", status: "success" as const, count: 10 },
+      { location: "Nova Free A", status: "success" as const, count: 2 },
+      // 'other' (unclassified ErrorCode) counts toward attempts but not failed.
+      { location: "Nova Free A", status: "other" as const, count: 0 },
+      { location: "Vodafone Free A", status: "fail" as const, count: 0 },
+    ];
+
+    const { byOperator, total } = buildSrvccTable(rows);
+
+    expect(byOperator.get("COSMOTE")).toEqual({ attempts: 4, successful: 4, failed: 0 });
+    expect(byOperator.get("NOVA")).toEqual({ attempts: 12, successful: 12, failed: 0 });
+    expect(byOperator.get("VODAFONE")).toBeUndefined(); // zero-count row is skipped entirely.
+    expect(total).toEqual({ attempts: 16, successful: 16, failed: 0 });
+  });
+
+  it("buildSrvccTable counts 'other' ErrorCode rows toward attempts but not failed", () => {
+    const rows = [
+      { location: "Cosmote Free A", status: "success" as const, count: 5 },
+      { location: "Cosmote Free A", status: "fail" as const, count: 1 },
+      { location: "Cosmote Free A", status: "other" as const, count: 2 },
+    ];
+
+    const { total } = buildSrvccTable(rows);
+    expect(total).toEqual({ attempts: 8, successful: 5, failed: 1 });
+  });
+
+  it("buildVoiceTable only wires srvcc into the FREE table, not GSM", () => {
+    const rows = [
+      { Location: "Cosmote GSM", SessionId: "1", callMode: null, callType: null, technology: "GSM", callDir: "A->B", status: "completed", setupTime: null, CollectionName: null, callDuration: null, callStartTimeStamp: null, Avg_mos: null, latitude: null, longitude: null, comment: null } as AllCallsRow,
+      { Location: "Cosmote Free A", SessionId: "2", callMode: null, callType: null, technology: "LTE", callDir: "A->B", status: "completed", setupTime: null, CollectionName: null, callDuration: null, callStartTimeStamp: null, Avg_mos: null, latitude: null, longitude: null, comment: null } as AllCallsRow,
+    ];
+    const srvccRows = [{ location: "Cosmote Free A", status: "success" as const, count: 4 }];
+
+    const free = buildVoiceTable(rows, "FREE", [], srvccRows);
+    expect(free.byOperator.get("COSMOTE")?.srvcc).toEqual({ attempts: 4, successful: 4, failed: 0 });
+    expect(free.total.srvcc).toEqual({ attempts: 4, successful: 4, failed: 0 });
+
+    const gsm = buildVoiceTable(rows, "GSM", [], srvccRows);
+    expect(gsm.byOperator.get("COSMOTE")?.srvcc).toBeNull();
+    expect(gsm.total.srvcc).toBeNull();
   });
 
   it("buildServingBandTechTable computes per-kind percentages (BAND / TECH have separate totals) per operator", () => {

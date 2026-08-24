@@ -22,16 +22,20 @@ import { Badge } from "@/components/ui/badge";
 import {
   ApiClientError,
   fetchAllCalls,
+  fetchCellBandCount,
   fetchDataCalls,
   fetchServingBandTech,
+  fetchSrvcc,
   fetchTechnologyMix,
   fetchCollectionNames,
   fetchDatabases,
   fetchLocations,
   runBenchmarkApi,
   type AllCallsRow,
+  type CellBandCountRow,
   type DataCallRow,
   type ServingBandTechRow,
+  type SrvccRow,
   type TechnologyMixRow,
 } from "@/lib/api";
 
@@ -239,6 +243,10 @@ const Index = () => {
   const [summaryTechnologyMixRows, setSummaryTechnologyMixRows] = useState<TechnologyMixRow[]>([]);
   /** Serving Band (NR) / Serving Technology (per Time) για το "PS Data Stats" block — βλ. /api/serving_band_tech. */
   const [summaryServingBandTechRows, setSummaryServingBandTechRows] = useState<ServingBandTechRow[]>([]);
+  /** "Number of 900/1800 band Cells" (GSM table) για το SummaryTab — βλ. /api/cell_band_count. */
+  const [summaryCellBandCountRows, setSummaryCellBandCountRows] = useState<CellBandCountRow[]>([]);
+  /** "Total/Successful/Failed SRVCC attempts" (FREE table) για το SummaryTab — βλ. /api/srvcc. */
+  const [summarySrvccRows, setSummarySrvccRows] = useState<SrvccRow[]>([]);
   // Database/collections επιλογή αποκλειστικά για το Summary tab — ΔΕΝ μοιράζεται state με το
   // selectedDatabase/selectedCallsCollections του "Edit Filters" panel / "All Calls" tab, ώστε η
   // επιλογή στο ένα tab να μην αλλάζει καθόλου το άλλο.
@@ -582,15 +590,20 @@ const Index = () => {
         setSummaryDataCallsRows([]);
         setSummaryTechnologyMixRows([]);
         setSummaryServingBandTechRows([]);
+        setSummaryCellBandCountRows([]);
+        setSummarySrvccRows([]);
         return;
       }
 
-      const [voiceResult, dataResult, technologyMixResult, servingBandTechResult] = await Promise.allSettled([
-        fetchAllCalls(summaryDatabase, summaryCollections, []),
-        fetchDataCalls(summaryDatabase, summaryCollections, []),
-        fetchTechnologyMix(summaryDatabase, summaryCollections, []),
-        fetchServingBandTech(summaryDatabase, summaryCollections, []),
-      ]);
+      const [voiceResult, dataResult, technologyMixResult, servingBandTechResult, cellBandCountResult, srvccResult] =
+        await Promise.allSettled([
+          fetchAllCalls(summaryDatabase, summaryCollections, []),
+          fetchDataCalls(summaryDatabase, summaryCollections, []),
+          fetchTechnologyMix(summaryDatabase, summaryCollections, []),
+          fetchServingBandTech(summaryDatabase, summaryCollections, []),
+          fetchCellBandCount(summaryDatabase, summaryCollections),
+          fetchSrvcc(summaryDatabase, summaryCollections),
+        ]);
 
       if (voiceResult.status === "fulfilled") {
         setSummaryAllCallsRows(voiceResult.value);
@@ -620,6 +633,22 @@ const Index = () => {
       } else {
         console.error("Failed to fetch summary serving band/tech:", servingBandTechResult.reason);
         setSummaryServingBandTechRows([]);
+      }
+
+      // Ίδιο σκεπτικό: χωρίς toast, το "Number of 900/1800 band Cells" απλά δείχνει "—".
+      if (cellBandCountResult.status === "fulfilled") {
+        setSummaryCellBandCountRows(cellBandCountResult.value);
+      } else {
+        console.error("Failed to fetch summary cell band count:", cellBandCountResult.reason);
+        setSummaryCellBandCountRows([]);
+      }
+
+      // Ίδιο σκεπτικό: χωρίς toast, τα "SRVCC attempts" απλά δείχνουν "—".
+      if (srvccResult.status === "fulfilled") {
+        setSummarySrvccRows(srvccResult.value);
+      } else {
+        console.error("Failed to fetch summary SRVCC:", srvccResult.reason);
+        setSummarySrvccRows([]);
       }
     };
 
@@ -1253,6 +1282,8 @@ const Index = () => {
               dataCallsRows={summaryDataCallsRows}
               technologyMixRows={summaryTechnologyMixRows}
               servingBandTechRows={summaryServingBandTechRows}
+              cellBandCountRows={summaryCellBandCountRows}
+              srvccRows={summarySrvccRows}
               database={summaryDatabase}
               collections={summaryCollections}
               databases={databases}

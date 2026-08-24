@@ -114,8 +114,41 @@ export interface AllCallsRow {
   mosDlMin?: number | null;
   mosDlMax?: number | null;
   mosDlSamples?: number | null;
-  /** Dominant codec name for the session (bucketed client-side, see bucketCodec in attachmentC.ts). */
-  codecName?: string | null;
+  /**
+   * Setup time (sec), split MOC (A→B) / MTC (B→A) — ίδια τιμή ΚΑΙ κριτήριο με το
+   * A-LEVEL "LQCallDataGSM.sql" reference query's MOCSetupTime/MTCSetupTime:
+   * vResultsKPI.Duration (KPIID=10100, ErrorCode=0), Callstatus in Completed/Dropped,
+   * Technology σε UMTS 2100/900 GSM 900/1800 (βλ. VKPI/CASE στο backend/routers/
+   * calls.py). Επαληθεύτηκε 1:1 (τιμή+samples) στο STR_EVIA SOUTH_TOURISTIC
+   * AREAS_2026H2. null όταν η κλήση δεν πληροί τα κριτήρια.
+   */
+  mocSetupTime?: number | null;
+  mtcSetupTime?: number | null;
+  /**
+   * Setup time (sec), split VoLTE Call / CS Call — ίδιο κριτήριο με το A-LEVEL
+   * "LQCallData.sql" reference query's CallSetupTimeVoLTE/CallSetupTimeCS:
+   * vResultsKPI.Duration (KPIID 11013 για VoLTE, 10100 για CS στα δεδομένα που
+   * ελέγχθηκαν — το 10108 της reference είναι σχεδόν άδειο εδώ), ErrorCode=0,
+   * Callstatus in Completed/Dropped, callMode σε VoLTE/SRVCC ή CSFB/CS (βλ. CASE στο
+   * backend/routers/calls.py). null όταν η κλήση δεν πληροί τα κριτήρια.
+   */
+  volteSetupTime?: number | null;
+  csSetupTime?: number | null;
+  /**
+   * Per-session test counts by codec bucket — ίδιο bucketing με το A-LEVEL
+   * "CallCodecTypeUsageGSM.sql" reference query (βλ. CODEC OUTER APPLY στο
+   * backend/routers/calls.py). Χρησιμοποιούνται από buildCodecMix (attachmentC.ts)
+   * ώστε το "Codec Type Usage %" να ζυγίζεται με πραγματικό όγκο tests, όχι με τον
+   * ένα "dominant" codec ανά session.
+   */
+  codecFrAmrWbCount?: number | null;
+  codecAmrHrCount?: number | null;
+  codecAmrCount?: number | null;
+  codecEfrCount?: number | null;
+  codecFrCount?: number | null;
+  codecHrCount?: number | null;
+  codecOtherCount?: number | null;
+  codecNoRateCount?: number | null;
   /**
    * "BadCall" — ίδιο κριτήριο με το A-LEVEL LQStatisticData.sql reference query:
    * 1 αν >15% των ResultsLQ08Avg δειγμάτων του session είναι κακά (OptionalWB < 2.2
@@ -182,6 +215,50 @@ export async function fetchTechnologyMix(
     params.append("location", location);
   }
   const json = await requestJson<{ rows: TechnologyMixRow[] }>(`/api/technology_mix?${params.toString()}`);
+  return json.rows;
+}
+
+/**
+ * Ένα (location, technology, cellCount) row για το "Number of 900/1800 band Cells"
+ * (Attachment C, GSM) — βλ. /api/cell_band_count. cellCount = COUNT(DISTINCT
+ * NetworkInfo.CID), ίδιο query/μεθοδολογία με το A-LEVEL "CELL ID GSM.sql" reference
+ * query (κοινό πλέον για τους 3 operators, βλ. σχόλιο στο backend). Επαληθεύτηκε 1:1
+ * στο STR_EVIA SOUTH_TOURISTIC AREAS_2026H2.
+ */
+export interface CellBandCountRow {
+  location: string | null;
+  technology: string | null;
+  cellCount: number;
+}
+
+export async function fetchCellBandCount(database: string, collections: string[] = []): Promise<CellBandCountRow[]> {
+  const params = new URLSearchParams({ database });
+  for (const collection of collections) {
+    if (collection) params.append("collection", collection);
+  }
+  const json = await requestJson<{ rows: CellBandCountRow[] }>(`/api/cell_band_count?${params.toString()}`);
+  return json.rows;
+}
+
+/**
+ * Ένα (location, status, count) ήδη-αθροισμένο row για τα "Total/Successful/Failed
+ * SRVCC attempts" (Attachment C, FREE table — 3 γραμμές στο τέλος) — βλ. /api/srvcc.
+ * status: 'success' (ErrorCode=0) / 'fail' (ErrorCode=108003) / 'other' (κάθε άλλο
+ * ErrorCode — μετράει στο "attempts" total αλλά όχι στο "fail", ίδιο με το A-LEVEL
+ * "SRVCC RAW.sql" reference query's HO_Status='N/A').
+ */
+export interface SrvccRow {
+  location: string | null;
+  status: "success" | "fail" | "other";
+  count: number;
+}
+
+export async function fetchSrvcc(database: string, collections: string[] = []): Promise<SrvccRow[]> {
+  const params = new URLSearchParams({ database });
+  for (const collection of collections) {
+    if (collection) params.append("collection", collection);
+  }
+  const json = await requestJson<{ rows: SrvccRow[] }>(`/api/srvcc?${params.toString()}`);
   return json.rows;
 }
 
