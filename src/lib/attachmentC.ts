@@ -12,7 +12,15 @@
  * χωρίς Excel. Ο operator και το mode προκύπτουν από το ASideLocation
  * (π.χ. "Cosmote Free A", "Vodafone GSM A", "Nova Data A").
  */
-import type { AllCallsRow, CellBandCountRow, DataCallRow, ServingBandTechRow, SrvccRow, TechnologyMixRow } from "@/lib/api";
+import type {
+  AllCallsRow,
+  CellBandCountRow,
+  DataCallRow,
+  OoklaRow,
+  ServingBandTechRow,
+  SrvccRow,
+  TechnologyMixRow,
+} from "@/lib/api";
 
 /* ────────────────────────── Operators & modes ────────────────────────── */
 
@@ -723,12 +731,43 @@ export interface DataTestSection {
 
 const DIRECTION_LABELS: Record<string, string> = { dl: "DL", ul: "UL", downlink: "DL", uplink: "UL" };
 
-/** "Capacity" + "DL" → "Capacity DL", όπως τα section headers του Attachment C. */
+/**
+ * "Capacity" + "DL" → "Capacity DL", όπως τα section headers του Attachment C.
+ *
+ * Δύο ειδικές περιπτώσεις πάνω στο ίδιο βασικό label:
+ * - Μερικά testType ήδη έχουν το direction μέσα τους (π.χ. "CAPACITY DL (Test Data
+ *   Server) 10GB.bin" ή ένα απλό "Capacity DL") — τότε δεν το ξανακολλάμε στο τέλος,
+ *   αλλιώς βγαίνει διπλό ("Capacity DL DL").
+ * - Ένα ΓΥΜΝΟ "Capacity DL"/"Capacity UL" (χωρίς ήδη ενσωματωμένο μέγεθος payload,
+ *   π.χ. το "(Test Data Server) 10GB.bin" παραπάνω) εμφανίζεται με το σταθερό μέγεθος
+ *   payload του Attachment C για την αντίστοιχη κατεύθυνση — "Capacity DL 10GB",
+ *   "Capacity UL 1GB" (ασύμμετρο: το DL κατεβάζει πολύ μεγαλύτερο αρχείο απ' ό,τι
+ *   ανεβάζει το UL) — απλά αυτό το testType δεν το γράφει.
+ */
+const BARE_CAPACITY_PAYLOAD: Record<string, string> = { dl: "10GB", ul: "1GB" };
+
+/**
+ * Το "HTTPS Browser (site)" test δεν κολλάει "DL" στο section header — τρέχει μόνο
+ * downlink, οπότε το "DL" είναι απλά θόρυβος στο Attachment C (αντίθετα με τα άλλα
+ * tests που έχουν ξεχωριστό DL/UL section, βλ. sectionLabel).
+ */
+const NO_DL_SUFFIX_TESTS = /https?\s*browser/i;
+
 const sectionLabel = (row: DataCallRow): string => {
   const test = (row.testType ?? "Unknown test").trim();
   const raw = (row.direction ?? "").trim().toLowerCase();
   const direction = DIRECTION_LABELS[raw] ?? (raw ? raw.toUpperCase() : "");
-  return direction ? `${test} ${direction}` : test;
+  const alreadyHasDirection = direction ? new RegExp(`\\b${direction}\\b`, "i").test(test) : false;
+  const skipDlSuffix = direction === "DL" && NO_DL_SUFFIX_TESTS.test(test);
+  const base = skipDlSuffix
+    ? test.replace(/\s*\bDL\b\s*$/i, "").trim()
+    : direction && !alreadyHasDirection
+      ? `${test} ${direction}`
+      : test;
+
+  const bareCapacityMatch = /^capacity (dl|ul)$/i.exec(base);
+  if (bareCapacityMatch) return `${base} ${BARE_CAPACITY_PAYLOAD[bareCapacityMatch[1].toLowerCase()]}`;
+  return base;
 };
 
 const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
@@ -805,11 +844,69 @@ const buildDataTestStats = (rows: DataCallRow[]): DataTestStats => {
   };
 };
 
+/**
+ * Σταθερή θέση για συγκεκριμένα PS Data Stats sections, πάνω από/κάτω από το κανονικό
+ * count-sort — ό,τι δεν ταιριάζει σε καμία περίπτωση μένει στο κανονικό (rank 3):
+ *   0: Capacity DL      1: Capacity UL          2: Ookla (οποιοδήποτε)
+ *   3: όλα τα υπόλοιπα, με count-sort           3.1: YouTube Service* (μαζί, βλ. YOUTUBE_SERVICE_ORDER)
+ *   4: Payload Ping BIDIRECTIONAL               5: HTTP(S) Browser (site) — π.χ. "HTTP Browser (Newton)" (τελευταίο)
+ */
+const YOUTUBE_SERVICE_RANK = 3.1;
+
+const sectionRank = (label: string): number => {
+  const l = label.toLowerCase();
+  if (/^capacity dl\b/.test(l)) return 0;
+  if (/^capacity ul\b/.test(l)) return 1;
+  if (l.includes("ookla")) return 2;
+  if (/^youtube service/.test(l)) return YOUTUBE_SERVICE_RANK;
+  if (NO_DL_SUFFIX_TESTS.test(l)) return 5;
+  if (l.includes("ping") && l.includes("bidirectional")) return 4;
+  return 3;
+};
+
+/**
+ * Σειρά μεταξύ των HTTP(S) Browser (site) sections (rank 5 της sectionRank) —
+ * "HTTPS Browser (youtube)" πρώτο, μετά "HTTP Browser (Newton)", μετά "HTTPS Browser
+ * (amazon)" (μαζεμένα, το ένα κάτω από το άλλο αν υπάρχουν πάνω από ένα amazon section).
+ * Ό,τι άλλο site δεν αναγνωρίζεται πέφτει στο κανονικό count-sort του buildDataSections.
+ */
+const BROWSER_SITE_ORDER = ["youtube", "newton", "amazon"];
+
+const browserSiteRank = (label: string): number => {
+  const l = label.toLowerCase();
+  const index = BROWSER_SITE_ORDER.findIndex((site) => l.includes(site));
+  return index === -1 ? BROWSER_SITE_ORDER.length : index;
+};
+
+/**
+ * Σειρά μεταξύ των "YouTube Service*" sections (rank YOUTUBE_SERVICE_RANK) — το ένα
+ * κάτω από το άλλο, σε αυτή τη σειρά: plain, μετά _4K, μετά _Live.
+ */
+const YOUTUBE_SERVICE_ORDER = ["youtube service dl", "youtube service_4k dl", "youtube service_live dl"];
+
+const youtubeServiceRank = (label: string): number => {
+  const l = label.toLowerCase();
+  const index = YOUTUBE_SERVICE_ORDER.indexOf(l);
+  return index === -1 ? YOUTUBE_SERVICE_ORDER.length : index;
+};
+
+/**
+ * "Ookla(R) BIDIRECTIONAL" αποκλείεται εντελώς από το PS Data Stats table — παλιό
+ * combined DL+UL test type, αχρησιμοποίητο "success" (πάντα "—") · αντικαταστάθηκε
+ * από το ξεχωριστό "Ookla DL"/"Ookla UL" split (βλ. mapOoklaRowsToDataCallRows).
+ * ΔΕΝ πιάνει τα δικά μας "Ookla DL"/"Ookla UL" — αυτά δεν έχουν "bidirectional".
+ */
+const isExcludedSection = (label: string): boolean => {
+  const l = label.toLowerCase();
+  return l.includes("ookla") && l.includes("bidirectional");
+};
+
 export const buildDataSections = (rows: DataCallRow[]): DataTestSection[] => {
   const sections = new Map<string, DataCallRow[]>();
 
   for (const row of rows) {
     const key = sectionLabel(row);
+    if (isExcludedSection(key)) continue;
     const bucket = sections.get(key);
     if (bucket) bucket.push(row);
     else sections.set(key, [row]);
@@ -832,8 +929,59 @@ export const buildDataSections = (rows: DataCallRow[]): DataTestSection[] => {
 
       return { key, label: key, byOperator, total: buildDataTestStats(sectionRows) };
     })
-    .sort((a, b) => b.total.total - a.total.total || a.label.localeCompare(b.label));
+    .sort((a, b) => {
+      const rankA = sectionRank(a.label);
+      const rankB = sectionRank(b.label);
+      if (rankA !== rankB) return rankA - rankB;
+      if (rankA === YOUTUBE_SERVICE_RANK) {
+        const ytRankA = youtubeServiceRank(a.label);
+        const ytRankB = youtubeServiceRank(b.label);
+        if (ytRankA !== ytRankB) return ytRankA - ytRankB;
+      }
+      if (rankA === 5) {
+        const siteRankA = browserSiteRank(a.label);
+        const siteRankB = browserSiteRank(b.label);
+        if (siteRankA !== siteRankB) return siteRankA - siteRankB;
+      }
+      return b.total.total - a.total.total || a.label.localeCompare(b.label);
+    });
 };
+
+/**
+ * Μετατρέπει τα Downlink/Uplink Performance rows του /api/ookla σε DataCallRow σχήμα
+ * (testType="Ookla", direction="DL"/"UL" από το actionName) ώστε να μπουν στο ίδιο
+ * buildDataSections pipeline με τα υπόλοιπα PS Data tests — sectionLabel τα ονομάζει
+ * "Ookla DL"/"Ookla UL", και το sectionRank τα pin-άρει αμέσως κάτω από το Capacity UL.
+ * Το backend ήδη φιλτράρει σε actionName Downlink/Uplink Performance μόνο (όχι social
+ * media/messaging actions άλλων app tests) — το filter εδώ είναι απλά defensive.
+ */
+export const mapOoklaRowsToDataCallRows = (rows: OoklaRow[]): DataCallRow[] =>
+  rows
+    .filter((row) => row.actionName === "Downlink Performance" || row.actionName === "Uplink Performance")
+    .map((row) => ({
+      Location: row.location,
+      SessionId: row.sessionId,
+      TestId: row.testId,
+      callStartTimeStamp: row.startTime,
+      testType: "Ookla",
+      direction: row.actionName === "Downlink Performance" ? "DL" : "UL",
+      status: row.actionStatus,
+      scoringStatus: row.actionStatus,
+      host: row.app,
+      pingRttAvg: null,
+      throughputKbps: row.throughputKbps,
+      capacityThroughputKbps: null,
+      youtubeMos: null,
+      youtubeInterruptions: null,
+      technology: row.technology,
+      startTechnology: row.dataTechnology,
+      CollectionName: row.collectionName,
+      ASideFileName: row.aSideFileName,
+      isValid: 1,
+      comment: null,
+      latitude: null,
+      longitude: null,
+    }));
 
 /* ────────────────────────── Technology mix ────────────────────────── */
 

@@ -586,17 +586,24 @@ def get_serving_band_tech(
     collection: list[str] | None = Query(default=None),
     location: list[str] | None = Query(default=None),
 ):
-    """Serving Band (NR) / Serving Technology (per Time) — ποσοστά για τα PS Data
-    DL tests (Capacity DL / FTP DL / HTTP TRANSFER (DL)), για το SummaryTab "PS Data
-    Stats" block. Ίδια μεθοδολογία με το reference query στο "bi queries" (βλ. Ord
-    list στο buildServingBandTechTable): ένα "sample" = μία Position πάνω σε valid
-    DL data test· Technology = Technology.CurrTechnology της πιο πρόσφατης εγγραφής
-    πριν από το sample (NULL -> '#NODATA' = "No data transfer"). Η στήλη CurrTechnology
-    αποθηκεύει το raw 5G-NSA label ως 'LTE-5G NR' (με κενό) — γίνεται REPLACE σε
-    'LTE-5GNR' (χωρίς κενό, ίδιο με το reference SQL) ώστε να ταιριάζει με το literal
-    code του SERVING_BAND_TECH_METRICS στο frontend. Band = το NR band του
-    FactNR5GRadio/FactNR5GCellInfo πάνω στο ίδιο PosId, κανονικοποιημένο σε
-    "NR28"/"NR1"/"NR78" κ.λπ.
+    """Serving Band (NR) / Serving Technology (per Time) — ποσοστά για το SummaryTab
+    "PS Data Stats" block. Οι δύο "kind" έχουν ΔΙΑΦΟΡΕΤΙΚΗ βάση δειγμάτων:
+
+    TECH ("Serving Technology (per Time)") — ίδια μεθοδολογία με το reference query
+    στο "bi queries" (βλ. Ord list στο buildServingBandTechTable): ένα "sample" = μία
+    Position πάνω σε valid PS Data DL test (Capacity DL / FTP DL / HTTP TRANSFER (DL)).
+    Technology = Technology.CurrTechnology της πιο πρόσφατης εγγραφής πριν από το
+    sample (NULL -> '#NODATA' = "No data transfer"). Η στήλη CurrTechnology αποθηκεύει
+    το raw 5G-NSA label ως 'LTE-5G NR' (με κενό) — γίνεται REPLACE σε 'LTE-5GNR' (χωρίς
+    κενό, ίδιο με το reference SQL) ώστε να ταιριάζει με το literal code του
+    SERVING_BAND_TECH_METRICS στο frontend.
+
+    BAND ("Serving Band (per Time)") — ΟΧΙ πάνω στα ίδια DL-test Position δείγματα
+    (αυτό υποεκτιμούσε δραστικά τα NR28/NR1/NR78 ποσοστά, μόνο τα download-test
+    στιγμιότυπα). Ίδιο query/μεθοδολογία με το A-LEVEL reference query: ΚΑΘΕ
+    FactNR5GRadio εγγραφή (join FactNR5GCellInfo για το Band) για sessions σε
+    ASideLocation LIKE '%Data%' — ανεξάρτητα από ποιο PS Data test έτρεχε τη στιγμή
+    της εγγραφής, κανονικοποιημένο σε "NR28"/"NR1"/"NR78" κ.λπ.
 
     Επιστρέφει flat (location, kind, code, samples) rows, ΟΧΙ ήδη υπολογισμένα
     ποσοστά — το ίδιο σχήμα με /api/technology_mix — ώστε το frontend να μπορεί να
@@ -647,14 +654,30 @@ def get_serving_band_tech(
 
             UNION ALL
 
-            SELECT 'BAND' AS kind, b.Location AS location,
-                   'NR' + REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ci.Band))), 'NR', ''), 'N', '') AS code,
+            SELECT 'BAND' AS kind, FileList.ASideLocation AS location,
+                   'NR' + REPLACE(REPLACE(UPPER(LTRIM(RTRIM(FactNR5GCellInfo.Band))), 'NR', ''), 'N', '') AS code,
                    COUNT(*) AS samples
-            FROM BaseSamples b
-            JOIN FactNR5GRadio r ON r.PosId = b.PosId
-            JOIN FactNR5GCellInfo ci ON ci.NR5GCACellInfoId = r.FactIdFactNR5GCellInfo
-            WHERE ci.Band IS NOT NULL
-            GROUP BY b.Location, 'NR' + REPLACE(REPLACE(UPPER(LTRIM(RTRIM(ci.Band))), 'NR', ''), 'N', '')
+            FROM FactNR5GRadio
+            JOIN Sessions ON FactNR5GRadio.SessionId = Sessions.SessionId
+            JOIN FileList ON FactNR5GRadio.FileId = FileList.FileId
+            JOIN FactNR5GCellInfo ON FactNR5GCellInfo.NR5GCACellInfoId = FactNR5GRadio.FactIdFactNR5GCellInfo
+            WHERE Sessions.Valid = 1
+              AND FileList.ASideLocation LIKE '%Data%'
+              AND FactNR5GCellInfo.Band IS NOT NULL
+        """
+
+        if selected_collections:
+            placeholders = ", ".join(["?"] * len(selected_collections))
+            query += f" AND FileList.CollectionName IN ({placeholders})"
+            params.extend(selected_collections)
+
+        if selected_locations:
+            placeholders = ", ".join(["?"] * len(selected_locations))
+            query += f" AND FileList.ASideLocation IN ({placeholders})"
+            params.extend(selected_locations)
+
+        query += """
+            GROUP BY FileList.ASideLocation, 'NR' + REPLACE(REPLACE(UPPER(LTRIM(RTRIM(FactNR5GCellInfo.Band))), 'NR', ''), 'N', '')
         """
 
         cursor.execute(query, tuple(params))
@@ -748,6 +771,235 @@ def get_srvcc(
         rows = cursor.fetchall() if cursor.description else []
 
         data = [{columns[idx]: row[idx] for idx in range(len(columns))} for row in rows]
+
+        conn.close()
+
+        return {"rows": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/ookla")
+def get_ookla(
+    database: str = Query(..., min_length=1),
+    collection: list[str] | None = Query(default=None),
+    location: list[str] | None = Query(default=None),
+):
+    """"Ookla DL"/"Ookla UL" (PS Data Stats, βλ. sectionRank στο attachmentC.ts — τα
+    pin-άρει αμέσως κάτω από το Capacity UL). Ίδιο query με το A-LEVEL "OOKLA RAW
+    (CTE-Compatible)" reference query· ήδη υπήρχε παρόμοια (μαζί με Lat/Long) στο
+    backend/queries.py::query_ookla ως pandas script, εδώ ως FastAPI endpoint με
+    multi-select collection/location φίλτρα (ίδιο convention με τα υπόλοιπα endpoints
+    εδώ) αντί για ένα μοναδικό collection/location.
+
+    Η reference query είναι γενική (καλύπτει ΚΑΘΕ App test action — social media
+    posts/messaging KAI downlink/uplink performance) — φιλτράρουμε στο τέλος στο
+    ΙΔΙΟ ActionName CASE με το query_ookla's WHERE (βλ. εκεί) ώστε να μείνουν μόνο
+    οι 'Downlink Performance'/'Uplink Performance' γραμμές (Ookla speedtest), όχι οι
+    social/messaging action rows άλλων app tests στο ίδιο collection.
+
+    Throughput ήδη σε kbps (DLThroughput/ULThroughput * 8 / 1000, ίδιο με τη
+    reference). Το frontend μετατρέπει αυτά τα rows σε DataCallRow-σχήμα
+    (testType="Ookla", direction="DL"/"UL") ώστε να μπουν στο ίδιο buildDataSections
+    pipeline με τα υπόλοιπα PS Data tests — βλ. mapOoklaRowsToDataCallRows.
+    """
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        query = """
+            WITH SessionsCTE AS (
+                SELECT
+                    SessionId,
+                    FileId,
+                    info
+                FROM Sessions
+                WHERE valid = 1
+                GROUP BY SessionId, FileId, info
+            ),
+            MinDurCTE AS (
+                SELECT
+                    raam.TestId,
+                    raam.SessionId,
+                    s.FileId,
+                    MinDuration = COALESCE(MIN(k1.Duration), MIN(k2.Duration), MIN(k3.Duration), 100)
+                FROM SessionsCTE s
+                INNER JOIN ResultsAppActionMessaging raam ON raam.SessionId = s.SessionId
+                LEFT JOIN ResultsKPI k1 ON k1.SessionId = s.SessionId AND k1.KPIId = 31000 AND k1.TestId = raam.TestId
+                LEFT JOIN ResultsKPI k2 ON k2.SessionId = raam.SessionId AND k2.KPIId = 31000
+                LEFT JOIN Sessions sss ON sss.FileId = s.FileId
+                INNER JOIN ResultsKPI k3 ON k3.SessionId = sss.SessionId AND k3.KPIId = 31000
+                GROUP BY raam.TestId, raam.SessionId, s.FileId
+            ),
+            MinDelDurCTE AS (
+                SELECT
+                    s.FileId,
+                    MinDeliveryTime = ISNULL(MIN(DATEDIFF(ms, aab.StartTime, aa.LogTime)), 0)
+                FROM ResultsAppActionMessaging aa
+                LEFT JOIN ResultsAppActionMessaging aab ON aab.Identifier = aa.Identifier
+                    AND aab.ActionId = aa.ActionId
+                    AND aab.Direction = 0
+                    AND aa.Direction = 1
+                    AND aab.TestId <> aa.TestId
+                INNER JOIN SessionsCTE s ON s.SessionId = aa.SessionId
+                GROUP BY s.FileId
+            )
+            SELECT
+                ti.SessionId AS sessionId,
+                ti.TestId AS testId,
+                fl.CollectionName AS collectionName,
+                fl.ASideDevice AS aSideDevice,
+                fl.ASideFileName AS aSideFileName,
+                fl.ASideLocation AS location,
+                ni.HomeOperator AS homeOperator,
+                ni.Technology AS technology,
+                t.PrevTechnology AS dataTechnology,
+                CONVERT(VARCHAR, COALESCE(aa.MsgTime, aaf.MsgTime, aam.MsgTime, sm.MsgTime), 121) AS endTime,
+                atp.ServiceProvider AS app,
+                atp.ServiceProfileName AS profileName,
+                COALESCE(aa.ActionId, aaf.ActionId, aam.ActionId, sm.ActionId) AS actionId,
+                COALESCE(aa.Duration, aaf.Duration, aam.Duration, sm.CoreDuration) AS durationMs,
+                CASE ISNULL(CAST(aa.Throughput AS REAL), aaf.Thp) * 8 / 1000
+                    WHEN 0 THEN NULL
+                    ELSE ISNULL(CAST(aa.Throughput AS REAL), aaf.Thp) * 8 / 1000
+                END AS throughputKbps,
+                CASE COALESCE(aa.ErrorCode, aaf.ErrorCode, aam.ErrorCode, sm.ErrorCode)
+                    WHEN 0 THEN 'Success'
+                    ELSE 'Failed'
+                END AS actionStatus,
+                CASE
+                    WHEN aap.ActionName = 'Ohome' THEN 'Open Home'
+                    WHEN aap.ActionName = 'Dp' THEN 'Delete Post'
+                    WHEN aap.ActionName = 'Cp' THEN 'Create Post'
+                    WHEN aap.ActionName = 'Lp' THEN 'Like Post'
+                    WHEN aap.ActionName = 'Cpicture' THEN 'Comment Post'
+                    WHEN aap.ActionName = 'Opost' THEN 'Open Post'
+                    WHEN aap.ActionName = 'Oprofile' THEN 'Open Profile'
+                    ELSE COALESCE(aap.ActionName, aad.ActionName, aau.ActionName, aaf.ActionName, aam.ActionName)
+                END AS actionName,
+                aaf.Latency AS latencyMs,
+                aaf.PacketLossPercent AS packetLossPct,
+                ni.CGI AS cgi,
+                DATEADD(MS, -1 * COALESCE(aa.Duration, aaf.Duration, aam.Duration, sm.CoreDuration),
+                    COALESCE(aa.MsgTime, aaf.MsgTime, aam.MsgTime, sm.MsgTime)) AS startTime
+            FROM SessionsCTE s
+            INNER JOIN FileList fl ON fl.FileId = s.FileId
+            INNER JOIN TestInfo ti ON s.SessionId = ti.SessionId AND ti.Valid = 1
+            INNER JOIN ResultsAppTestParameters atp ON ti.TestId = atp.TestId
+            LEFT JOIN ResultsAppActionSocialMedia sm ON sm.TestId = ti.TestId
+            LEFT JOIN ResultsAppAction aa ON ti.TestId = aa.TestId AND aa.LastBlock = 1
+            LEFT JOIN ResultsAppActionParams aap ON (aap.TestId = aa.TestId OR aap.TestId = sm.TestId)
+                AND (aap.ActionId = aa.ActionId OR aap.ActionId = sm.ActionId)
+            LEFT JOIN ResultsAppActionDownloadFileParams aad ON ti.TestId = aad.TestId AND aad.ActionId = aa.ActionId
+            LEFT JOIN ResultsAppActionUploadFileParams aau ON ti.TestId = aau.TestId AND aau.ActionId = aa.ActionId
+            LEFT JOIN (
+                SELECT
+                    TestId,
+                    ActionId,
+                    MsgTime,
+                    ErrorCode,
+                    NetworkId,
+                    Duration = 1000 * CAST(DLSize AS REAL) / NULLIF(DLThroughput, 0),
+                    TransSize = DLSize,
+                    Thp = DLThroughput,
+                    ActionName = 'Downlink Performance',
+                    Latency = ISNULL(Ping, Latency),
+                    PacketLossPercent
+                FROM ResultsAppActionPerformance
+                UNION ALL
+                SELECT
+                    TestId,
+                    ActionId,
+                    MsgTime,
+                    ErrorCode,
+                    NetworkId,
+                    Duration = 1000 * CAST(ULSize AS REAL) / NULLIF(ULThroughput, 0),
+                    TransSize = ULSize,
+                    Thp = ULThroughput,
+                    ActionName = 'Uplink Performance',
+                    Latency = ISNULL(Ping, Latency),
+                    PacketLossPercent
+                FROM ResultsAppActionPerformance
+            ) aaf ON ti.TestId = aaf.TestId
+            LEFT JOIN (
+                SELECT
+                    r.TestId,
+                    r.ActionId,
+                    r.MsgTime,
+                    r.ErrorCode,
+                    r.NetworkId,
+                    r.Direction,
+                    CASE r.MessagingType
+                        WHEN 1 THEN 'Text'
+                        WHEN 2 THEN 'Sticker'
+                        WHEN 3 THEN 'Photo'
+                        WHEN 4 THEN 'Audio'
+                        WHEN 5 THEN 'Video'
+                        ELSE NULL
+                    END AS ActionName,
+                    CASE r.Direction
+                        WHEN 0 THEN r.Duration
+                        WHEN 1 THEN DATEDIFF(ms, ref.StartTime, r.LogTime)
+                                   - ISNULL(mdd.MinDeliveryTime, 0)
+                                   + ISNULL(md.MinDuration, 100)
+                        ELSE NULL
+                    END AS Duration
+                FROM ResultsAppActionMessaging r
+                INNER JOIN SessionsCTE s2 ON s2.SessionId = r.SessionId
+                LEFT JOIN MinDurCTE md ON r.TestId = md.TestId
+                INNER JOIN MinDelDurCTE mdd ON s2.FileId = mdd.FileId
+                LEFT JOIN ResultsAppActionMessaging ref ON ref.Identifier = r.Identifier
+                    AND ref.ActionId = r.ActionId
+                    AND ref.Direction = 0 AND r.Direction = 1
+            ) aam ON ti.TestId = aam.TestId
+            INNER JOIN NetworkInfo ni ON ni.NetworkId = ISNULL(ISNULL(ISNULL(aa.NetworkId, aaf.NetworkId), aam.NetworkId), ti.NetworkId)
+            LEFT JOIN Technology t ON t.PrevTechnology IS NOT NULL AND (
+                (t.TestId = sm.TestId AND sm.MsgTime BETWEEN DATEADD(ms, -1 * t.Duration, t.MsgTime) AND t.MsgTime) OR
+                (t.TestId = aam.TestId AND aam.MsgTime BETWEEN DATEADD(ms, -1 * t.Duration, t.MsgTime) AND t.MsgTime) OR
+                (t.TestId = aaf.TestId AND aaf.MsgTime BETWEEN DATEADD(ms, -1 * t.Duration, t.MsgTime) AND t.MsgTime) OR
+                (t.TestId = aa.TestId AND aa.MsgTime BETWEEN DATEADD(ms, -1 * t.Duration, t.MsgTime) AND t.MsgTime)
+            )
+            WHERE s.SessionId IS NOT NULL
+              -- Μόνο Ookla speedtest rows (Downlink/Uplink Performance) — ίδιο φίλτρο
+              -- με το backend/queries.py::query_ookla, εδώ και για τις δύο κατευθύνσεις.
+              AND (CASE
+                    WHEN aap.ActionName = 'Ohome' THEN 'Open Home'
+                    WHEN aap.ActionName = 'Dp' THEN 'Delete Post'
+                    WHEN aap.ActionName = 'Cp' THEN 'Create Post'
+                    WHEN aap.ActionName = 'Lp' THEN 'Like Post'
+                    WHEN aap.ActionName = 'Cpicture' THEN 'Comment Post'
+                    WHEN aap.ActionName = 'Opost' THEN 'Open Post'
+                    WHEN aap.ActionName = 'Oprofile' THEN 'Open Profile'
+                    ELSE COALESCE(aap.ActionName, aad.ActionName, aau.ActionName, aaf.ActionName, aam.ActionName)
+                END) IN ('Downlink Performance', 'Uplink Performance')
+        """
+
+        params: list[object] = []
+        selected_collections = [col for col in (collection or []) if col and col.strip()]
+        if selected_collections:
+            placeholders = ", ".join(["?"] * len(selected_collections))
+            query += f" AND fl.CollectionName IN ({placeholders})"
+            params.extend(selected_collections)
+
+        selected_locations = [loc for loc in (location or []) if loc and loc.strip()]
+        if selected_locations:
+            placeholders = ", ".join(["?"] * len(selected_locations))
+            query += f" AND fl.ASideLocation IN ({placeholders})"
+            params.extend(selected_locations)
+
+        query += " ORDER BY ti.TestId, ISNULL(aa.ActionId, aaf.ActionId)"
+
+        cursor.execute(query, tuple(params))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+
+        data = [{columns[idx]: row[idx] for idx in range(len(columns))} for row in rows]
+        for item in data:
+            if item.get("endTime") is not None and not isinstance(item["endTime"], str):
+                item["endTime"] = str(item["endTime"])
+            if item.get("startTime") is not None and hasattr(item["startTime"], "isoformat"):
+                item["startTime"] = item["startTime"].isoformat()
 
         conn.close()
 

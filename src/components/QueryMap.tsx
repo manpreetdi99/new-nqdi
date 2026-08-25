@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from "react-leaflet";
 import "leaflet/dist/leaflet.css";
 import {
@@ -1465,7 +1465,15 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
   const [filterNRARFCN, setFilterNRARFCN]       = useState("");
   const [mapLoading, setMapLoading]             = useState(false);
   const [selectedGroup, setSelectedGroup]       = useState<string | null>(null);
-  const [selectedBucket, setSelectedBucket]     = useState<string | null>(null);
+  // Multiple legend value-groups can be isolated at once (e.g. RSRP -75..-65 AND -85..-75)
+  const [selectedBuckets, setSelectedBuckets] = useState<Set<string>>(new Set());
+  const toggleBucket = useCallback((label: string) => {
+    setSelectedBuckets((prev) => {
+      const next = new Set(prev);
+      if (next.has(label)) next.delete(label); else next.add(label);
+      return next;
+    });
+  }, []);
   const latestRunQuery = useRef<() => void>(() => {});
 
   useEffect(() => {
@@ -1491,7 +1499,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     setFilterLocation(syncTarget.location);
     setFilterCollection(syncTarget.collection);
     setRows([]); setColumns([]); setError(null); setExecutionTime(null);
-    setFilterNRARFCN(""); setSelectedGroup(null); setSelectedBucket(null);
+    setFilterNRARFCN(""); setSelectedGroup(null); setSelectedBuckets(new Set());
   }, [syncTarget]);
 
   const currentScheme = COLOR_SCHEMES[colorSchemeKey];
@@ -1532,7 +1540,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     setLabelCol(t.labelCol); setLatCol(""); setLngCol("");
     if (t.colorScheme) setColorSchemeKey(t.colorScheme);
     setRows([]); setColumns([]); setError(null); setExecutionTime(null);
-    setFilterNRARFCN(""); setSelectedGroup(null); setSelectedBucket(null);
+    setFilterNRARFCN(""); setSelectedGroup(null); setSelectedBuckets(new Set());
   };
 
   const currentTemplate = TEMPLATES[tmplIdx];
@@ -1542,7 +1550,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
   const runQuery = async () => {
     if (!localDb) { setError("Επιλέξτε database πρώτα."); return; }
     if (!filtersReady) { setError("Επιλέξτε Collection και ASideLocation πριν εκτελέσετε το query."); return; }
-    setIsRunning(true); setError(null); setMapLoading(true); setSelectedGroup(null); setSelectedBucket(null);
+    setIsRunning(true); setError(null); setMapLoading(true); setSelectedGroup(null); setSelectedBuckets(new Set());
     const esc = (s: string) => s.replace(/'/g, "''");
     let effectiveSql = sql;
     if (filterCollection) {
@@ -1618,11 +1626,11 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     return m;
   }, [bubblePoints]);
 
-  // Legend click-to-filter: isolate one rank tier
+  // Legend click-to-filter: isolate one or more rank tiers
   const visibleBubblePoints = useMemo(() => {
-    if (selectedBucket === null) return bubblePoints;
-    return bubblePoints.filter((p) => bubbleTierLabel(p.normalized) === selectedBucket);
-  }, [bubblePoints, selectedBucket]);
+    if (selectedBuckets.size === 0) return bubblePoints;
+    return bubblePoints.filter((p) => selectedBuckets.has(bubbleTierLabel(p.normalized)));
+  }, [bubblePoints, selectedBuckets]);
 
   const pointMarkers = useMemo(() => {
     if (mode !== "points" || !effValCol || !effLatCol || !effLngCol || filteredRows.length === 0) return [];
@@ -1642,11 +1650,11 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     return decimatePoints(raw);
   }, [mode, filteredRows, effValCol, effLatCol, effLngCol, effLabelCol, currentScheme]);
 
-  // Legend click-to-filter: isolate one value bucket/category
+  // Legend click-to-filter: isolate one or more value buckets/categories
   const visiblePointMarkers = useMemo(() => {
-    if (selectedBucket === null) return pointMarkers;
-    return pointMarkers.filter((p) => p.bucketKey === selectedBucket);
-  }, [pointMarkers, selectedBucket]);
+    if (selectedBuckets.size === 0) return pointMarkers;
+    return pointMarkers.filter((p) => selectedBuckets.has(p.bucketKey));
+  }, [pointMarkers, selectedBuckets]);
 
   const allMapPoints = mode === "bubble"
     ? visibleBubblePoints.map((p) => ({ lat: p.lat, lng: p.lng }))
@@ -1710,12 +1718,12 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
           </select>
 
           {/* mode pills */}
-          <button type="button" onClick={() => { setMode("bubble"); setSelectedBucket(null); }}
+          <button type="button" onClick={() => { setMode("bubble"); setSelectedBuckets(new Set()); }}
             title="Bubble mode"
             className={`p-1.5 rounded border text-xs transition-all ${mode === "bubble" ? "bg-background border-border text-foreground shadow-sm" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
             <Layers className="h-3.5 w-3.5" />
           </button>
-          <button type="button" onClick={() => { setMode("points"); setSelectedBucket(null); }}
+          <button type="button" onClick={() => { setMode("points"); setSelectedBuckets(new Set()); }}
             title="GPS Points mode"
             className={`p-1.5 rounded border text-xs transition-all ${mode === "points" ? "bg-background border-border text-foreground shadow-sm" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
             <MapPin className="h-3.5 w-3.5" />
@@ -1835,15 +1843,15 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                 <X className="h-2.5 w-2.5 shrink-0" /> <span className="truncate">{selectedGroup}</span>
               </button>
             )}
-            {selectedBucket !== null && (
-              <button type="button" onClick={() => setSelectedBucket(null)}
+            {selectedBuckets.size > 0 && (
+              <button type="button" onClick={() => setSelectedBuckets(new Set())}
                 title="Καθαρισμός επιλογής legend — εμφάνιση όλων"
-                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 truncate max-w-[160px]">
-                <X className="h-2.5 w-2.5 shrink-0" /> <span className="truncate">{selectedBucket}</span>
+                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 truncate max-w-[220px]">
+                <X className="h-2.5 w-2.5 shrink-0" /> <span className="truncate">{[...selectedBuckets].join(", ")}</span>
               </button>
             )}
             {(filterCollection || filterLocation) && (
-              <button type="button" onClick={() => { setFilterCollection(""); setFilterLocation(""); setFilterNRARFCN(""); setSelectedGroup(null); setSelectedBucket(null); }}
+              <button type="button" onClick={() => { setFilterCollection(""); setFilterLocation(""); setFilterNRARFCN(""); setSelectedGroup(null); setSelectedBuckets(new Set()); }}
                 className="text-primary/70 hover:text-primary flex items-center gap-0.5">
                 <X className="h-2.5 w-2.5" /> reset
               </button>
@@ -1950,8 +1958,8 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
               <>
                 <div className="flex items-center justify-between gap-1 mb-0.5">
                   <p className="text-[8px] font-bold uppercase tracking-widest text-muted-foreground">Κλίμακα</p>
-                  {selectedBucket !== null && (
-                    <button type="button" onClick={() => setSelectedBucket(null)}
+                  {selectedBuckets.size > 0 && (
+                    <button type="button" onClick={() => setSelectedBuckets(new Set())}
                       title="Εμφάνιση όλων" className="text-primary/70 hover:text-primary">
                       <X className="h-2.5 w-2.5" />
                     </button>
@@ -1959,11 +1967,11 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                 </div>
                 {BUBBLE_TIERS.map(({ label, fill }) => {
                   const cnt = bubbleTierCounts.get(label) ?? 0;
-                  const active = selectedBucket === label;
+                  const active = selectedBuckets.has(label);
                   return (
                     <button type="button" key={label} disabled={cnt === 0}
-                      title={cnt > 0 ? "Κλικ για προβολή μόνο αυτού του επιπέδου" : undefined}
-                      onClick={() => setSelectedBucket((s) => (s === label ? null : label))}
+                      title={cnt > 0 ? "Κλικ για προσθήκη/αφαίρεση από την επιλογή (πολλαπλή επιλογή)" : undefined}
+                      onClick={() => toggleBucket(label)}
                       className={`w-full flex items-center gap-1 rounded px-0.5 text-left transition-colors ${cnt === 0 ? "opacity-25 cursor-default" : "cursor-pointer hover:bg-primary/10"} ${active ? "bg-primary/15 ring-1 ring-inset ring-primary/40" : ""}`}>
                       <div className="rounded-full shrink-0" style={{ width: 7, height: 7, backgroundColor: fill }} />
                       <span className="text-[9px] text-muted-foreground flex-1 leading-none">{label}</span>
@@ -1979,8 +1987,8 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
               <>
                 <div className="flex items-center justify-between gap-1 mb-0.5">
                   <p className="text-[8px] font-bold uppercase tracking-widest text-muted-foreground truncate">{currentScheme.label}</p>
-                  {selectedBucket !== null && (
-                    <button type="button" onClick={() => setSelectedBucket(null)}
+                  {selectedBuckets.size > 0 && (
+                    <button type="button" onClick={() => setSelectedBuckets(new Set())}
                       title="Εμφάνιση όλων" className="text-primary/70 hover:text-primary shrink-0">
                       <X className="h-2.5 w-2.5" />
                     </button>
@@ -1989,11 +1997,11 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                 {currentScheme.type === "range"
                   ? currentScheme.buckets.map((b) => {
                       const cnt = bucketCounters.get(b.label) ?? 0;
-                      const active = selectedBucket === b.label;
+                      const active = selectedBuckets.has(b.label);
                       return (
                         <button type="button" key={b.label} disabled={cnt === 0}
-                          title={cnt > 0 ? "Κλικ για προβολή μόνο αυτού του εύρους" : undefined}
-                          onClick={() => setSelectedBucket((s) => (s === b.label ? null : b.label))}
+                          title={cnt > 0 ? "Κλικ για προσθήκη/αφαίρεση από την επιλογή (πολλαπλή επιλογή)" : undefined}
+                          onClick={() => toggleBucket(b.label)}
                           className={`w-full flex items-center gap-1 rounded px-0.5 text-left transition-colors ${cnt === 0 ? "opacity-25 cursor-default" : "cursor-pointer hover:bg-primary/10"} ${active ? "bg-primary/15 ring-1 ring-inset ring-primary/40" : ""}`}>
                           <div className="rounded-full shrink-0" style={{ width: 7, height: 7, backgroundColor: b.color }} />
                           <span className="text-[9px] text-muted-foreground flex-1 leading-none">{b.label}</span>
@@ -2007,11 +2015,11 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                     })
                   : currentScheme.categories.map((c) => {
                       const cnt = bucketCounters.get(c.value) ?? 0;
-                      const active = selectedBucket === c.value;
+                      const active = selectedBuckets.has(c.value);
                       return (
                         <button type="button" key={c.value} disabled={cnt === 0}
-                          title={cnt > 0 ? "Κλικ για προβολή μόνο αυτής της κατηγορίας" : undefined}
-                          onClick={() => setSelectedBucket((s) => (s === c.value ? null : c.value))}
+                          title={cnt > 0 ? "Κλικ για προσθήκη/αφαίρεση από την επιλογή (πολλαπλή επιλογή)" : undefined}
+                          onClick={() => toggleBucket(c.value)}
                           className={`w-full flex items-center gap-1 rounded px-0.5 text-left transition-colors ${cnt === 0 ? "opacity-25 cursor-default" : "cursor-pointer hover:bg-primary/10"} ${active ? "bg-primary/15 ring-1 ring-inset ring-primary/40" : ""}`}>
                           <div className="rounded-full shrink-0" style={{ width: 7, height: 7, backgroundColor: c.color }} />
                           <span className="text-[9px] text-muted-foreground flex-1 leading-none">{c.value}</span>

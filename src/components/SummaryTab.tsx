@@ -958,6 +958,38 @@ const SummaryTab = ({
   );
 
   const rows = useMemo(() => voiceRows(excludeSysRelease), [excludeSysRelease]);
+  /**
+   * Ίδιο με rows, χωρίς τις 3 SRVCC γραμμές (μόνο FREE table — βλ. VoiceStats.srvcc) και τα
+   * per-CustomCallMode VoLTE/CS attempts/dropped (μόνο FREE table — βλ. LQCallData.sql /
+   * LQCallExtend_1PT hint).
+   */
+  const gsmRows = useMemo(
+    () =>
+      rows.filter(
+        (row) =>
+          !row.label.includes("SRVCC") &&
+          row.label !== "Unsuccessful Call Attempts VoLTE" &&
+          row.label !== "Unsuccessful Call Attempts CS" &&
+          row.label !== "Dropped Calls VoLTE" &&
+          row.label !== "Dropped Calls CS",
+      ),
+    [rows],
+  );
+  /**
+   * Ίδιο με rows, χωρίς MOC/MTC Call Setup Time (μόνο UMTS/GSM 900/1800 — βλ. σχόλιο στο
+   * VoiceStats.setupMoc/setupMtc) και Number of 900/1800 band Cells (μόνο GSM table — βλ.
+   * VoiceStats.cellCount900/1800). Πάντα "–" στο FREE table, οπότε τις βγάζουμε.
+   */
+  const freeRows = useMemo(
+    () =>
+      rows.filter(
+        (row) =>
+          !row.label.startsWith("MOC Call Setup Time") &&
+          !row.label.startsWith("MTC Call Setup Time") &&
+          !row.label.includes("band Cells"),
+      ),
+    [rows],
+  );
 
   const operators = useMemo(
     () =>
@@ -1336,7 +1368,7 @@ const SummaryTab = ({
         >
           <KpiTable
             operators={operators.filter((operator) => (gsmTable.byOperator.get(operator.key)?.attempts ?? 0) > 0)}
-            rows={rows}
+            rows={gsmRows}
             hideEmptyRows={hideEmptyRows}
             markBest={markBest}
             {...voiceTableFor(gsmTable, gsmTechMix)}
@@ -1354,7 +1386,7 @@ const SummaryTab = ({
         >
           <KpiTable
             operators={operators.filter((operator) => (freeTable.byOperator.get(operator.key)?.attempts ?? 0) > 0)}
-            rows={rows}
+            rows={freeRows}
             hideEmptyRows={hideEmptyRows}
             markBest={markBest}
             {...voiceTableFor(freeTable, freeTechMix)}

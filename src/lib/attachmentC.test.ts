@@ -16,10 +16,11 @@ import {
   classifyCustomCallMode,
   collectOperators,
   isoWeek,
+  mapOoklaRowsToDataCallRows,
   resolveMode,
   resolveOperator,
 } from "@/lib/attachmentC";
-import type { AllCallsRow, DataCallRow } from "@/lib/api";
+import type { AllCallsRow, DataCallRow, OoklaRow } from "@/lib/api";
 
 const call = (overrides: Partial<AllCallsRow>): AllCallsRow => ({
   Location: "Cosmote Free A",
@@ -281,7 +282,7 @@ describe("PS data KPIs", () => {
       dataTest({ testType: "Ping", direction: null, pingRttAvg: 30 }),
     ]);
 
-    const capacityDl = sections.find((section) => section.key === "Capacity DL");
+    const capacityDl = sections.find((section) => section.key === "Capacity DL 10GB");
     expect(capacityDl?.total.total).toBe(2);
     expect(capacityDl?.total.success).toBe(1);
     expect(capacityDl?.total.failed).toBe(1);
@@ -291,6 +292,144 @@ describe("PS data KPIs", () => {
 
     const ping = sections.find((section) => section.key === "Ping");
     expect(ping?.total.metrics[0]).toMatchObject({ label: "Mean RTT", unit: "ms", higherIsBetter: false, value: 30 });
+  });
+
+  it("always sorts Payload Ping BIDIRECTIONAL last in the PS Data Stats table, regardless of test count", () => {
+    // Το bidirectional ping έχει συνήθως τα περισσότερα tests (τρέχει συνέχεια στο
+    // background) — χωρίς το ειδικό κριτήριο θα έβγαινε πρώτο, όχι τελευταίο.
+    const sections = buildDataSections([
+      ...Array.from({ length: 50 }, () => dataTest({ testType: "Payload Ping BIDIRECTIONAL", direction: null, pingRttAvg: 20 })),
+      dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
+      dataTest({ testType: "Ping", direction: null, pingRttAvg: 30 }),
+    ]);
+
+    expect(sections.at(-1)?.key).toBe("Payload Ping BIDIRECTIONAL");
+    expect(sections.map((section) => section.key)).toEqual(["Capacity DL 10GB", "Ping", "Payload Ping BIDIRECTIONAL"]);
+  });
+
+  it("pins Capacity DL, then Capacity UL, then Ookla at the top, in that order, regardless of test count", () => {
+    // Ookla έχει σκόπιμα τα λιγότερα tests εδώ — χωρίς το σταθερό rank θα έβγαινε
+    // τελευταίο (πριν το Payload Ping BIDIRECTIONAL), όχι αμέσως κάτω από Capacity UL.
+    const sections = buildDataSections([
+      ...Array.from({ length: 50 }, () => dataTest({ testType: "Payload Ping BIDIRECTIONAL", direction: null, pingRttAvg: 20 })),
+      ...Array.from({ length: 20 }, () => dataTest({ testType: "FTP", direction: "DL", throughputKbps: 40000 })),
+      dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 40000 }),
+      dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
+      dataTest({ testType: "Ookla Speedtest", direction: null, throughputKbps: 40000 }),
+    ]);
+
+    expect(sections.map((section) => section.key)).toEqual([
+      "Capacity DL 10GB",
+      "Capacity UL 1GB",
+      "Ookla Speedtest",
+      "FTP DL",
+      "Payload Ping BIDIRECTIONAL",
+    ]);
+  });
+
+  it("drops the 'Ookla(R) BIDIRECTIONAL' section entirely — superseded by the Ookla DL/UL split", () => {
+    const sections = buildDataSections([
+      ...Array.from({ length: 87 }, () => dataTest({ testType: "Ookla(R) BIDIRECTIONAL", direction: null, throughputKbps: 240690 })),
+      dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
+    ]);
+
+    expect(sections.map((s) => s.key)).toEqual(["Capacity DL 10GB"]);
+    expect(sections.some((s) => s.key.toLowerCase().includes("bidirectional") && s.key.toLowerCase().includes("ookla"))).toBe(false);
+  });
+
+  it("keeps the real Ookla DL/UL sections — the BIDIRECTIONAL exclusion doesn't match them", () => {
+    const rows = mapOoklaRowsToDataCallRows([
+      ooklaRow({ actionName: "Downlink Performance" }),
+      ooklaRow({ actionName: "Uplink Performance", sessionId: "2" }),
+    ]);
+
+    expect(buildDataSections(rows).map((s) => s.key)).toEqual(["Ookla DL", "Ookla UL"]);
+  });
+
+  const ooklaRow = (overrides: Partial<OoklaRow>): OoklaRow => ({
+    sessionId: "1",
+    testId: 1,
+    collectionName: null,
+    aSideDevice: null,
+    aSideFileName: null,
+    location: "Cosmote Data A",
+    homeOperator: null,
+    technology: "5G",
+    dataTechnology: null,
+    endTime: null,
+    app: "Ookla",
+    profileName: null,
+    actionId: 1,
+    durationMs: 1000,
+    throughputKbps: 50000,
+    actionStatus: "Success",
+    actionName: "Downlink Performance",
+    latencyMs: null,
+    packetLossPct: null,
+    cgi: null,
+    startTime: "2026-07-13T14:00:00",
+    ...overrides,
+  });
+
+  it("mapOoklaRowsToDataCallRows turns Downlink/Uplink Performance rows into Ookla DL/UL DataCallRow rows", () => {
+    const mapped = mapOoklaRowsToDataCallRows([
+      ooklaRow({ actionName: "Downlink Performance", throughputKbps: 80000, actionStatus: "Success" }),
+      ooklaRow({ actionName: "Uplink Performance", throughputKbps: 20000, actionStatus: "Failed", sessionId: "2" }),
+      // Any other action (social media posts, messaging, ...) gets dropped — not an Ookla speedtest row.
+      ooklaRow({ actionName: "Open Home" as OoklaRow["actionName"], sessionId: "3" }),
+    ]);
+
+    expect(mapped).toHaveLength(2);
+    expect(mapped[0]).toMatchObject({ testType: "Ookla", direction: "DL", throughputKbps: 80000, status: "Success", scoringStatus: "Success" });
+    expect(mapped[1]).toMatchObject({ testType: "Ookla", direction: "UL", throughputKbps: 20000, status: "Failed", scoringStatus: "Failed" });
+  });
+
+  it("feeds Ookla DL/UL rows through buildDataSections into 'Ookla DL'/'Ookla UL' sections, scored and pinned right after Capacity UL", () => {
+    const rows = mapOoklaRowsToDataCallRows([
+      ooklaRow({ actionName: "Downlink Performance", throughputKbps: 80000, actionStatus: "Success" }),
+      ooklaRow({ actionName: "Downlink Performance", throughputKbps: 40000, actionStatus: "Failed", sessionId: "2" }),
+      ooklaRow({ actionName: "Uplink Performance", throughputKbps: 10000, actionStatus: "Success", sessionId: "3" }),
+    ]);
+
+    const sections = buildDataSections([...rows, dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 40000 })]);
+
+    expect(sections.map((s) => s.key)).toEqual(["Capacity UL 1GB", "Ookla DL", "Ookla UL"]);
+
+    const ooklaDl = sections.find((s) => s.key === "Ookla DL")!;
+    expect(ooklaDl.total.total).toBe(2);
+    expect(ooklaDl.total.success).toBe(1);
+    expect(ooklaDl.total.failed).toBe(1);
+    // Mean application throughput: (80000 + 40000) / 2 kbps -> 60 Mbps.
+    expect(ooklaDl.total.metrics[0]).toMatchObject({ label: "Mean application throughput", unit: "Mbps", value: 60 });
+  });
+
+  it("labels a bare Capacity DL/UL section with its fixed payload size, and doesn't double up the direction when testType already bakes it in", () => {
+    // "Capacity" + direction (χωρίς ήδη ενσωματωμένο μέγεθος payload) -> σταθερό
+    // Attachment C payload ανά κατεύθυνση: DL 10GB, UL 1GB (ασύμμετρο — το UL ανεβάζει
+    // πολύ μικρότερο αρχείο απ' ό,τι κατεβάζει το DL).
+    expect(
+      buildDataSections([dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 })]).map(
+        (s) => s.key,
+      ),
+    ).toEqual(["Capacity DL 10GB"]);
+    expect(
+      buildDataSections([dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 400000 })]).map(
+        (s) => s.key,
+      ),
+    ).toEqual(["Capacity UL 1GB"]);
+
+    // Real DB testType strings like "CAPACITY DL (Test Data Server) 10GB.bin" already
+    // contain the direction — sectionLabel used to append it again, producing
+    // "Capacity UL (Test Data Server) 10GB.bin UL". Not a "bare" Capacity DL/UL, so no
+    // extra "10GB" gets appended on top of the one already in the name.
+    expect(
+      buildDataSections([
+        dataTest({ testType: "CAPACITY DL (Test Data Server) 10GB.bin", direction: "DL", capacityThroughputKbps: 400000 }),
+        dataTest({ testType: "Capacity UL (Test Data Server) 10GB.bin", direction: "UL", capacityThroughputKbps: 40000 }),
+      ]).map((s) => s.key),
+    ).toEqual(
+      expect.arrayContaining(["CAPACITY DL (Test Data Server) 10GB.bin", "Capacity UL (Test Data Server) 10GB.bin"]),
+    );
   });
 
   it("reports YouTube MOS and interruptions", () => {

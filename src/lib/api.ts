@@ -263,6 +263,54 @@ export async function fetchSrvcc(database: string, collections: string[] = []): 
 }
 
 /**
+ * Ένα Ookla speedtest action row (Downlink Performance / Uplink Performance μόνο —
+ * το backend φιλτράρει έξω τα social media/messaging actions άλλων app tests) — βλ.
+ * /api/ookla. `throughputKbps` ήδη σε kbps. Το frontend τα μετατρέπει σε DataCallRow
+ * σχήμα (testType="Ookla", direction="DL"/"UL" από το actionName) ώστε να μπουν στο
+ * ίδιο PS Data Stats pipeline με τα υπόλοιπα tests — βλ. mapOoklaRowsToDataCallRows
+ * στο attachmentC.ts.
+ */
+export interface OoklaRow {
+  sessionId: string;
+  testId: number | null;
+  collectionName: string | null;
+  aSideDevice: string | null;
+  aSideFileName: string | null;
+  location: string | null;
+  homeOperator: string | null;
+  technology: string | null;
+  dataTechnology: string | null;
+  endTime: string | null;
+  app: string | null;
+  profileName: string | null;
+  actionId: number | null;
+  durationMs: number | null;
+  throughputKbps: number | null;
+  actionStatus: "Success" | "Failed";
+  actionName: "Downlink Performance" | "Uplink Performance";
+  latencyMs: number | null;
+  packetLossPct: number | null;
+  cgi: string | null;
+  startTime: string | null;
+}
+
+export async function fetchOokla(
+  database: string,
+  collections: string[] = [],
+  locations: string[] = [],
+): Promise<OoklaRow[]> {
+  const params = new URLSearchParams({ database });
+  for (const collection of collections) {
+    if (collection) params.append("collection", collection);
+  }
+  for (const location of locations) {
+    params.append("location", location);
+  }
+  const json = await requestJson<{ rows: OoklaRow[] }>(`/api/ookla?${params.toString()}`);
+  return json.rows;
+}
+
+/**
  * Ένα (location, kind, code, samples) row για τα "Serving Band (per Time)" / "Serving
  * Technology (per Time)" ποσοστά των PS Data DL tests (Capacity DL / FTP DL / HTTP
  * TRANSFER (DL)) — βλ. /api/serving_band_tech. `kind` = "BAND" (NR band, π.χ. "NR28")

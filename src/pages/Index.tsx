@@ -17,6 +17,7 @@ import ValidationTab from "@/components/ValidationTab";
 import SummaryTab from "@/components/SummaryTab";
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import type { CallRecord } from "@/lib/callData";
+import { mapOoklaRowsToDataCallRows } from "@/lib/attachmentC";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -24,6 +25,7 @@ import {
   fetchAllCalls,
   fetchCellBandCount,
   fetchDataCalls,
+  fetchOokla,
   fetchServingBandTech,
   fetchSrvcc,
   fetchTechnologyMix,
@@ -34,6 +36,7 @@ import {
   type AllCallsRow,
   type CellBandCountRow,
   type DataCallRow,
+  type OoklaRow,
   type ServingBandTechRow,
   type SrvccRow,
   type TechnologyMixRow,
@@ -247,6 +250,8 @@ const Index = () => {
   const [summaryCellBandCountRows, setSummaryCellBandCountRows] = useState<CellBandCountRow[]>([]);
   /** "Total/Successful/Failed SRVCC attempts" (FREE table) για το SummaryTab — βλ. /api/srvcc. */
   const [summarySrvccRows, setSummarySrvccRows] = useState<SrvccRow[]>([]);
+  /** "Ookla DL"/"Ookla UL" PS Data sections — βλ. /api/ookla / mapOoklaRowsToDataCallRows. */
+  const [summaryOoklaRows, setSummaryOoklaRows] = useState<OoklaRow[]>([]);
   // Database/collections επιλογή αποκλειστικά για το Summary tab — ΔΕΝ μοιράζεται state με το
   // selectedDatabase/selectedCallsCollections του "Edit Filters" panel / "All Calls" tab, ώστε η
   // επιλογή στο ένα tab να μην αλλάζει καθόλου το άλλο.
@@ -592,18 +597,27 @@ const Index = () => {
         setSummaryServingBandTechRows([]);
         setSummaryCellBandCountRows([]);
         setSummarySrvccRows([]);
+        setSummaryOoklaRows([]);
         return;
       }
 
-      const [voiceResult, dataResult, technologyMixResult, servingBandTechResult, cellBandCountResult, srvccResult] =
-        await Promise.allSettled([
-          fetchAllCalls(summaryDatabase, summaryCollections, []),
-          fetchDataCalls(summaryDatabase, summaryCollections, []),
-          fetchTechnologyMix(summaryDatabase, summaryCollections, []),
-          fetchServingBandTech(summaryDatabase, summaryCollections, []),
-          fetchCellBandCount(summaryDatabase, summaryCollections),
-          fetchSrvcc(summaryDatabase, summaryCollections),
-        ]);
+      const [
+        voiceResult,
+        dataResult,
+        technologyMixResult,
+        servingBandTechResult,
+        cellBandCountResult,
+        srvccResult,
+        ooklaResult,
+      ] = await Promise.allSettled([
+        fetchAllCalls(summaryDatabase, summaryCollections, []),
+        fetchDataCalls(summaryDatabase, summaryCollections, []),
+        fetchTechnologyMix(summaryDatabase, summaryCollections, []),
+        fetchServingBandTech(summaryDatabase, summaryCollections, []),
+        fetchCellBandCount(summaryDatabase, summaryCollections),
+        fetchSrvcc(summaryDatabase, summaryCollections),
+        fetchOokla(summaryDatabase, summaryCollections, []),
+      ]);
 
       if (voiceResult.status === "fulfilled") {
         setSummaryAllCallsRows(voiceResult.value);
@@ -650,10 +664,26 @@ const Index = () => {
         console.error("Failed to fetch summary SRVCC:", srvccResult.reason);
         setSummarySrvccRows([]);
       }
+
+      // Ίδιο σκεπτικό: χωρίς toast, τα "Ookla DL/UL" sections απλά δεν εμφανίζονται.
+      if (ooklaResult.status === "fulfilled") {
+        setSummaryOoklaRows(ooklaResult.value);
+      } else {
+        console.error("Failed to fetch summary Ookla:", ooklaResult.reason);
+        setSummaryOoklaRows([]);
+      }
     };
 
     loadSummary();
   }, [summaryDatabase, summaryCollections]);
+
+  // "Ookla DL"/"Ookla UL" (mapOoklaRowsToDataCallRows) μπαίνουν στο ίδιο DataCallRow[]
+  // που τροφοδοτεί το SummaryTab's buildDataSections — έτσι εμφανίζονται σαν ακόμα δύο
+  // PS Data sections χωρίς να αγγίξουμε καθόλου το SummaryTab.
+  const summaryDataCallsWithOokla = useMemo(
+    () => [...summaryDataCallsRows, ...mapOoklaRowsToDataCallRows(summaryOoklaRows)],
+    [summaryDataCallsRows, summaryOoklaRows],
+  );
 
   const handleRunQueries = async (queries: string[]) => {
     if (!selectedDatabase) return;
@@ -1279,7 +1309,7 @@ const Index = () => {
                 στο SummaryTab είναι δικό του, ανεξάρτητο φίλτρο. */}
             <SummaryTab
               allCallsRows={summaryAllCallsRows}
-              dataCallsRows={summaryDataCallsRows}
+              dataCallsRows={summaryDataCallsWithOokla}
               technologyMixRows={summaryTechnologyMixRows}
               servingBandTechRows={summaryServingBandTechRows}
               cellBandCountRows={summaryCellBandCountRows}
