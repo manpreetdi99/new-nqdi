@@ -1,6 +1,6 @@
 import { useState, useMemo, useEffect, Fragment } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp } from "lucide-react";
+import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp, History } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import QueryEditor from "@/components/QueryEditor";
 import ResultsTable from "@/components/ResultsTable";
@@ -17,7 +17,7 @@ import ValidationTab from "@/components/ValidationTab";
 import SummaryTab from "@/components/SummaryTab";
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import type { CallRecord } from "@/lib/callData";
-import { mapOoklaRowsToDataCallRows } from "@/lib/attachmentC";
+import { mapInteractivityRowsToDataCallRows, mapOoklaRowsToDataCallRows, mapPing1000RowsToDataCallRows } from "@/lib/attachmentC";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -25,7 +25,9 @@ import {
   fetchAllCalls,
   fetchCellBandCount,
   fetchDataCalls,
+  fetchInteractivity,
   fetchOokla,
+  fetchPing1000,
   fetchServingBandTech,
   fetchSrvcc,
   fetchTechnologyMix,
@@ -36,7 +38,9 @@ import {
   type AllCallsRow,
   type CellBandCountRow,
   type DataCallRow,
+  type InteractivityRow,
   type OoklaRow,
+  type PingRow,
   type ServingBandTechRow,
   type SrvccRow,
   type TechnologyMixRow,
@@ -252,6 +256,10 @@ const Index = () => {
   const [summarySrvccRows, setSummarySrvccRows] = useState<SrvccRow[]>([]);
   /** "Ookla DL"/"Ookla UL" PS Data sections — βλ. /api/ookla / mapOoklaRowsToDataCallRows. */
   const [summaryOoklaRows, setSummaryOoklaRows] = useState<OoklaRow[]>([]);
+  /** "Ping 1000" PS Data section — βλ. /api/ping_1000 / mapPing1000RowsToDataCallRows. */
+  const [summaryPing1000Rows, setSummaryPing1000Rows] = useState<PingRow[]>([]);
+  /** "Interactivity" PS Data section — βλ. /api/interactivity / mapInteractivityRowsToDataCallRows. */
+  const [summaryInteractivityRows, setSummaryInteractivityRows] = useState<InteractivityRow[]>([]);
   // Database/collections επιλογή αποκλειστικά για το Summary tab — ΔΕΝ μοιράζεται state με το
   // selectedDatabase/selectedCallsCollections του "Edit Filters" panel / "All Calls" tab, ώστε η
   // επιλογή στο ένα tab να μην αλλάζει καθόλου το άλλο.
@@ -598,6 +606,8 @@ const Index = () => {
         setSummaryCellBandCountRows([]);
         setSummarySrvccRows([]);
         setSummaryOoklaRows([]);
+        setSummaryPing1000Rows([]);
+        setSummaryInteractivityRows([]);
         return;
       }
 
@@ -609,6 +619,8 @@ const Index = () => {
         cellBandCountResult,
         srvccResult,
         ooklaResult,
+        ping1000Result,
+        interactivityResult,
       ] = await Promise.allSettled([
         fetchAllCalls(summaryDatabase, summaryCollections, []),
         fetchDataCalls(summaryDatabase, summaryCollections, []),
@@ -617,6 +629,8 @@ const Index = () => {
         fetchCellBandCount(summaryDatabase, summaryCollections),
         fetchSrvcc(summaryDatabase, summaryCollections),
         fetchOokla(summaryDatabase, summaryCollections, []),
+        fetchPing1000(summaryDatabase, summaryCollections, []),
+        fetchInteractivity(summaryDatabase, summaryCollections, []),
       ]);
 
       if (voiceResult.status === "fulfilled") {
@@ -672,17 +686,39 @@ const Index = () => {
         console.error("Failed to fetch summary Ookla:", ooklaResult.reason);
         setSummaryOoklaRows([]);
       }
+
+      // Ίδιο σκεπτικό: χωρίς toast, το "Ping 1000" section απλά δεν εμφανίζεται.
+      if (ping1000Result.status === "fulfilled") {
+        setSummaryPing1000Rows(ping1000Result.value);
+      } else {
+        console.error("Failed to fetch summary Ping 1000:", ping1000Result.reason);
+        setSummaryPing1000Rows([]);
+      }
+
+      // Ίδιο σκεπτικό: χωρίς toast, το "Interactivity" section απλά δεν εμφανίζεται.
+      if (interactivityResult.status === "fulfilled") {
+        setSummaryInteractivityRows(interactivityResult.value);
+      } else {
+        console.error("Failed to fetch summary Interactivity:", interactivityResult.reason);
+        setSummaryInteractivityRows([]);
+      }
     };
 
     loadSummary();
   }, [summaryDatabase, summaryCollections]);
 
-  // "Ookla DL"/"Ookla UL" (mapOoklaRowsToDataCallRows) μπαίνουν στο ίδιο DataCallRow[]
-  // που τροφοδοτεί το SummaryTab's buildDataSections — έτσι εμφανίζονται σαν ακόμα δύο
-  // PS Data sections χωρίς να αγγίξουμε καθόλου το SummaryTab.
+  // "Ookla DL"/"Ookla UL" (mapOoklaRowsToDataCallRows), "Ping 1000"
+  // (mapPing1000RowsToDataCallRows) και "Interactivity" (mapInteractivityRowsToDataCallRows)
+  // μπαίνουν στο ίδιο DataCallRow[] που τροφοδοτεί το SummaryTab's buildDataSections —
+  // έτσι εμφανίζονται σαν ακόμα PS Data sections χωρίς να αγγίξουμε καθόλου το SummaryTab.
   const summaryDataCallsWithOokla = useMemo(
-    () => [...summaryDataCallsRows, ...mapOoklaRowsToDataCallRows(summaryOoklaRows)],
-    [summaryDataCallsRows, summaryOoklaRows],
+    () => [
+      ...summaryDataCallsRows,
+      ...mapOoklaRowsToDataCallRows(summaryOoklaRows),
+      ...mapPing1000RowsToDataCallRows(summaryPing1000Rows),
+      ...mapInteractivityRowsToDataCallRows(summaryInteractivityRows),
+    ],
+    [summaryDataCallsRows, summaryOoklaRows, summaryPing1000Rows, summaryInteractivityRows],
   );
 
   const handleRunQueries = async (queries: string[]) => {
@@ -1296,6 +1332,9 @@ const Index = () => {
               </TabsTrigger>
               <TabsTrigger value="map2" className="gap-1.5 text-xs">
                 <MapPin className="h-3.5 w-3.5 text-cyan-400" /> Antennas
+              </TabsTrigger>
+              <TabsTrigger value="historic" className="gap-1.5 text-xs">
+                <History className="h-3.5 w-3.5 text-yellow-400" /> Historic
               </TabsTrigger>
             </TabsList>
           </div>
@@ -2125,6 +2164,16 @@ const Index = () => {
               collectionsLoading={collectionsLoading}
               onDatabaseChange={handleDatabaseChange}
             />
+          </TabsContent>
+
+          <TabsContent value="historic">
+            <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card py-24 text-center">
+              <History className="h-8 w-8 text-muted-foreground" />
+              <p className="text-sm font-medium text-foreground">Historic</p>
+              <p className="max-w-sm text-xs text-muted-foreground">
+                This section is coming soon.
+              </p>
+            </div>
           </TabsContent>
         </Tabs>
       </main>

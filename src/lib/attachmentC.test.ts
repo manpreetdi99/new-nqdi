@@ -16,11 +16,13 @@ import {
   classifyCustomCallMode,
   collectOperators,
   isoWeek,
+  mapInteractivityRowsToDataCallRows,
   mapOoklaRowsToDataCallRows,
+  mapPing1000RowsToDataCallRows,
   resolveMode,
   resolveOperator,
 } from "@/lib/attachmentC";
-import type { AllCallsRow, DataCallRow, OoklaRow } from "@/lib/api";
+import type { AllCallsRow, DataCallRow, InteractivityRow, OoklaRow, PingRow } from "@/lib/api";
 
 const call = (overrides: Partial<AllCallsRow>): AllCallsRow => ({
   Location: "Cosmote Free A",
@@ -56,6 +58,10 @@ const dataTest = (overrides: Partial<DataCallRow>): DataCallRow => ({
   capacityThroughputKbps: null,
   youtubeMos: null,
   youtubeInterruptions: null,
+  interactivityQoeScore: null,
+  interactivityRtt: null,
+  interactivityPacketsLostRate: null,
+  interactivityPacketDelay: null,
   technology: "5G",
   startTechnology: null,
   CollectionName: null,
@@ -294,24 +300,29 @@ describe("PS data KPIs", () => {
     expect(ping?.total.metrics[0]).toMatchObject({ label: "Mean RTT", unit: "ms", higherIsBetter: false, value: 30 });
   });
 
-  it("always sorts Payload Ping BIDIRECTIONAL last in the PS Data Stats table, regardless of test count", () => {
-    // Το bidirectional ping έχει συνήθως τα περισσότερα tests (τρέχει συνέχεια στο
-    // background) — χωρίς το ειδικό κριτήριο θα έβγαινε πρώτο, όχι τελευταίο.
+  it("drops the 'Payload Ping BIDIRECTIONAL' section entirely — not a wanted Attachment C section", () => {
     const sections = buildDataSections([
       ...Array.from({ length: 50 }, () => dataTest({ testType: "Payload Ping BIDIRECTIONAL", direction: null, pingRttAvg: 20 })),
       dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
       dataTest({ testType: "Ping", direction: null, pingRttAvg: 30 }),
     ]);
 
-    expect(sections.at(-1)?.key).toBe("Payload Ping BIDIRECTIONAL");
-    expect(sections.map((section) => section.key)).toEqual(["Capacity DL 10GB", "Ping", "Payload Ping BIDIRECTIONAL"]);
+    expect(sections.map((section) => section.key)).toEqual(["Capacity DL 10GB", "Ping"]);
+    expect(sections.some((s) => s.key.toLowerCase().includes("bidirectional"))).toBe(false);
+  });
+
+  it("drops the 'Interactivity BIDIRECTIONAL' section entirely — not a wanted Attachment C section", () => {
+    const sections = buildDataSections([
+      ...Array.from({ length: 50 }, () => dataTest({ testType: "Interactivity BIDIRECTIONAL", direction: null })),
+      dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
+    ]);
+
+    expect(sections.map((section) => section.key)).toEqual(["Capacity DL 10GB"]);
+    expect(sections.some((s) => s.key.toLowerCase().includes("bidirectional"))).toBe(false);
   });
 
   it("pins Capacity DL, then Capacity UL, then Ookla at the top, in that order, regardless of test count", () => {
-    // Ookla έχει σκόπιμα τα λιγότερα tests εδώ — χωρίς το σταθερό rank θα έβγαινε
-    // τελευταίο (πριν το Payload Ping BIDIRECTIONAL), όχι αμέσως κάτω από Capacity UL.
     const sections = buildDataSections([
-      ...Array.from({ length: 50 }, () => dataTest({ testType: "Payload Ping BIDIRECTIONAL", direction: null, pingRttAvg: 20 })),
       ...Array.from({ length: 20 }, () => dataTest({ testType: "FTP", direction: "DL", throughputKbps: 40000 })),
       dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 40000 }),
       dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
@@ -323,7 +334,6 @@ describe("PS data KPIs", () => {
       "Capacity UL 1GB",
       "Ookla Speedtest",
       "FTP DL",
-      "Payload Ping BIDIRECTIONAL",
     ]);
   });
 
@@ -344,6 +354,160 @@ describe("PS data KPIs", () => {
     ]);
 
     expect(buildDataSections(rows).map((s) => s.key)).toEqual(["Ookla DL", "Ookla UL"]);
+  });
+
+  const pingRow = (overrides: Partial<PingRow>): PingRow => ({
+    location: "Cosmote Data A",
+    sessionId: "1",
+    testId: 1,
+    host: "8.8.8.8",
+    rtt: 40,
+    packetSize: 1000,
+    errorCode: "ok",
+    success: 1,
+    failed: 0,
+    sequenceNumber: 1,
+    collectionName: null,
+    aSideFileName: null,
+    ...overrides,
+  });
+
+  it("mapPing1000RowsToDataCallRows turns raw ping packets into 'Ping 1000' DataCallRows, RTT only on success", () => {
+    const mapped = mapPing1000RowsToDataCallRows([
+      pingRow({ rtt: 35, success: 1, failed: 0 }),
+      pingRow({ rtt: null, success: 0, failed: 1, sessionId: "2" }),
+    ]);
+
+    expect(mapped).toHaveLength(2);
+    expect(mapped[0]).toMatchObject({ testType: "Ping 1000", pingRttAvg: 35, scoringStatus: "success" });
+    expect(mapped[1]).toMatchObject({ testType: "Ping 1000", pingRttAvg: null, scoringStatus: "failed" });
+  });
+
+  it("feeds Ping 1000 rows through buildDataSections into a renamed 'Ping 1000 B' section, alongside plain Ping", () => {
+    const rows = mapPing1000RowsToDataCallRows([
+      pingRow({ rtt: 30, success: 1, failed: 0 }),
+      pingRow({ rtt: 50, success: 1, failed: 0, sessionId: "2" }),
+      pingRow({ rtt: null, success: 0, failed: 1, sessionId: "3" }),
+    ]);
+
+    const sections = buildDataSections([...rows, dataTest({ testType: "Ping", direction: null, pingRttAvg: 20 })]);
+
+    // "Ping" (κανονικό rank 3) πριν το "Ping 1000 B" (rank 3.2, βλ. PING_B_RANK) —
+    // ανεξάρτητα από το count, ίδιο σκεπτικό με το YouTube Service/Payload Ping tests.
+    expect(sections.map((s) => s.key)).toEqual(["Ping", "Ping 1000 B"]);
+
+    const ping1000 = sections.find((s) => s.key === "Ping 1000 B")!;
+    expect(ping1000.total.total).toBe(3);
+    expect(ping1000.total.success).toBe(2);
+    expect(ping1000.total.failed).toBe(1);
+    // Mean RTT: (30 + 50) / 2 — μόνο τα επιτυχημένα packets έχουν RTT.
+    expect(ping1000.total.metrics[0]).toMatchObject({ label: "Mean RTT", unit: "ms", value: 40 });
+  });
+
+  it("renames ICMP Ping 40/800 and groups them with Ping 1000 B, one below the other in ascending size order", () => {
+    const ping1000Rows = mapPing1000RowsToDataCallRows([pingRow({ rtt: 60, success: 1, failed: 0 })]);
+
+    const sections = buildDataSections([
+      ...ping1000Rows,
+      dataTest({ testType: "ICMP Ping 800", direction: null, pingRttAvg: 45 }),
+      dataTest({ testType: "ICMP Ping 40", direction: null, pingRttAvg: 15 }),
+      dataTest({ testType: "Ping", direction: null, pingRttAvg: 20 }),
+    ]);
+
+    // "Ping" (κανονικό rank 3) μπαίνει πριν το Ping B group (rank 3.2) — μόνο μεταξύ
+    // τους τα Ping 40/800/1000 B κρατάνε τη σειρά μεγέθους, μαζεμένα.
+    expect(sections.map((s) => s.key)).toEqual(["Ping", "Ping 40 B", "Ping 800 B", "Ping 1000 B"]);
+  });
+
+  const interactivityRow = (overrides: Partial<InteractivityRow>): InteractivityRow => ({
+    location: "Cosmote Data A",
+    sessionId: "1",
+    testId: 1,
+    homeOperator: "Cosmote",
+    technology: "LTE",
+    status: "Successful",
+    patternName: "Game A",
+    connectivity: 0.98,
+    packetsSent: 100,
+    packetsNotSent: 0,
+    packetsLost: 2,
+    packetsLostRate: 0.02,
+    throughput: 500,
+    throughputKbps: 4000,
+    rtt10thPercentile: 30,
+    rttAverage: 25,
+    packetDelayMedian: 5,
+    duration: 60000,
+    qualityIndex: 1,
+    qoeScore: 4.2,
+    collectionName: null,
+    aSideFileName: null,
+    ...overrides,
+  });
+
+  it("mapInteractivityRowsToDataCallRows turns raw interactivity tests into 'Interactivity' DataCallRows", () => {
+    const mapped = mapInteractivityRowsToDataCallRows([
+      interactivityRow({ qoeScore: 0.8, rttAverage: 25, packetsLostRate: 0.02, packetDelayMedian: 5, status: "Successful" }),
+      interactivityRow({ qoeScore: 0.4, rttAverage: 40, packetsLostRate: 0.1, packetDelayMedian: 9, status: "Failed", sessionId: "2" }),
+    ]);
+
+    expect(mapped).toHaveLength(2);
+    expect(mapped[0]).toMatchObject({
+      testType: "Interactivity",
+      interactivityQoeScore: 0.8,
+      interactivityRtt: 25,
+      interactivityPacketsLostRate: 0.02,
+      interactivityPacketDelay: 5,
+      scoringStatus: "Successful",
+      host: "Game A",
+    });
+    expect(mapped[1]).toMatchObject({ testType: "Interactivity", interactivityQoeScore: 0.4, scoringStatus: "Failed" });
+  });
+
+  it("feeds Interactivity rows through buildDataSections into its own 'Interactivity' section, with the 5 eGaming metrics", () => {
+    const rows = mapInteractivityRowsToDataCallRows([
+      interactivityRow({
+        throughputKbps: 300,
+        rttAverage: 20,
+        packetsLostRate: 0.02,
+        packetDelayMedian: 10,
+        qoeScore: 0.8,
+        status: "Successful",
+      }),
+      interactivityRow({
+        throughputKbps: 280,
+        rttAverage: 30,
+        packetsLostRate: 0.04,
+        packetDelayMedian: 14,
+        qoeScore: 0.6,
+        status: "Successful",
+        sessionId: "2",
+      }),
+    ]);
+
+    const sections = buildDataSections(rows);
+    expect(sections.map((s) => s.key)).toEqual(["Interactivity"]);
+
+    const [throughput, rtt, packetsLostRate, packetDelay, qoe] = sections[0].total.metrics;
+    expect(throughput).toMatchObject({ label: "eGaming Average of ThroughputKbps", unit: "", value: 290 });
+    expect(rtt).toMatchObject({ label: "eGaming Average of RTT", unit: "", value: 25 });
+    // PacketsLostRate φτάνει ως raw fraction (0.02/0.04) — *100 για εμφάνιση ως ποσοστό: (0.02+0.04)/2 * 100 = 3.
+    expect(packetsLostRate).toMatchObject({ label: "eGaming Average of PacketsLostRate", unit: "%", value: 3 });
+    expect(packetDelay).toMatchObject({ label: "eGaming Average of PacketDelay", unit: "", value: 12 });
+    // QoEScore ίδιο σκεπτικό: (0.8+0.6)/2 * 100 = 70.
+    expect(qoe).toMatchObject({ label: "eGaming Avg QoEScore", unit: "%", value: 70 });
+  });
+
+  it("includes a PacketsLostRate of 0 (a perfect run) in the average, unlike the other metrics' >0 filter", () => {
+    const rows = mapInteractivityRowsToDataCallRows([
+      interactivityRow({ packetsLostRate: 0, sessionId: "1" }),
+      interactivityRow({ packetsLostRate: 0.02, sessionId: "2" }),
+    ]);
+
+    const sections = buildDataSections(rows);
+    const packetsLostRate = sections[0].total.metrics[2];
+    // Αν το 0 φιλτραριζόταν έξω (σαν τα άλλα metrics) θα έβγαινε 0.02*100=2, όχι 1.
+    expect(packetsLostRate).toMatchObject({ label: "eGaming Average of PacketsLostRate", value: 1 });
   });
 
   const ooklaRow = (overrides: Partial<OoklaRow>): OoklaRow => ({

@@ -16,7 +16,9 @@ import type {
   AllCallsRow,
   CellBandCountRow,
   DataCallRow,
+  InteractivityRow,
   OoklaRow,
+  PingRow,
   ServingBandTechRow,
   SrvccRow,
   TechnologyMixRow,
@@ -747,11 +749,24 @@ const DIRECTION_LABELS: Record<string, string> = { dl: "DL", ul: "UL", downlink:
 const BARE_CAPACITY_PAYLOAD: Record<string, string> = { dl: "10GB", ul: "1GB" };
 
 /**
- * Το "HTTPS Browser (site)" test δεν κολλάει "DL" στο section header — τρέχει μόνο
- * downlink, οπότε το "DL" είναι απλά θόρυβος στο Attachment C (αντίθετα με τα άλλα
- * tests που έχουν ξεχωριστό DL/UL section, βλ. sectionLabel).
+ * Το "HTTPS Browser (site)" και τα "YouTube Service*" tests δεν κολλάνε "DL" στο section
+ * header — τρέχουν μόνο downlink, οπότε το "DL" είναι απλά θόρυβος στο Attachment C
+ * (αντίθετα με τα άλλα tests που έχουν ξεχωριστό DL/UL section, βλ. sectionLabel).
  */
-const NO_DL_SUFFIX_TESTS = /https?\s*browser/i;
+const NO_DL_SUFFIX_TESTS = /https?\s*browser|^youtube service/i;
+
+/**
+ * Μετονομασίες συγκεκριμένων section labels στο PS Data Stats — το raw testType/direction
+ * δεν δείχνει το σταθερό μέγεθος payload του Attachment C (ίδιο σκεπτικό με το
+ * BARE_CAPACITY_PAYLOAD παραπάνω, εδώ όμως πάνω σε ολόκληρο το label).
+ */
+const SECTION_LABEL_RENAMES: Record<string, string> = {
+  "HTTP Transfer (DL)": "HTTP Transfer (DL) 10MB",
+  "HTTP UL": "HTTP Transfer (UL) 5MB",
+  "ICMP Ping 40": "Ping 40 B",
+  "ICMP Ping 800": "Ping 800 B",
+  "Ping 1000": "Ping 1000 B",
+};
 
 const sectionLabel = (row: DataCallRow): string => {
   const test = (row.testType ?? "Unknown test").trim();
@@ -767,7 +782,7 @@ const sectionLabel = (row: DataCallRow): string => {
 
   const bareCapacityMatch = /^capacity (dl|ul)$/i.exec(base);
   if (bareCapacityMatch) return `${base} ${BARE_CAPACITY_PAYLOAD[bareCapacityMatch[1].toLowerCase()]}`;
-  return base;
+  return SECTION_LABEL_RENAMES[base] ?? base;
 };
 
 const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
@@ -778,6 +793,58 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
   if (testType.includes("ping")) {
     const rtt = collect((row) => numeric(row.pingRttAvg));
     return [{ label: "Mean RTT", unit: "ms", decimals: 1, higherIsBetter: false, value: rtt.avg, samples: rtt.samples }];
+  }
+
+  if (testType.includes("interactivity")) {
+    // PacketsLostRate=0 (τέλειο τεστ, καθόλου απώλειες) είναι έγκυρο και θέλουμε να
+    // μετράει στον μέσο όρο — σε αντίθεση με το `collect` παραπάνω (φιλτράρει value>0
+    // παντού αλλού, όπου το 0 σημαίνει "δεν υπάρχει τιμή"), εδώ κρατάμε και τα μηδενικά.
+    const collectAllowZero = (pick: (row: DataCallRow) => number | null): Sample =>
+      mean(rows.map(pick).filter((value): value is number => value != null && value >= 0));
+
+    const throughput = collect((row) => numeric(row.throughputKbps));
+    const rtt = collect((row) => numeric(row.interactivityRtt));
+    const packetsLostRate = collectAllowZero((row) => numeric(row.interactivityPacketsLostRate));
+    const packetDelay = collect((row) => numeric(row.interactivityPacketDelay));
+    const qoe = collect((row) => numeric(row.interactivityQoeScore));
+
+    return [
+      {
+        label: "eGaming Average of ThroughputKbps",
+        unit: "",
+        decimals: 1,
+        higherIsBetter: true,
+        value: throughput.avg,
+        samples: throughput.samples,
+      },
+      { label: "eGaming Average of RTT", unit: "", decimals: 1, higherIsBetter: false, value: rtt.avg, samples: rtt.samples },
+      {
+        // PacketsLostRate φτάνει ως raw fraction (0-1) — *100 για εμφάνιση ως ποσοστό.
+        label: "eGaming Average of PacketsLostRate",
+        unit: "%",
+        decimals: 3,
+        higherIsBetter: false,
+        value: packetsLostRate.avg == null ? null : packetsLostRate.avg * 100,
+        samples: packetsLostRate.samples,
+      },
+      {
+        label: "eGaming Average of PacketDelay",
+        unit: "",
+        decimals: 1,
+        higherIsBetter: false,
+        value: packetDelay.avg,
+        samples: packetDelay.samples,
+      },
+      {
+        // QoEScore φτάνει επίσης ως raw fraction (0-1) — *100 για εμφάνιση ως ποσοστό.
+        label: "eGaming Avg QoEScore",
+        unit: "%",
+        decimals: 2,
+        higherIsBetter: true,
+        value: qoe.avg == null ? null : qoe.avg * 100,
+        samples: qoe.samples,
+      },
+    ];
   }
 
   if (testType.includes("youtube")) {
@@ -849,9 +916,14 @@ const buildDataTestStats = (rows: DataCallRow[]): DataTestStats => {
  * count-sort — ό,τι δεν ταιριάζει σε καμία περίπτωση μένει στο κανονικό (rank 3):
  *   0: Capacity DL      1: Capacity UL          2: Ookla (οποιοδήποτε)
  *   3: όλα τα υπόλοιπα, με count-sort           3.1: YouTube Service* (μαζί, βλ. YOUTUBE_SERVICE_ORDER)
- *   4: Payload Ping BIDIRECTIONAL               5: HTTP(S) Browser (site) — π.χ. "HTTP Browser (Newton)" (τελευταίο)
+ *                                                3.2: Ping 40 B / 800 B / 1000 B (μαζί, βλ. PING_B_ORDER)
+ *   5: HTTP(S) Browser (site) — π.χ. "HTTP Browser (Newton)" (τελευταίο)
+ *
+ * "Payload Ping BIDIRECTIONAL" ΔΕΝ έχει πια rank εδώ — αποκλείεται εντελώς, βλ.
+ * isExcludedSection.
  */
 const YOUTUBE_SERVICE_RANK = 3.1;
+const PING_B_RANK = 3.2;
 
 const sectionRank = (label: string): number => {
   const l = label.toLowerCase();
@@ -859,8 +931,8 @@ const sectionRank = (label: string): number => {
   if (/^capacity ul\b/.test(l)) return 1;
   if (l.includes("ookla")) return 2;
   if (/^youtube service/.test(l)) return YOUTUBE_SERVICE_RANK;
+  if (PING_B_ORDER.includes(l)) return PING_B_RANK;
   if (NO_DL_SUFFIX_TESTS.test(l)) return 5;
-  if (l.includes("ping") && l.includes("bidirectional")) return 4;
   return 3;
 };
 
@@ -882,7 +954,7 @@ const browserSiteRank = (label: string): number => {
  * Σειρά μεταξύ των "YouTube Service*" sections (rank YOUTUBE_SERVICE_RANK) — το ένα
  * κάτω από το άλλο, σε αυτή τη σειρά: plain, μετά _4K, μετά _Live.
  */
-const YOUTUBE_SERVICE_ORDER = ["youtube service dl", "youtube service_4k dl", "youtube service_live dl"];
+const YOUTUBE_SERVICE_ORDER = ["youtube service", "youtube service_4k", "youtube service_live"];
 
 const youtubeServiceRank = (label: string): number => {
   const l = label.toLowerCase();
@@ -891,14 +963,37 @@ const youtubeServiceRank = (label: string): number => {
 };
 
 /**
- * "Ookla(R) BIDIRECTIONAL" αποκλείεται εντελώς από το PS Data Stats table — παλιό
- * combined DL+UL test type, αχρησιμοποίητο "success" (πάντα "—") · αντικαταστάθηκε
- * από το ξεχωριστό "Ookla DL"/"Ookla UL" split (βλ. mapOoklaRowsToDataCallRows).
- * ΔΕΝ πιάνει τα δικά μας "Ookla DL"/"Ookla UL" — αυτά δεν έχουν "bidirectional".
+ * Σειρά μεταξύ των "Ping 40 B" / "Ping 800 B" / "Ping 1000 B" sections (rank
+ * PING_B_RANK) — μαζεμένα, το ένα κάτω από το άλλο, σε αύξουσα σειρά μεγέθους
+ * payload (ίδιο σκεπτικό με YOUTUBE_SERVICE_ORDER). Οι raw τιμές φτάνουν ως "ICMP
+ * Ping 40" / "ICMP Ping 800" (από το CDRCombined view) και "Ping 1000" (από το
+ * /api/ping_1000 — βλ. mapPing1000RowsToDataCallRows) — το SECTION_LABEL_RENAMES τα
+ * μετονομάζει πριν φτάσουν εδώ.
+ */
+const PING_B_ORDER = ["ping 40 b", "ping 800 b", "ping 1000 b"];
+
+const pingBRank = (label: string): number => {
+  const l = label.toLowerCase();
+  const index = PING_B_ORDER.indexOf(l);
+  return index === -1 ? PING_B_ORDER.length : index;
+};
+
+/**
+ * Sections που αποκλείονται εντελώς από το PS Data Stats table:
+ * - "Ookla(R) BIDIRECTIONAL" — παλιό combined DL+UL test type, αχρησιμοποίητο
+ *   "success" (πάντα "—") · αντικαταστάθηκε από το ξεχωριστό "Ookla DL"/"Ookla UL"
+ *   split (βλ. mapOoklaRowsToDataCallRows). ΔΕΝ πιάνει τα δικά μας "Ookla DL"/"Ookla
+ *   UL" — αυτά δεν έχουν "bidirectional".
+ * - "Payload Ping BIDIRECTIONAL" — τρέχει συνέχεια στο background (βλ. σχόλιο στο
+ *   παλιό test file), όχι ζητούμενο section του Attachment C. ΔΕΝ πιάνει τα "Ping"/
+ *   "Ping 40/800/1000 B" — αυτά δεν έχουν "bidirectional".
+ * - "Interactivity BIDIRECTIONAL" — ίδιο σκεπτικό, όχι ζητούμενο section. ΔΕΝ πιάνει
+ *   το δικό μας "Interactivity" (mapInteractivityRowsToDataCallRows) — δεν έχει
+ *   "bidirectional".
  */
 const isExcludedSection = (label: string): boolean => {
   const l = label.toLowerCase();
-  return l.includes("ookla") && l.includes("bidirectional");
+  return (l.includes("ookla") || l.includes("ping") || l.includes("interactivity")) && l.includes("bidirectional");
 };
 
 export const buildDataSections = (rows: DataCallRow[]): DataTestSection[] => {
@@ -938,6 +1033,11 @@ export const buildDataSections = (rows: DataCallRow[]): DataTestSection[] => {
         const ytRankB = youtubeServiceRank(b.label);
         if (ytRankA !== ytRankB) return ytRankA - ytRankB;
       }
+      if (rankA === PING_B_RANK) {
+        const pbRankA = pingBRank(a.label);
+        const pbRankB = pingBRank(b.label);
+        if (pbRankA !== pbRankB) return pbRankA - pbRankB;
+      }
       if (rankA === 5) {
         const siteRankA = browserSiteRank(a.label);
         const siteRankB = browserSiteRank(b.label);
@@ -973,6 +1073,10 @@ export const mapOoklaRowsToDataCallRows = (rows: OoklaRow[]): DataCallRow[] =>
       capacityThroughputKbps: null,
       youtubeMos: null,
       youtubeInterruptions: null,
+      interactivityQoeScore: null,
+      interactivityRtt: null,
+      interactivityPacketsLostRate: null,
+      interactivityPacketDelay: null,
       technology: row.technology,
       startTechnology: row.dataTechnology,
       CollectionName: row.collectionName,
@@ -982,6 +1086,88 @@ export const mapOoklaRowsToDataCallRows = (rows: OoklaRow[]): DataCallRow[] =>
       latitude: null,
       longitude: null,
     }));
+
+/**
+ * Μετατρέπει τα raw ping-packet rows του /api/ping_1000 (ResultsPingTest,
+ * PacketSize=1000 — δεν φτάνει σαν δικό του TestName από το CDRCombined view του
+ * /api/data_calls, βλ. σχόλιο εκεί) σε DataCallRow σχήμα (testType="Ping 1000") ώστε
+ * να μπουν στο ίδιο buildDataSections pipeline με τα υπόλοιπα PS Data tests — ίδιο
+ * σκεπτικό με mapOoklaRowsToDataCallRows. Το SECTION_LABEL_RENAMES μετονομάζει το
+ * section σε "Ping 1000 B" (ίδιο "B" suffix με τα "ICMP Ping 40"/"ICMP Ping 800" ->
+ * "Ping 40 B"/"Ping 800 B"), και το PING_B_RANK/PING_B_ORDER τα κρατάει μαζεμένα, το
+ * ένα κάτω από το άλλο, σε αύξουσα σειρά μεγέθους — βλ. σχόλια στο sectionRank.
+ */
+export const mapPing1000RowsToDataCallRows = (rows: PingRow[]): DataCallRow[] =>
+  rows.map((row) => ({
+    Location: row.location,
+    SessionId: row.sessionId,
+    TestId: row.testId,
+    callStartTimeStamp: null,
+    testType: "Ping 1000",
+    direction: null,
+    status: row.success === 1 ? "Completed" : "Failed",
+    scoringStatus: row.success === 1 ? "success" : "failed",
+    host: row.host,
+    pingRttAvg: row.rtt,
+    throughputKbps: null,
+    capacityThroughputKbps: null,
+    youtubeMos: null,
+    youtubeInterruptions: null,
+    interactivityQoeScore: null,
+    interactivityRtt: null,
+    interactivityPacketsLostRate: null,
+    interactivityPacketDelay: null,
+    technology: null,
+    startTechnology: null,
+    CollectionName: row.collectionName,
+    ASideFileName: row.aSideFileName,
+    isValid: 1,
+    comment: null,
+    latitude: null,
+    longitude: null,
+  }));
+
+/**
+ * Μετατρέπει τα raw interactivity-test rows του /api/interactivity (FactInteractivity
+ * — gaming/app pattern tests, δεν φτάνουν σαν δικό τους TestName από το CDRCombined
+ * view του /api/data_calls, βλ. σχόλιο εκεί) σε DataCallRow σχήμα
+ * (testType="Interactivity") ώστε να μπουν στο ίδιο buildDataSections pipeline με τα
+ * υπόλοιπα PS Data tests — ίδιο σκεπτικό με mapOoklaRowsToDataCallRows/
+ * mapPing1000RowsToDataCallRows. `host` κρατάει το PatternName (το test παράμετρο
+ * που ξεχωρίζει ένα interactivity test, ίδιο σκεπτικό με row.app στο Ookla mapping) —
+ * εμφανίζεται ως "Host=<PatternName>" στο DataSessionDetail. buildDataMetrics δείχνει
+ * τα 5 "eGaming Average of..." metrics του Attachment C (Throughput/RTT/PacketsLostRate/
+ * PacketDelay/QoEScore) — βλ. εκεί.
+ */
+export const mapInteractivityRowsToDataCallRows = (rows: InteractivityRow[]): DataCallRow[] =>
+  rows.map((row) => ({
+    Location: row.location,
+    SessionId: row.sessionId,
+    TestId: row.testId,
+    callStartTimeStamp: null,
+    testType: "Interactivity",
+    direction: null,
+    status: row.status,
+    scoringStatus: row.status,
+    host: row.patternName,
+    pingRttAvg: null,
+    throughputKbps: row.throughputKbps,
+    capacityThroughputKbps: null,
+    youtubeMos: null,
+    youtubeInterruptions: null,
+    interactivityQoeScore: row.qoeScore,
+    interactivityRtt: row.rttAverage,
+    interactivityPacketsLostRate: row.packetsLostRate,
+    interactivityPacketDelay: row.packetDelayMedian,
+    technology: row.technology,
+    startTechnology: null,
+    CollectionName: row.collectionName,
+    ASideFileName: row.aSideFileName,
+    isValid: 1,
+    comment: null,
+    latitude: null,
+    longitude: null,
+  }));
 
 /* ────────────────────────── Technology mix ────────────────────────── */
 

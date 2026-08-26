@@ -436,7 +436,9 @@ const cellText = (cell: Cell): string => {
   if (cell.kind === "count") return cell.value === 0 ? "0" : formatCount(cell.value);
   if (cell.kind === "value") {
     if (cell.value == null) return "—";
-    return `${formatNumber(cell.value, cell.decimals)}${cell.unit ? ` ${cell.unit}` : ""}`;
+    // "%" κολλάει στην τιμή χωρίς κενό (π.χ. "0.668%") — κάθε άλλο unit έχει κενό πριν.
+    const unitSuffix = cell.unit ? (cell.unit === "%" ? cell.unit : ` ${cell.unit}`) : "";
+    return `${formatNumber(cell.value, cell.decimals)}${unitSuffix}`;
   }
   return "";
 };
@@ -649,8 +651,10 @@ const dataRows = (stats: DataTestStats): KpiRowSpec<DataTestStats>[] => [
   { label: "Total Tests", cell: (s) => ({ kind: "count", value: s.total }) },
   { label: "Successful tests", cell: (s) => ({ kind: "count", value: s.success }) },
   { label: "Failed Tests", cell: (s) => ({ kind: "count", value: s.failed }) },
+  // "%" εμφανίζεται κολλητό στην τιμή του κελιού (π.χ. "0.668%"), όχι σαν "(%)" στο label
+  // — αντίθετα με τα άλλα units (ms/Mbps) που μπαίνουν μόνο στο label, βλ. cellText.
   ...stats.metrics.map((metric, index) => ({
-    label: metric.unit ? `${metric.label} (${metric.unit})` : metric.label,
+    label: metric.unit && metric.unit !== "%" ? `${metric.label} (${metric.unit})` : metric.label,
     emphasis: index === 0,
     cell: (s: DataTestStats): Cell => {
       const match = s.metrics[index];
@@ -658,6 +662,7 @@ const dataRows = (stats: DataTestStats): KpiRowSpec<DataTestStats>[] => [
         kind: "value",
         value: match?.value ?? null,
         decimals: match?.decimals ?? 2,
+        unit: match?.unit === "%" ? "%" : undefined,
         samples: match?.samples,
         higherIsBetter: match?.higherIsBetter,
       };

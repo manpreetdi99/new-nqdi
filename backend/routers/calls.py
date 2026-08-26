@@ -1006,3 +1006,158 @@ def get_ookla(
         return {"rows": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/ping_1000")
+def get_ping_1000(
+    database: str = Query(..., min_length=1),
+    collection: list[str] | None = Query(default=None),
+    location: list[str] | None = Query(default=None),
+):
+    """"Ping 1000" (PS Data Stats) — δεν φτάνει σαν δικό του TestName από το
+    CDRCombined view (βλ. /api/data_calls· από εκεί φτάνουν μόνο "Ping"/"Payload Ping
+    BIDIRECTIONAL"), οπότε το φτιάχνουμε από το raw ResultsPingTest, φιλτραρισμένο σε
+    PacketSize = 1000 — ίδιο query με το A-LEVEL "PING RAW.sql" reference query (ίδιο
+    query με το "Ping RAW" saved query του QueryEditor).
+
+    Ένα row ανά ping packet (raw, όχι ήδη-αθροισμένο ανά test) — RTT μόνο όταν
+    ErrorCode=0 (αλλιώς NULL), success/failed από το ίδιο ErrorCode. Το frontend τα
+    μετατρέπει σε DataCallRow σχήμα (testType="Ping 1000") ώστε να μπουν στο ίδιο
+    buildDataSections pipeline με τα υπόλοιπα PS Data tests — βλ.
+    mapPing1000RowsToDataCallRows στο attachmentC.ts.
+    """
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT
+                FileList.ASideFileName AS aSideFileName,
+                FileList.CollectionName AS collectionName,
+                FileList.ASideLocation AS location,
+                Sessions.SessionId AS sessionId,
+                TestInfo.TestId AS testId,
+                ResultsPingTest.Host AS host,
+                CASE WHEN ResultsPingTest.ErrorCode = 0 THEN ResultsPingTest.RTT ELSE NULL END AS rtt,
+                ResultsPingTest.PacketSize AS packetSize,
+                ErrorCodes.msg AS errorCode,
+                CASE WHEN ResultsPingTest.ErrorCode = 0 THEN 1 ELSE 0 END AS success,
+                CASE WHEN ResultsPingTest.ErrorCode = 0 THEN 0 ELSE 1 END AS failed,
+                ResultsPingTest.seqNumber AS sequenceNumber
+            FROM FileList, Sessions, TestInfo, NetworkInfo, ResultsPingTest, ErrorCodes
+            WHERE Sessions.Valid = 1 AND TestInfo.Valid = 1
+              AND FileList.FileId = Sessions.FileId
+              AND TestInfo.SessionId = Sessions.SessionId
+              AND ResultsPingTest.TestId = TestInfo.TestId
+              AND ResultsPingTest.ErrorCode = ErrorCodes.Code
+              AND TestInfo.NetworkId = NetworkInfo.NetworkId
+              AND ResultsPingTest.PacketSize = 1000
+        """
+
+        params: list[object] = []
+        selected_collections = [col for col in (collection or []) if col and col.strip()]
+        if selected_collections:
+            placeholders = ", ".join(["?"] * len(selected_collections))
+            query += f" AND FileList.CollectionName IN ({placeholders})"
+            params.extend(selected_collections)
+
+        selected_locations = [loc for loc in (location or []) if loc and loc.strip()]
+        if selected_locations:
+            placeholders = ", ".join(["?"] * len(selected_locations))
+            query += f" AND FileList.ASideLocation IN ({placeholders})"
+            params.extend(selected_locations)
+
+        cursor.execute(query, tuple(params))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+
+        data = [{columns[idx]: row[idx] for idx in range(len(columns))} for row in rows]
+
+        conn.close()
+
+        return {"rows": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/interactivity")
+def get_interactivity(
+    database: str = Query(..., min_length=1),
+    collection: list[str] | None = Query(default=None),
+    location: list[str] | None = Query(default=None),
+):
+    """"Interactivity" (PS Data Stats) — gaming/app pattern tests (FactInteractivity),
+    δεν φτάνουν σαν δικό τους TestName από το CDRCombined view (βλ. /api/data_calls),
+    οπότε τα φτιάχνουμε από το raw FactInteractivity/DmnInteractivity — ίδιο query με
+    το A-LEVEL "INTERACTIVITY RAW.sql" reference query (ίδιο query με το "Interactivity
+    RAW" saved query του QueryEditor).
+
+    Ένα row ανά test (ήδη ένα per-TestId αποτέλεσμα, όχι raw packets σαν το ping) —
+    status = "Successful"/"Failed" (ErrorCode=0 -> Successful). Το frontend τα
+    μετατρέπει σε DataCallRow σχήμα (testType="Interactivity") ώστε να μπουν στο ίδιο
+    buildDataSections pipeline με τα υπόλοιπα PS Data tests — βλ.
+    mapInteractivityRowsToDataCallRows στο attachmentC.ts.
+    """
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT
+                FileList.ASideFileName AS aSideFileName,
+                FileList.CollectionName AS collectionName,
+                FileList.ASideLocation AS location,
+                Sessions.SessionId AS sessionId,
+                TestInfo.TestId AS testId,
+                HomeOperator AS homeOperator,
+                technology,
+                CASE WHEN ErrorCode = 0 THEN 'Successful' ELSE 'Failed' END AS status,
+                PatternName AS patternName,
+                Connectivity AS connectivity,
+                PacketsSent AS packetsSent,
+                PacketsNotSent AS packetsNotSent,
+                PacketsLost AS packetsLost,
+                PacketsLostRate AS packetsLostRate,
+                Throughput AS throughput,
+                ThroughputKbps AS throughputKbps,
+                RTT10thPercentile AS rtt10thPercentile,
+                RTTMedian AS rttAverage,
+                PacketDelayVarMedian AS packetDelayMedian,
+                TestInfo.duration AS duration,
+                qualityIndication AS qualityIndex,
+                FactInteractivity.QoEScore AS qoeScore
+            FROM Sessions
+            INNER JOIN NetworkInfo ON NetworkInfo.NetworkId = Sessions.NetworkId
+            INNER JOIN FactInteractivity ON FactInteractivity.SessionId = Sessions.SessionId
+            INNER JOIN TestInfo ON TestInfo.TestId = FactInteractivity.TestId AND TestInfo.Valid = 1
+            INNER JOIN FileList ON FileList.FileId = Sessions.FileId
+            INNER JOIN DmnInteractivity ON DmnInteractivity.DmnId = FactInteractivity.DmnIdInteractivity
+            WHERE Sessions.Valid = 1
+        """
+
+        params: list[object] = []
+        selected_collections = [col for col in (collection or []) if col and col.strip()]
+        if selected_collections:
+            placeholders = ", ".join(["?"] * len(selected_collections))
+            query += f" AND FileList.CollectionName IN ({placeholders})"
+            params.extend(selected_collections)
+
+        selected_locations = [loc for loc in (location or []) if loc and loc.strip()]
+        if selected_locations:
+            placeholders = ", ".join(["?"] * len(selected_locations))
+            query += f" AND FileList.ASideLocation IN ({placeholders})"
+            params.extend(selected_locations)
+
+        cursor.execute(query, tuple(params))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+
+        data = [{columns[idx]: row[idx] for idx in range(len(columns))} for row in rows]
+
+        conn.close()
+
+        return {"rows": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

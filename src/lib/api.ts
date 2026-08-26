@@ -311,6 +311,96 @@ export async function fetchOokla(
 }
 
 /**
+ * Ένα raw ping-packet row (PacketSize=1000) για το "Ping 1000" section του PS Data
+ * Stats table — βλ. /api/ping_1000. Ίδιο query με το A-LEVEL "PING RAW.sql" reference
+ * query / το "Ping RAW" saved query του QueryEditor, φιλτραρισμένο σε PacketSize=1000
+ * (δεν φτάνει σαν δικό του TestName από το CDRCombined view του /api/data_calls).
+ * `rtt` είναι NULL όταν το packet απέτυχε (errorCode <> 0). Το frontend τα μετατρέπει
+ * σε DataCallRow σχήμα (testType="Ping 1000") — βλ. mapPing1000RowsToDataCallRows
+ * στο attachmentC.ts.
+ */
+export interface PingRow {
+  location: string | null;
+  sessionId: string;
+  testId: number | null;
+  host: string | null;
+  rtt: number | null;
+  packetSize: number | null;
+  errorCode: string | null;
+  success: number;
+  failed: number;
+  sequenceNumber: number | null;
+  collectionName: string | null;
+  aSideFileName: string | null;
+}
+
+export async function fetchPing1000(
+  database: string,
+  collections: string[] = [],
+  locations: string[] = [],
+): Promise<PingRow[]> {
+  const params = new URLSearchParams({ database });
+  for (const collection of collections) {
+    if (collection) params.append("collection", collection);
+  }
+  for (const location of locations) {
+    params.append("location", location);
+  }
+  const json = await requestJson<{ rows: PingRow[] }>(`/api/ping_1000?${params.toString()}`);
+  return json.rows;
+}
+
+/**
+ * Ένα raw interactivity-test row (FactInteractivity — gaming/app pattern tests) για το
+ * "Interactivity" section του PS Data Stats table — βλ. /api/interactivity. Ίδιο query
+ * με το A-LEVEL "INTERACTIVITY RAW.sql" reference query / το "Interactivity RAW" saved
+ * query του QueryEditor (δεν φτάνει σαν δικό του TestName από το CDRCombined view του
+ * /api/data_calls). `status` = "Successful"/"Failed" (ErrorCode=0 -> Successful). Το
+ * frontend τα μετατρέπει σε DataCallRow σχήμα (testType="Interactivity") — βλ.
+ * mapInteractivityRowsToDataCallRows στο attachmentC.ts.
+ */
+export interface InteractivityRow {
+  location: string | null;
+  sessionId: string;
+  testId: number | null;
+  homeOperator: string | null;
+  technology: string | null;
+  status: "Successful" | "Failed";
+  patternName: string | null;
+  connectivity: number | null;
+  packetsSent: number | null;
+  packetsNotSent: number | null;
+  packetsLost: number | null;
+  packetsLostRate: number | null;
+  throughput: number | null;
+  throughputKbps: number | null;
+  rtt10thPercentile: number | null;
+  rttAverage: number | null;
+  packetDelayMedian: number | null;
+  duration: number | null;
+  qualityIndex: number | null;
+  qoeScore: number | null;
+  collectionName: string | null;
+  aSideFileName: string | null;
+}
+
+export async function fetchInteractivity(
+  database: string,
+  collections: string[] = [],
+  locations: string[] = [],
+): Promise<InteractivityRow[]> {
+  const params = new URLSearchParams({ database });
+  for (const collection of collections) {
+    if (collection) params.append("collection", collection);
+  }
+  for (const location of locations) {
+    params.append("location", location);
+  }
+  const json = await requestJson<{ rows: InteractivityRow[] }>(`/api/interactivity?${params.toString()}`);
+  return json.rows;
+}
+
+/**
  * Ένα (location, kind, code, samples) row για τα "Serving Band (per Time)" / "Serving
  * Technology (per Time)" ποσοστά των PS Data DL tests (Capacity DL / FTP DL / HTTP
  * TRANSFER (DL)) — βλ. /api/serving_band_tech. `kind` = "BAND" (NR band, π.χ. "NR28")
@@ -355,6 +445,14 @@ export interface DataCallRow {
   capacityThroughputKbps: number | null;
   youtubeMos: number | null;
   youtubeInterruptions: number | null;
+  /** FactInteractivity.QoEScore — μόνο για testType="Interactivity", βλ. mapInteractivityRowsToDataCallRows. */
+  interactivityQoeScore: number | null;
+  /** RTTMedian — μόνο για testType="Interactivity". */
+  interactivityRtt: number | null;
+  /** PacketsLostRate, raw fraction 0-1 (πολλαπλασιάζεται *100 στο buildDataMetrics) — μόνο για testType="Interactivity". */
+  interactivityPacketsLostRate: number | null;
+  /** PacketDelayVarMedian — μόνο για testType="Interactivity". */
+  interactivityPacketDelay: number | null;
   technology: string | null;
   startTechnology: string | null;
   CollectionName: string | null;
