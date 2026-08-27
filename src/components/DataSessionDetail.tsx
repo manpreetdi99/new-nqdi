@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
-import { ArrowLeft, Wifi, Activity, Radio } from "lucide-react";
-import type { DataCallRow, TraceLogRow } from "@/lib/api";
-import { fetchTracelogValues } from "@/lib/api";
+import { ArrowLeft, Wifi, Activity, Radio, Signal } from "lucide-react";
+import type { DataCallRow, TraceLogRow, CallDeviceInfo } from "@/lib/api";
+import { fetchTracelogValues, fetchDataDeviceInfo } from "@/lib/api";
 
 interface Props {
   sessionId: string;
@@ -95,6 +95,18 @@ export default function DataSessionDetail({ sessionId, tests, onBack, database }
       .then(res => setTracelogValues(res.tracelogValues || []))
       .catch(() => setTracelogValues([]))
       .finally(() => setTracelogLoading(false));
+  }, [database, sessionId]);
+
+  // Scanner & Device info — same panel/shape as the "Scanner & Κινητό" block in Call Detail
+  const [deviceInfo, setDeviceInfo] = useState<CallDeviceInfo | null>(null);
+
+  useEffect(() => {
+    if (!database || !sessionId) { setDeviceInfo(null); return; }
+    let cancelled = false;
+    fetchDataDeviceInfo(database, sessionId)
+      .then(res => { if (!cancelled) setDeviceInfo(res); })
+      .catch(() => { if (!cancelled) setDeviceInfo(null); });
+    return () => { cancelled = true; };
   }, [database, sessionId]);
 
   return (
@@ -284,6 +296,90 @@ export default function DataSessionDetail({ sessionId, tests, onBack, database }
           </table>
         </div>
       </div>
+
+      {/* ── Scanner / Device Info ── */}
+      {deviceInfo && (
+        <div className="bg-card border border-border rounded-lg p-3 space-y-3">
+          <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+            <Signal className="h-4 w-4 text-primary" />
+            Scanner &amp; Κινητό
+          </h3>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            {/* A-side — each row prefers the dedicated device-info field (d.*) and falls back to
+                whatever was parsed from the trace file name/header (f.*) when the former is missing */}
+            <div className="rounded border border-border/60 bg-muted/20 p-2 space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-primary mb-1.5">A-Side</p>
+              {(() => {
+                const d = deviceInfo.aSideDevice;
+                const f = deviceInfo.fileInfo;
+                const rows: [string, string | null | undefined][] = [
+                  ["Device", d?.Model ?? f.ASideDevice],
+                  ["IMEI", d?.IMEI ?? f.IMEI],
+                  ["IMSI", d?.IMSI ?? f.IMSI],
+                  ["Number", d?.Number ?? f.ASideNumber],
+                  ["OS", d?.OS ?? null],
+                  ["Firmware", d?.Firmware ?? f.FirmwareV],
+                  ["BaseBand", d?.BaseBand ?? null],
+                  ["DeviceType", d?.DeviceType ?? null],
+                  ["RF Manufacturer", d?.RFManufacturer ?? null],
+                  ["RF Model", d?.RFModel ?? null],
+                  ["Serial", d?.SerialNumber ?? null],
+                  ["SW Version", f.SWVersion],
+                  ["MF Version", f.MFVersion],
+                  ["Product Ver.", f.ProductVersion],
+                  ["File", f.ASideFileName],
+                  ["Location", f.ASideLocation],
+                ];
+                // Hide any row whose value is missing/empty rather than showing a blank field
+                return rows
+                  .filter(([, v]) => v != null && v !== "")
+                  .map(([label, value]) => (
+                    <div key={label} className="flex items-start gap-2 text-xs">
+                      <span className="text-muted-foreground w-28 shrink-0">{label}</span>
+                      <span className="font-mono text-foreground break-all">{value}</span>
+                    </div>
+                  ));
+              })()}
+            </div>
+
+            {/* B-side — same fallback pattern as A-side above, but with an explicit empty-state message
+                since the B-side leg often has no device info at all */}
+            <div className="rounded border border-border/60 bg-muted/20 p-2 space-y-1">
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-accent mb-1.5">B-Side</p>
+              {(() => {
+                const d = deviceInfo.bSideDevice;
+                const f = deviceInfo.fileInfo;
+                const rows: [string, string | null | undefined][] = [
+                  ["Device", d?.Model ?? f.BSideDevice],
+                  ["IMEI", d?.IMEI ?? null],
+                  ["IMSI", d?.IMSI ?? null],
+                  ["Number", d?.Number ?? f.BSideNumber],
+                  ["OS", d?.OS ?? null],
+                  ["Firmware", d?.Firmware ?? null],
+                  ["BaseBand", d?.BaseBand ?? null],
+                  ["DeviceType", d?.DeviceType ?? null],
+                  ["RF Manufacturer", d?.RFManufacturer ?? null],
+                  ["RF Model", d?.RFModel ?? null],
+                  ["Serial", d?.SerialNumber ?? null],
+                  ["File", f.BSideFileName],
+                  ["Location", f.BSideLocation],
+                ];
+                const visible = rows.filter(([, v]) => v != null && v !== "");
+                if (visible.length === 0) {
+                  return <p className="text-xs text-muted-foreground">Δεν υπάρχουν δεδομένα B-side.</p>;
+                }
+                return visible.map(([label, value]) => (
+                  <div key={label} className="flex items-start gap-2 text-xs">
+                    <span className="text-muted-foreground w-28 shrink-0">{label}</span>
+                    <span className="font-mono text-foreground break-all">{value}</span>
+                  </div>
+                ));
+              })()}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

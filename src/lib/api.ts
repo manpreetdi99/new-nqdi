@@ -847,6 +847,16 @@ export async function fetchCallDeviceInfo(
   return requestJson(`/api/call_device_info?${params.toString()}`);
 }
 
+/** Same "Scanner & Κινητό" shape as fetchCallDeviceInfo, but for a data session
+ * (Sessions/FileList-backed — data tests have no CallAnalysis row). */
+export async function fetchDataDeviceInfo(
+  database: string,
+  session_id: string
+): Promise<CallDeviceInfo> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/data_device_info?${params.toString()}`);
+}
+
 export interface LteMeasurementStat {
   EARFCN: number | null;
   PCI: number | null;
