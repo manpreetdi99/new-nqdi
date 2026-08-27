@@ -3,8 +3,10 @@ import { describe, it, expect } from "vitest";
 import {
   bucketTechnology,
   buildCellBandCountTable,
+  buildDataGroupSections,
   buildDataSections,
   buildDetailedTechnologyMix,
+  buildFakeEventTable,
   buildReportPeriod,
   buildServingBandTechTable,
   buildSrvccTable,
@@ -16,13 +18,15 @@ import {
   classifyCustomCallMode,
   collectOperators,
   isoWeek,
+  mapDnsRowsToDataCallRows,
   mapInteractivityRowsToDataCallRows,
   mapOoklaRowsToDataCallRows,
   mapPing1000RowsToDataCallRows,
   resolveMode,
   resolveOperator,
+  UNMATCHED_GROUP_LABEL,
 } from "@/lib/attachmentC";
-import type { AllCallsRow, DataCallRow, InteractivityRow, OoklaRow, PingRow } from "@/lib/api";
+import type { AllCallsRow, DataCallRow, DnsRow, InteractivityRow, OoklaRow, PingRow } from "@/lib/api";
 
 const call = (overrides: Partial<AllCallsRow>): AllCallsRow => ({
   Location: "Cosmote Free A",
@@ -486,7 +490,7 @@ describe("PS data KPIs", () => {
     ]);
 
     const sections = buildDataSections(rows);
-    expect(sections.map((s) => s.key)).toEqual(["Interactivity"]);
+    expect(sections.map((s) => s.key)).toEqual(["Interactivity (eGaming)"]);
 
     const [throughput, rtt, packetsLostRate, packetDelay, qoe] = sections[0].total.metrics;
     expect(throughput).toMatchObject({ label: "eGaming Average of ThroughputKbps", unit: "", value: 290 });
@@ -605,6 +609,293 @@ describe("PS data KPIs", () => {
     expect(youtube.total.metrics[0].label).toBe("Mean video MOS");
     expect(youtube.total.metrics[0].value).toBeCloseTo(4.2, 6);
     expect(youtube.total.metrics[1].value).toBeCloseTo(1, 6);
+  });
+
+  const dnsRow = (overrides: Partial<DnsRow>): DnsRow => ({
+    location: "Cosmote Data A",
+    status: "Success",
+    count: 1,
+    avg: 20,
+    minVal: 10,
+    maxVal: 30,
+    stdVal: 5,
+    ...overrides,
+  });
+
+  it("mapDnsRowsToDataCallRows expands each aggregated (location, status, count) group into `count` DataCallRows", () => {
+    const mapped = mapDnsRowsToDataCallRows([
+      dnsRow({ status: "Success", count: 3, avg: 20 }),
+      dnsRow({ status: "Failed", count: 1, avg: 100 }),
+    ]);
+
+    expect(mapped).toHaveLength(4);
+    expect(mapped.filter((r) => r.scoringStatus === "Success")).toHaveLength(3);
+    expect(mapped.filter((r) => r.scoringStatus === "Failed")).toHaveLength(1);
+    expect(mapped.every((r) => r.testType === "DNS")).toBe(true);
+    // Κάθε αντίγραφο ενός group κρατάει το group's avg σαν "duration" (πάνω στο pingRttAvg).
+    expect(mapped.filter((r) => r.scoringStatus === "Success").every((r) => r.pingRttAvg === 20)).toBe(true);
+  });
+
+  it("feeds DNS rows through buildDataSections into its own 'DNS' section, weighted-averaging across (location, status) groups", () => {
+    // 3 δείγματα με avg=20ms + 1 δείγμα με avg=100ms -> weighted mean = (3×20 + 1×100) / 4 = 40.
+    const rows = mapDnsRowsToDataCallRows([
+      dnsRow({ status: "Success", count: 3, avg: 20 }),
+      dnsRow({ status: "Failed", count: 1, avg: 100 }),
+    ]);
+
+    const sections = buildDataSections(rows);
+    expect(sections.map((s) => s.key)).toEqual(["DNS Resolution"]);
+
+    const dns = sections[0];
+    expect(dns.total.total).toBe(4);
+    expect(dns.total.success).toBe(3);
+    expect(dns.total.failed).toBe(1);
+    expect(dns.total.metrics[0]).toMatchObject({ label: "Mean DNS Resolution Time", unit: "ms", value: 40 });
+  });
+
+  it("groups every HTTPS site test into Ε4 regardless of raw format (URL / 'Browser (site)' / bare domain)", () => {
+    // Ο πελάτης ανέφερε ότι μόνο το "alpha" (HTTPS Browser (alpha)) έμπαινε στο Ε4 —
+    // τα υπόλοιπα site tests δεν αναγνωρίζονταν επειδή httpsSiteKeyword απαιτούσε
+    // πλήρες URL. Αυτό το test καλύπτει και τα 3 πιθανά raw formats μαζί.
+    const sections = buildDataSections([
+      dataTest({ testType: "HTTPS Browser (alpha)", direction: null }),
+      dataTest({ testType: "https://www.amazon.com", direction: null }), // πλήρες URL
+      dataTest({ testType: "HTTPS Browser (car.gr)", direction: null }), // "Browser (site)"
+      dataTest({ testType: "ebay.com", direction: null }), // γυμνό domain
+      dataTest({ testType: "google.com", direction: null }),
+      dataTest({ testType: "m.imdb.com", direction: null }),
+      dataTest({ testType: "in.gr", direction: null }),
+      dataTest({ testType: "yahoo.com", direction: null }),
+      dataTest({ testType: "youtube.com", direction: null }),
+      // Δεν πρέπει να παρασυρθεί εδώ μέσα — ανήκει στο Ε5, όχι στο Ε4.
+      dataTest({ testType: "YouTube Service", direction: null }),
+    ]);
+
+    expect(sections.map((s) => s.group)).toEqual([
+      ...Array.from({ length: 9 }, () => "Ε4 · HTTPS sites"),
+      "Ε5 · Video streaming",
+    ]);
+    expect(sections.map((s) => s.key)).toEqual([
+      "HTTPS Browser (alpha)",
+      "https://www.amazon.com",
+      "HTTPS Browser (car.gr)",
+      "ebay.com",
+      "google.com",
+      "m.imdb.com",
+      "in.gr",
+      "yahoo.com",
+      "youtube.com",
+      "YouTube Service",
+    ]);
+  });
+
+  it("groups every Kepler/Kepler +30s Pause/Newton test into Ε3 regardless of raw format (bare / 'Browser (site)')", () => {
+    // Ο πελάτης ανέφερε ότι το Ε3 · Browser engines έλειπε τελείως — ίδιο σκεπτικό με
+    // το Ε4 bug: αν το raw TestName φτάνει τυλιγμένο σε "Browser (Kepler)" αντί για
+    // γυμνό "Kepler", το ^kepler\b anchor δεν έπιανε τίποτα. parenOrWhole το διορθώνει.
+    const sections = buildDataSections([
+      dataTest({ testType: "Kepler", direction: null }), // γυμνό
+      dataTest({ testType: "HTTP Browser (Kepler 2)", direction: null }), // τυλιγμένο, "+30s Pause" variant
+      dataTest({ testType: "HTTPS Browser (Newton)", direction: null }), // τυλιγμένο
+    ]);
+
+    expect(sections.map((s) => s.group)).toEqual([
+      "Ε3 · Browser engines",
+      "Ε3 · Browser engines",
+      "Ε3 · Browser engines",
+    ]);
+    expect(sections.map((s) => s.key)).toEqual(["Kepler", "Kepler +30s Pause", "HTTPS Browser (Newton)"]);
+  });
+
+  it("orders every PS Data Stats section into the 5 groups (Ε1..Ε5, ΣΕΙΡΑ ΠΟΥ ΘΕΛΩ 'QoS → QoE', 2026-08-26)", () => {
+    const rows: DataCallRow[] = [
+      // Δίνονται σκόπιμα σε ανάκατη σειρά — το test επαληθεύει ότι το sort τα βάζει στη σωστή.
+      dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 40000 }),
+      dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
+      dataTest({ testType: "HTTP UL", direction: null, throughputKbps: 5000 }),
+      dataTest({ testType: "HTTP Transfer (DL)", direction: null, throughputKbps: 10000 }),
+      dataTest({ testType: "HTTPS Browser (alpha)", direction: null }),
+      dataTest({ testType: "https://www.youtube.com", direction: null }),
+      dataTest({ testType: "https://www.amazon.com", direction: null }),
+      dataTest({ testType: "https://www.car.gr", direction: null }),
+      dataTest({ testType: "NEWTON", direction: null }),
+      // "KEPLER 2" -> renamed to "Kepler +30s Pause" by sectionLabel, βλ. σχόλιο εκεί.
+      dataTest({ testType: "KEPLER 2", direction: null }),
+      dataTest({ testType: "KEPLER", direction: null }),
+      // Άγνωστο/ad-hoc test type — δεν είναι στη λίστα του πελάτη, πρέπει να καταλήξει
+      // ακριβώς πριν το Ping 40/800/1000 group, όχι να χαθεί.
+      dataTest({ testType: "FTP", direction: "DL", throughputKbps: 1000 }),
+      dataTest({ testType: "Ping", direction: null, pingRttAvg: 20 }),
+      dataTest({ testType: "ICMP Ping 800", direction: null, pingRttAvg: 45 }),
+      dataTest({ testType: "ICMP Ping 40", direction: null, pingRttAvg: 15 }),
+      dataTest({ testType: "YouTube Service_Live", direction: null }),
+      dataTest({ testType: "YouTube Service", direction: null }),
+      dataTest({ testType: "YouTube Service_4K", direction: null }),
+      ...mapOoklaRowsToDataCallRows([
+        ooklaRow({ actionName: "Uplink Performance", sessionId: "ook-ul" }),
+        ooklaRow({ actionName: "Downlink Performance", sessionId: "ook-dl" }),
+      ]),
+      ...mapPing1000RowsToDataCallRows([pingRow({ sessionId: "p1000" })]),
+      ...mapInteractivityRowsToDataCallRows([interactivityRow({})]),
+      ...mapDnsRowsToDataCallRows([dnsRow({})]),
+    ];
+
+    const sections = buildDataSections(rows);
+
+    // Ε1 · Bulk throughput -> Ε2 · Latency/Responsiveness -> Ε3 · Browser engines ->
+    // Ε4 · HTTPS sites (αλφαβητικά) -> Ε5 · Video streaming. Το Ookla μπαίνει ΜΕΤΑ το
+    // HTTP Transfer μέσα στο Ε1 (όχι πριν, όπως στην παλιά επίπεδη λίστα).
+    expect(sections.map((s) => s.key)).toEqual([
+      "Capacity DL 10GB",
+      "Capacity UL 1GB",
+      "HTTP Transfer (DL) 10MB",
+      "HTTP Transfer (UL) 5MB",
+      "Ookla DL",
+      "Ookla UL",
+      "FTP DL",
+      "Ping",
+      "Ping 40 B",
+      "Ping 800 B",
+      "Ping 1000 B",
+      "DNS Resolution",
+      "Interactivity (eGaming)",
+      "KEPLER",
+      "Kepler +30s Pause",
+      "NEWTON",
+      "HTTPS Browser (alpha)",
+      "https://www.amazon.com",
+      "https://www.car.gr",
+      "https://www.youtube.com",
+      "YouTube Service",
+      "YouTube Service 4K",
+      "YouTube Service Live",
+    ]);
+
+    expect(sections.map((s) => s.group)).toEqual([
+      "Ε1 · Bulk throughput",
+      "Ε1 · Bulk throughput",
+      "Ε1 · Bulk throughput",
+      "Ε1 · Bulk throughput",
+      "Ε1 · Bulk throughput",
+      "Ε1 · Bulk throughput",
+      "", // FTP DL — unmatched, καμία ενότητα
+      "", // Ping — unmatched, καμία ενότητα
+      "Ε2 · Latency / Responsiveness",
+      "Ε2 · Latency / Responsiveness",
+      "Ε2 · Latency / Responsiveness",
+      "Ε2 · Latency / Responsiveness",
+      "Ε2 · Latency / Responsiveness",
+      "Ε3 · Browser engines",
+      "Ε3 · Browser engines",
+      "Ε3 · Browser engines",
+      "Ε4 · HTTPS sites",
+      "Ε4 · HTTPS sites",
+      "Ε4 · HTTPS sites",
+      "Ε4 · HTTPS sites",
+      "Ε5 · Video streaming",
+      "Ε5 · Video streaming",
+      "Ε5 · Video streaming",
+    ]);
+  });
+
+  describe("compact view — buildDataGroupSections", () => {
+    it("collapses the full section list into the 5 Ε-groups plus a trailing 'Λοιπά tests'", () => {
+      const groups = buildDataGroupSections(
+        buildDataSections([
+          dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
+          dataTest({ testType: "HTTP Transfer (DL)", direction: null, throughputKbps: 10000 }),
+          dataTest({ testType: "ICMP Ping 40", direction: null, pingRttAvg: 15 }),
+          dataTest({ testType: "KEPLER", direction: null, throughputKbps: 5000 }),
+          dataTest({ testType: "https://www.amazon.com", direction: null, throughputKbps: 5000 }),
+          dataTest({ testType: "YouTube Service", direction: null, youtubeMos: 4.2 }),
+          // Unmatched (group === "") — δεν πρέπει να χαθεί σιωπηλά.
+          dataTest({ testType: "FTP", direction: "DL", throughputKbps: 1000 }),
+        ]),
+      );
+
+      expect(groups.map((g) => g.key)).toEqual([
+        "Ε1 · Bulk throughput",
+        "Ε2 · Latency / Responsiveness",
+        "Ε3 · Browser engines",
+        "Ε4 · HTTPS sites",
+        "Ε5 · Video streaming",
+        UNMATCHED_GROUP_LABEL,
+      ]);
+      // group: "" — το label ΕΙΝΑΙ το group name, δεν θέλουμε διπλή κεφαλίδα στο SummaryTab.
+      expect(groups.every((g) => g.group === "")).toBe(true);
+      // Ένα και μόνο ένα metric ανά group — αυτό είναι όλο το νόημα του compact.
+      expect(groups.every((g) => g.total.metrics.length === 1)).toBe(true);
+    });
+
+    it("sample-weights the group average instead of averaging the section averages", () => {
+      const groups = buildDataGroupSections(
+        buildDataSections([
+          // Capacity DL: 3 tests × 400 Mbps -> section avg 400, samples 3.
+          ...Array.from({ length: 3 }, () =>
+            dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
+          ),
+          // Capacity UL: 1 test × 40 Mbps -> section avg 40, samples 1.
+          dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 40000 }),
+        ]),
+      );
+
+      const [metric] = groups[0].total.metrics;
+      // (400×3 + 40×1) / 4 = 310 — ο μέσος-των-μέσων θα έδινε 220.
+      expect(metric).toMatchObject({ label: "Avg throughput", unit: "Mbps", samples: 4 });
+      expect(metric.value).toBeCloseTo(310, 6);
+      expect(groups[0].total.total).toBe(4);
+    });
+
+    it("keeps a different-unit section in the counts but out of the average", () => {
+      const groups = buildDataGroupSections(
+        buildDataSections([
+          dataTest({ testType: "ICMP Ping 40", direction: null, pingRttAvg: 20 }),
+          dataTest({ testType: "ICMP Ping 800", direction: null, pingRttAvg: 40 }),
+          // Interactivity's primary metric είναι "eGaming Average of ThroughputKbps" (unit "")
+          // — μετράει στα tests, αλλά δεν έχει νόημα να μπει σε μέσο όρο ms.
+          ...mapInteractivityRowsToDataCallRows([interactivityRow({ throughputKbps: 300, rttAverage: 25 })]),
+        ]),
+      );
+
+      const latency = groups.find((g) => g.key === "Ε2 · Latency / Responsiveness")!;
+      expect(latency.total.total).toBe(3); // και τα 3 tests μετράνε
+      const [metric] = latency.total.metrics;
+      expect(metric).toMatchObject({ label: "Avg latency", unit: "ms", samples: 2 });
+      expect(metric.value).toBeCloseTo(30, 6); // (20 + 40) / 2, χωρίς το Interactivity
+    });
+
+    it("uses the same unit for the per-operator columns as for the total", () => {
+      const groups = buildDataGroupSections(
+        buildDataSections([
+          dataTest({ Location: "Cosmote Data A", testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
+          dataTest({ Location: "Nova Data A", testType: "Capacity", direction: "DL", capacityThroughputKbps: 200000 }),
+          dataTest({ Location: "Nova Data A", testType: "Ookla Speedtest", direction: null, throughputKbps: 100000 }),
+        ]),
+      );
+
+      const bulk = groups[0];
+      expect(bulk.byOperator.get("COSMOTE")?.metrics[0]).toMatchObject({ unit: "Mbps", value: 400, samples: 1 });
+      // Nova: (200×1 + 100×1) / 2 = 150 — Capacity και Ookla είναι και τα δύο Mbps.
+      expect(bulk.byOperator.get("NOVA")?.metrics[0]).toMatchObject({ unit: "Mbps", value: 150, samples: 2 });
+      expect(bulk.total.metrics[0]?.unit).toBe("Mbps");
+    });
+
+    it("sums success/failed across the group and rescores the success rate on the merged base", () => {
+      const groups = buildDataGroupSections(
+        buildDataSections([
+          dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000, scoringStatus: "A" }),
+          dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 300000, scoringStatus: "F" }),
+          dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 40000, scoringStatus: "A" }),
+          dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 30000, scoringStatus: "A" }),
+        ]),
+      );
+
+      expect(groups[0].total).toMatchObject({ total: 4, success: 3, failed: 1, successRate: 0.75 });
+    });
+
+    it("has no groups at all for an empty section list", () => {
+      expect(buildDataGroupSections([])).toEqual([]);
+    });
   });
 
   it("keeps operators separate inside a section", () => {
@@ -780,6 +1071,55 @@ describe("technology mix", () => {
     const gsm = buildVoiceTable(rows, "GSM", [], srvccRows);
     expect(gsm.byOperator.get("COSMOTE")?.srvcc).toBeNull();
     expect(gsm.total.srvcc).toBeNull();
+  });
+
+  it("buildFakeEventTable counts isValid=0 rows per operator, scoped to GSM/FREE mode", () => {
+    const rows = [
+      call({ Location: "Cosmote GSM", isValid: 0 }),
+      call({ Location: "Cosmote GSM", isValid: 1 }),
+      call({ Location: "Cosmote Free A", isValid: 0 }),
+      call({ Location: "Vodafone Free A", isValid: 0 }),
+      call({ Location: "Vodafone Free A", isValid: 0 }),
+      // Valid rows and other-mode rows must not count.
+      call({ Location: "Nova Data A", isValid: 0 }),
+    ];
+
+    const free = buildFakeEventTable(rows, "FREE");
+    expect(free.byOperator.get("COSMOTE")).toBe(1);
+    expect(free.byOperator.get("VODAFONE")).toBe(2);
+    expect(free.byOperator.has("NOVA")).toBe(false);
+    expect(free.total).toBe(3);
+
+    const gsm = buildFakeEventTable(rows, "GSM");
+    expect(gsm.byOperator.get("COSMOTE")).toBe(1);
+    expect(gsm.total).toBe(1);
+  });
+
+  it("buildVoiceTable wires fakeEvents into BOTH GSM and FREE tables (unlike cellCount/srvcc)", () => {
+    const validRows = [call({ Location: "Cosmote GSM" }), call({ Location: "Cosmote Free A" })];
+    // Ξεχωριστό array, σαν το ΑΝΕΠΕΞΕΡΓΑΣΤΟ allCallsRows πριν το "Valid calls only" filter
+    // του SummaryTab — περιέχει isValid=0 γραμμές που δεν είναι καν στο validRows.
+    const rawRows = [
+      ...validRows,
+      call({ Location: "Cosmote GSM", isValid: 0 }),
+      call({ Location: "Cosmote Free A", isValid: 0 }),
+      call({ Location: "Cosmote Free A", isValid: 0 }),
+    ];
+
+    const gsm = buildVoiceTable(validRows, "GSM", [], [], rawRows);
+    expect(gsm.byOperator.get("COSMOTE")?.fakeEvents).toBe(1);
+    expect(gsm.total.fakeEvents).toBe(1);
+
+    const free = buildVoiceTable(validRows, "FREE", [], [], rawRows);
+    expect(free.byOperator.get("COSMOTE")?.fakeEvents).toBe(2);
+    expect(free.total.fakeEvents).toBe(2);
+  });
+
+  it("buildVoiceTable leaves fakeEvents null when no fakeEventRows are passed", () => {
+    const rows = [call({ Location: "Cosmote GSM" })];
+    const gsm = buildVoiceTable(rows, "GSM");
+    expect(gsm.byOperator.get("COSMOTE")?.fakeEvents).toBeNull();
+    expect(gsm.total.fakeEvents).toBeNull();
   });
 
   it("buildServingBandTechTable computes per-kind percentages (BAND / TECH have separate totals) per operator", () => {

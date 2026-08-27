@@ -1161,3 +1161,70 @@ def get_interactivity(
         return {"rows": data}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/dns")
+def get_dns(
+    database: str = Query(..., min_length=1),
+    collection: list[str] | None = Query(default=None),
+    location: list[str] | None = Query(default=None),
+):
+    """"DNS" (PS Data Stats) — DNS resolution time, vResultsKPI.KPIID = 31100. Ίδιο
+    query με αυτό που έδωσε ο πελάτης (2026-08-26), δεν φτάνει σαν δικό του TestName
+    από το CDRCombined view (βλ. /api/data_calls).
+
+    Ήδη-αθροισμένο ανά (location, status) αντί για raw ανά-attempt rows — ίδιο σχήμα
+    με το /api/srvcc. `avg`/`minVal`/`maxVal`/`stdVal` σε ms. Το δικό μας `avg` είναι
+    ήδη ο απλός per-group μέσος όρος — το "AVG(Duration)*COUNT(Duration)" idiom της
+    πηγαίας query είναι ένα weighted-sum trick για συνδυασμό πολλών GROUP BY γραμμών
+    downstream σε ένα pivot table, περιττό εδώ αφού το frontend κάνει ήδη το δικό του
+    weighted-average πάνω σε αυτά τα (location, status, count, avg) rows — βλ.
+    mapDnsRowsToDataCallRows στο attachmentC.ts. Περιορίζεται σε ASideLocation LIKE
+    '%Data' (η πηγαία query's φίλτρο) — το DNS test τρέχει μόνο σε Data-mode locations.
+    """
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT
+                FileList.ASideLocation AS location,
+                vResultsKPI.KPIStatus AS status,
+                COUNT(vResultsKPI.KPIStatus) AS count,
+                ROUND(AVG(CONVERT(FLOAT, vResultsKPI.Duration)), 3) AS avg,
+                ROUND(MIN(CONVERT(FLOAT, vResultsKPI.Duration)), 3) AS minVal,
+                ROUND(MAX(CONVERT(FLOAT, vResultsKPI.Duration)), 3) AS maxVal,
+                ROUND(STDEV(CONVERT(FLOAT, vResultsKPI.Duration)), 3) AS stdVal
+            FROM Sessions
+            JOIN FileList ON FileList.FileId = Sessions.FileId
+            JOIN vResultsKPI ON vResultsKPI.SessionId = Sessions.SessionId AND vResultsKPI.KPIID = 31100
+            WHERE Sessions.Valid = 1 AND FileList.ASideLocation LIKE '%Data'
+        """
+
+        params: list[object] = []
+        selected_collections = [col for col in (collection or []) if col and col.strip()]
+        if selected_collections:
+            placeholders = ", ".join(["?"] * len(selected_collections))
+            query += f" AND FileList.CollectionName IN ({placeholders})"
+            params.extend(selected_collections)
+
+        selected_locations = [loc for loc in (location or []) if loc and loc.strip()]
+        if selected_locations:
+            placeholders = ", ".join(["?"] * len(selected_locations))
+            query += f" AND FileList.ASideLocation IN ({placeholders})"
+            params.extend(selected_locations)
+
+        query += " GROUP BY FileList.ASideLocation, vResultsKPI.KPIStatus"
+
+        cursor.execute(query, tuple(params))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+
+        data = [{columns[idx]: row[idx] for idx in range(len(columns))} for row in rows]
+
+        conn.close()
+
+        return {"rows": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))

@@ -165,6 +165,18 @@ const COLOR_SCHEMES: Record<string, ColorScheme> = {
       { min: 1.0, max: 2.6, color: "#ff0000",  label: "1.0 – 2.6 (Bad)" },
     ],
   },
+  call_status: {
+    type: "category",
+    label: "Call Status",
+    suggestCol: "callStatus",
+    categories: [
+      { value: "Completed",      color: "#00ff00" },
+      { value: "Failed",         color: "#ff8000" },
+      { value: "System Release", color: "#d400ff" },
+      { value: "Dropped",        color: "#ff0000" },
+    ],
+    defaultColor: "#808080",
+  },
   http_transfer: {
     type: "range",
     label: "HTTP Transfer / 10MB (kbps)",
@@ -366,7 +378,8 @@ function resolveCity(name: string): { lat: number; lng: number } | null {
 // ── Auto-fit bounds ───────────────────────────────────────────────────────────
 function MapBounds({ points }: { points: Array<{ lat: number; lng: number }> }) {
   const map = useMap();
-  useEffect(() => {
+
+  const fitToPoints = useCallback(() => {
     if (points.length === 0) return;
     let minLat = points[0].lat, maxLat = points[0].lat;
     let minLng = points[0].lng, maxLng = points[0].lng;
@@ -386,6 +399,27 @@ function MapBounds({ points }: { points: Array<{ lat: number; lng: number }> }) 
       map.fitBounds(b, { padding: [50, 50], maxZoom: 14 });
     }
   }, [points, map]);
+
+  useEffect(() => {
+    fitToPoints();
+  }, [fitToPoints]);
+
+  // The grid layout (1/2/3 χάρτες) resizes each map's container without Leaflet
+  // knowing — it only recomputes pixel↔latlng mapping on init or on an explicit
+  // invalidateSize(). Without this, the 1st map keeps the stale projection from
+  // before the 2nd/3rd panel appeared and looks off-center. A ResizeObserver on
+  // the container catches every such resize (panel add/remove, window resize,…)
+  // and re-centers.
+  useEffect(() => {
+    const container = map.getContainer();
+    const ro = new ResizeObserver(() => {
+      map.invalidateSize();
+      fitToPoints();
+    });
+    ro.observe(container);
+    return () => ro.disconnect();
+  }, [map, fitToPoints]);
+
   return null;
 }
 
@@ -868,6 +902,36 @@ WHERE fl.CollectionName  = '{collection}'
   AND dp.Latitude  IS NOT NULL
   AND dp.Longitude IS NOT NULL
 ORDER BY fs.TestId`,
+  },
+  {
+    label: "ALL CALLS",
+    category: "Calls",
+    mode: "points",
+    valueCol: "callStatus",
+    colorScheme: "call_status",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  CA.SessionId,
+  CA.technology,
+  CA.callMode,
+  CA.callType,
+  CA.callDir,
+  CA.callStatus,
+  ROUND(CA.setupTime, 2) AS setupTime,
+  (CA.callDuration / 1000) AS callDuration_s,
+  FL.CollectionName,
+  FL.ASideLocation AS Location,
+  CAST(P.Latitude  AS FLOAT) AS latitude,
+  CAST(P.Longitude AS FLOAT) AS longitude
+FROM CallAnalysis CA
+LEFT JOIN FileList FL ON CA.FileId = FL.FileId
+LEFT JOIN Sessions S  ON S.SessionId = CA.SessionId
+LEFT JOIN Position P  ON P.PosId = CA.PosId
+WHERE S.Valid IN (0, 1)
+  AND FL.CollectionName = '{collection}'
+  AND FL.ASideLocation  = '{location}'
+ORDER BY CA.SessionId DESC`,
   },
   {
     label: "Technology σημεία (FREE/GSM)",

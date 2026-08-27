@@ -1,0 +1,170 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1320" height="892" viewBox="0 0 1320 892" font-family="Segoe UI, Arial, sans-serif">
+  <defs>
+    <marker id="hV" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <polygon points="0,1.5 10,5 0,8.5" fill="#9C5417"/>
+    </marker>
+    <marker id="hD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <polygon points="0,1.5 10,5 0,8.5" fill="#0C6B74"/>
+    </marker>
+  </defs>
+  <rect width="1320" height="892" fill="#F1F4F5"/>
+  <text x="28" y="38" font-family="Segoe UI, Arial, sans-serif" font-size="12" font-weight="700" fill="#0C6B74" text-anchor="start" letter-spacing="2.4">A-LEVEL · SUMMARY TAB</text>
+  <text x="28" y="72" font-family="Segoe UI, Arial, sans-serif" font-size="27" font-weight="700" fill="#14191E">Πώς γεμίζει το Attachment C</text>
+  <text x="28" y="94" font-family="Segoe UI, Arial, sans-serif" font-size="13.5" font-weight="400" fill="#62707B" text-anchor="start">10 ανεξάρτητα endpoints → 10 σχήματα γραμμών → 3 πίνακες της αναφοράς</text>
+  <g transform="translate(20,116)">
+  <text x="4" y="22" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="700" fill="#62707B" text-anchor="start" letter-spacing="1.6">1 · ENDPOINT</text>
+  <text x="286" y="22" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="700" fill="#62707B" text-anchor="start" letter-spacing="1.6">2 · ΓΡΑΜΜΕΣ ΠΟΥ ΓΥΡΝΑΕΙ</text>
+  <text x="518" y="22" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="700" fill="#62707B" text-anchor="start" letter-spacing="1.6">3 · ΜΕΤΑΣΧΗΜΑΤΙΣΜΟΣ</text>
+  <text x="836" y="22" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="700" fill="#62707B" text-anchor="start" letter-spacing="1.6">4 · ΠΟΥ ΠΡΟΣΓΕΙΩΝΕΤΑΙ</text>
+  <line x1="4" y1="36" x2="1236" y2="36" stroke="#D3DDE1" stroke-width="1"/>
+  <text x="4" y="64" font-family="Segoe UI, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#9C5417" text-anchor="start" letter-spacing="2.6">VOICE</text>
+  <line x1="76" y1="59" x2="1236" y2="59" stroke="#E4EBEE" stroke-width="1"/>
+  <rect x="4" y="84" width="250" height="44" rx="5" fill="#FFFFFF" stroke="#C79A70" stroke-width="1"/>
+  <text x="18" y="103" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">/api/cell_band_count</text>
+  <text x="18" y="118" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">NetworkInfo · NetworkIdRelation</text>
+  <path d="M254 106 H280" fill="none" stroke="#9C5417" stroke-width="1.4" marker-end="url(#hV)"/>
+  <rect x="286" y="84" width="200" height="44" rx="5" fill="#FFFFFF" stroke="#C79A70" stroke-width="1"/>
+  <text x="300" y="103" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">CellBandCountRow[]</text>
+  <text x="300" y="118" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">συγκεντρωτικό</text>
+  <path d="M486 106 H512" fill="none" stroke="#9C5417" stroke-width="1.4" marker-end="url(#hV)"/>
+  <rect x="518" y="84" width="270" height="44" rx="5" fill="#FFFFFF" stroke="#C79A70" stroke-width="1"/>
+  <text x="532" y="103" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">buildCellBandCountTable()</text>
+  <text x="532" y="118" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="600" fill="#14191E" text-anchor="start">→ μόνο στον GSM πίνακα</text>
+  <rect x="4" y="140" width="250" height="44" rx="5" fill="#FFFFFF" stroke="#C79A70" stroke-width="1"/>
+  <text x="18" y="159" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">/api/calls</text>
+  <text x="18" y="174" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">CallAnalysis · ResultsLQ08Avg</text>
+  <path d="M254 162 H280" fill="none" stroke="#9C5417" stroke-width="1.4" marker-end="url(#hV)"/>
+  <rect x="286" y="140" width="200" height="44" rx="5" fill="#FFFFFF" stroke="#C79A70" stroke-width="1"/>
+  <text x="300" y="159" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">AllCallsRow[]</text>
+  <text x="300" y="174" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">1 γραμμή / κλήση · ~50 πεδία</text>
+  <path d="M486 162 H512" fill="none" stroke="#9C5417" stroke-width="1.4" marker-end="url(#hV)"/>
+  <rect x="518" y="140" width="270" height="44" rx="5" fill="#FFFFFF" stroke="#C79A70" stroke-width="1"/>
+  <text x="532" y="159" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">buildVoiceStats / buildVoiceTable</text>
+  <text x="532" y="174" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">split ανά mode &amp; operator</text>
+  <rect x="4" y="196" width="250" height="44" rx="5" fill="#FFFFFF" stroke="#C79A70" stroke-width="1"/>
+  <text x="18" y="215" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">/api/technology_mix</text>
+  <text x="18" y="230" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">Position · NetworkInfo</text>
+  <path d="M254 218 H280" fill="none" stroke="#9C5417" stroke-width="1.4" marker-end="url(#hV)"/>
+  <rect x="286" y="196" width="200" height="44" rx="5" fill="#FFFFFF" stroke="#C79A70" stroke-width="1"/>
+  <text x="300" y="215" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">TechnologyMixRow[]</text>
+  <text x="300" y="230" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">συγκεντρωτικό</text>
+  <path d="M486 218 H512" fill="none" stroke="#9C5417" stroke-width="1.4" marker-end="url(#hV)"/>
+  <rect x="518" y="196" width="270" height="44" rx="5" fill="#FFFFFF" stroke="#C79A70" stroke-width="1"/>
+  <text x="532" y="215" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">buildTechnologyMixTable()</text>
+  <text x="532" y="230" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">γραμμή «Technology mix»</text>
+  <rect x="4" y="252" width="250" height="44" rx="5" fill="#FFFFFF" stroke="#C79A70" stroke-width="1"/>
+  <text x="18" y="271" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">/api/srvcc</text>
+  <text x="18" y="286" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">ResultsKPI 38040 / 38050</text>
+  <path d="M254 274 H280" fill="none" stroke="#9C5417" stroke-width="1.4" marker-end="url(#hV)"/>
+  <rect x="286" y="252" width="200" height="44" rx="5" fill="#FFFFFF" stroke="#C79A70" stroke-width="1"/>
+  <text x="300" y="271" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">SrvccRow[]</text>
+  <text x="300" y="286" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">συγκεντρωτικό</text>
+  <path d="M486 274 H512" fill="none" stroke="#9C5417" stroke-width="1.4" marker-end="url(#hV)"/>
+  <rect x="518" y="252" width="270" height="44" rx="5" fill="#FFFFFF" stroke="#C79A70" stroke-width="1"/>
+  <text x="532" y="271" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">buildSrvccTable()</text>
+  <text x="532" y="286" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="600" fill="#14191E" text-anchor="start">→ μόνο στον FREE πίνακα</text>
+  <path d="M788 106 H830" fill="none" stroke="#9C5417" stroke-width="1.4" marker-end="url(#hV)"/>
+  <path d="M788 274 H830" fill="none" stroke="#9C5417" stroke-width="1.4" marker-end="url(#hV)"/>
+  <path d="M788 162 H806" fill="none" stroke="#9C5417" stroke-width="1.4"/>
+  <path d="M788 218 H806" fill="none" stroke="#9C5417" stroke-width="1.4"/>
+  <path d="M806 162 V218" fill="none" stroke="#9C5417" stroke-width="1.4"/>
+  <circle cx="806" cy="190" r="3.5" fill="#9C5417"/>
+  <path d="M806 190 H822 V134 H830" fill="none" stroke="#9C5417" stroke-width="1.4" marker-end="url(#hV)"/>
+  <path d="M822 190 V246 H830" fill="none" stroke="#9C5417" stroke-width="1.4" marker-end="url(#hV)"/>
+  <rect x="836" y="84" width="400" height="72" rx="6" fill="#F7F9FA" stroke="#9C5417" stroke-width="1.5"/>
+  <text x="854" y="112" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#14191E">Table 20 · GSM Call Stats</text>
+  <text x="854" y="131" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">buildVoiceTable(rows, "GSM")</text>
+  <text x="854" y="147" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">KPI γραμμές × στήλη ανά operator + Total</text>
+  <rect x="836" y="204" width="400" height="72" rx="6" fill="#F7F9FA" stroke="#9C5417" stroke-width="1.5"/>
+  <text x="854" y="232" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#14191E">Table 21 · Free (2G-3G-LTE)</text>
+  <text x="854" y="251" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">buildVoiceTable(rows, "FREE")</text>
+  <text x="854" y="267" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">+ VoLTE / CS split, + SRVCC γραμμές</text>
+  <text x="4" y="330" font-family="Segoe UI, Arial, sans-serif" font-size="13.5" font-weight="700" fill="#0C6B74" text-anchor="start" letter-spacing="2.6">PS DATA</text>
+  <line x1="96" y1="325" x2="1236" y2="325" stroke="#E4EBEE" stroke-width="1"/>
+  <rect x="4" y="348" width="250" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="18" y="367" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">/api/data_calls</text>
+  <text x="18" y="382" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">CDRCombined (view)</text>
+  <path d="M254 370 H280" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <rect x="286" y="348" width="200" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="300" y="367" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">DataCallRow[]</text>
+  <text x="300" y="382" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">1 γραμμή / test</text>
+  <path d="M486 370 H512" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <rect x="518" y="348" width="270" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="532" y="367" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">— (ήδη σε σχήμα DataCallRow)</text>
+  <text x="532" y="382" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">περνάει αυτούσιο</text>
+  <rect x="4" y="404" width="250" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="18" y="423" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">/api/ookla</text>
+  <text x="18" y="438" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">ResultsKPI · ResultsAppAction*</text>
+  <path d="M254 426 H280" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <rect x="286" y="404" width="200" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="300" y="423" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">OoklaRow[]</text>
+  <text x="300" y="438" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">1 γραμμή / action</text>
+  <path d="M486 426 H512" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <rect x="518" y="404" width="270" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="532" y="423" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">mapOoklaRowsToDataCallRows()</text>
+  <text x="532" y="438" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">DL / UL από το actionName</text>
+  <rect x="4" y="460" width="250" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="18" y="479" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">/api/ping_1000</text>
+  <text x="18" y="494" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">ResultsPingTest (PacketSize 1000)</text>
+  <path d="M254 482 H280" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <rect x="286" y="460" width="200" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="300" y="479" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">PingRow[]</text>
+  <text x="300" y="494" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">1 γραμμή / ICMP πακέτο</text>
+  <path d="M486 482 H512" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <rect x="518" y="460" width="270" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="532" y="479" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">mapPing1000RowsToDataCallRows()</text>
+  <text x="532" y="494" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">RTT μόνο στα επιτυχημένα</text>
+  <rect x="4" y="516" width="250" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="18" y="535" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">/api/interactivity</text>
+  <text x="18" y="550" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">FactInteractivity · DmnInteractivity</text>
+  <path d="M254 538 H280" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <rect x="286" y="516" width="200" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="300" y="535" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">InteractivityRow[]</text>
+  <text x="300" y="550" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">1 γραμμή / test</text>
+  <path d="M486 538 H512" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <rect x="518" y="516" width="270" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="532" y="535" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">mapInteractivityRows…()</text>
+  <text x="532" y="550" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">5 eGaming μετρικές</text>
+  <rect x="4" y="572" width="250" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="18" y="591" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">/api/dns</text>
+  <text x="18" y="606" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">vResultsKPI (KPIID 31100)</text>
+  <path d="M254 594 H280" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <rect x="286" y="572" width="200" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="300" y="591" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">DnsRow[]</text>
+  <text x="300" y="606" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">συγκ. (count + avg)</text>
+  <path d="M486 594 H512" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <rect x="518" y="572" width="270" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="532" y="591" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">mapDnsRowsToDataCallRows()</text>
+  <text x="532" y="606" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">ξεδιπλώνει count → count γρ.</text>
+  <path d="M788 370 H806" fill="none" stroke="#0C6B74" stroke-width="1.4"/>
+  <path d="M788 426 H806" fill="none" stroke="#0C6B74" stroke-width="1.4"/>
+  <path d="M788 482 H806" fill="none" stroke="#0C6B74" stroke-width="1.4"/>
+  <path d="M788 538 H806" fill="none" stroke="#0C6B74" stroke-width="1.4"/>
+  <path d="M788 594 H806" fill="none" stroke="#0C6B74" stroke-width="1.4"/>
+  <path d="M806 370 V594" fill="none" stroke="#0C6B74" stroke-width="1.4"/>
+  <circle cx="806" cy="482" r="3.5" fill="#0C6B74"/>
+  <path d="M806 482 H830" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <text x="806" y="634" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" font-weight="600" fill="#0C6B74" text-anchor="middle">5 σχήματα → ένα DataCallRow[]</text>
+  <rect x="836" y="446" width="400" height="72" rx="6" fill="#F7F9FA" stroke="#0C6B74" stroke-width="1.5"/>
+  <text x="854" y="474" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#14191E">Table 22 · PS Data Stats</text>
+  <text x="854" y="493" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">buildDataSections(DataCallRow[])</text>
+  <text x="854" y="509" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">~23 sections, ομαδοποιημένα Ε1–Ε5</text>
+  <rect x="4" y="648" width="250" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="18" y="667" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">/api/serving_band_tech</text>
+  <text x="18" y="682" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">Position · FactNR5GCellInfo</text>
+  <path d="M254 670 H280" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <rect x="286" y="648" width="200" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="300" y="667" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">ServingBandTechRow[]</text>
+  <text x="300" y="682" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">συγκεντρωτικό</text>
+  <path d="M486 670 H512" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <rect x="518" y="648" width="270" height="44" rx="5" fill="#FFFFFF" stroke="#74B0B6" stroke-width="1"/>
+  <text x="532" y="667" font-family="Consolas, Courier New, monospace" font-size="11.5" font-weight="500" fill="#14191E" text-anchor="start">buildServingBandTechTable()</text>
+  <text x="532" y="682" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">BAND % και TECH % ξεχωριστά</text>
+  <path d="M788 670 H830" fill="none" stroke="#0C6B74" stroke-width="1.4" marker-end="url(#hD)"/>
+  <rect x="836" y="644" width="400" height="52" rx="6" fill="#F7F9FA" stroke="#0C6B74" stroke-width="1.5"/>
+  <text x="854" y="668" font-family="Segoe UI, Arial, sans-serif" font-size="15" font-weight="700" fill="#14191E">Serving Band / Technology πίτες</text>
+  <text x="854" y="685" font-family="Segoe UI, Arial, sans-serif" font-size="11" font-weight="400" fill="#62707B" text-anchor="start">στην κορυφή της κάρτας του Table 22</text>
+  </g>
+  <line x1="28" y1="846" x2="1292" y2="846" stroke="#D3DDE1" stroke-width="1"/>
+  <text x="28" y="866" font-family="Segoe UI, Arial, sans-serif" font-size="11.5" font-weight="400" fill="#62707B" text-anchor="start">Πηγές: backend/routers/calls.py · backend/routers/data_calls.py · src/lib/api.ts · src/pages/Index.tsx · src/lib/attachmentC.ts · src/components/SummaryTab.tsx</text>
+</svg>

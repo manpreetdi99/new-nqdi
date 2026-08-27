@@ -7,7 +7,19 @@ import Index from "./pages/Index.tsx";
 import DemoCharts from "./pages/DemoCharts.tsx";
 import NotFound from "./pages/NotFound.tsx";
 
-const queryClient = new QueryClient();
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      // Τα datasets είναι ιστορικά drive-test αποτελέσματα — δεν αλλάζουν από κάτω μας.
+      // Με staleTime, το να ξαναδιαλέξεις ένα collection που είδες ήδη είναι instant
+      // αντί για 10 fresh round trips (βλ. Summary tab).
+      staleTime: 5 * 60_000,
+      gcTime: 30 * 60_000,
+      refetchOnWindowFocus: false,
+      retry: 1,
+    },
+  },
+});
 
 const App = () => (
   <QueryClientProvider client={queryClient}>

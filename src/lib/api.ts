@@ -263,6 +263,40 @@ export async function fetchSrvcc(database: string, collections: string[] = []): 
 }
 
 /**
+ * Ένα (location, status, count, avg, minVal, maxVal, stdVal) ήδη-αθροισμένο row για
+ * το "DNS" section του PS Data Stats table — βλ. /api/dns. Ίδιο σχήμα με το SrvccRow
+ * (αθροισμένο ανά location+status αντί για raw ανά-attempt rows). `avg`/`minVal`/
+ * `maxVal`/`stdVal` σε ms (DNS resolution time, vResultsKPI.Duration KPIID=31100). Το
+ * frontend τα μετατρέπει σε DataCallRow σχήμα (testType="DNS") — βλ.
+ * mapDnsRowsToDataCallRows στο attachmentC.ts.
+ */
+export interface DnsRow {
+  location: string | null;
+  status: string;
+  count: number;
+  avg: number | null;
+  minVal: number | null;
+  maxVal: number | null;
+  stdVal: number | null;
+}
+
+export async function fetchDns(
+  database: string,
+  collections: string[] = [],
+  locations: string[] = [],
+): Promise<DnsRow[]> {
+  const params = new URLSearchParams({ database });
+  for (const collection of collections) {
+    if (collection) params.append("collection", collection);
+  }
+  for (const location of locations) {
+    params.append("location", location);
+  }
+  const json = await requestJson<{ rows: DnsRow[] }>(`/api/dns?${params.toString()}`);
+  return json.rows;
+}
+
+/**
  * Ένα Ookla speedtest action row (Downlink Performance / Uplink Performance μόνο —
  * το backend φιλτράρει έξω τα social media/messaging actions άλλων app tests) — βλ.
  * /api/ookla. `throughputKbps` ήδη σε kbps. Το frontend τα μετατρέπει σε DataCallRow

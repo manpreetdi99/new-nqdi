@@ -1,11 +1,14 @@
-import { useMemo, useState, type ReactNode } from "react";
+import { Fragment, useMemo, useState, type ReactNode } from "react";
 import { ChevronDown, Database, MapPin, Phone, Radio, Wifi } from "lucide-react";
 import { Cell as PieCell, Legend as PieLegend, Pie, PieChart, ResponsiveContainer, Tooltip as PieRTooltip } from "recharts";
 
+import { Skeleton } from "@/components/ui/skeleton";
+import { useLocalStorage } from "@/hooks/use-local-storage";
 import type { AllCallsRow, CellBandCountRow, DataCallRow, ServingBandTechRow, SrvccRow, TechnologyMixRow } from "@/lib/api";
 import { CHART_PALETTE } from "@/lib/chartStyles";
 import {
   BAD_QUALITY_MOS,
+  buildDataGroupSections,
   buildDataSections,
   buildReportPeriod,
   buildServingBandTechTable,
@@ -32,6 +35,32 @@ import {
   type VoiceTable,
 } from "@/lib/attachmentC";
 
+/**
+ * Ποιο κομμάτι της αναφοράς περιμένει ακόμα το δικό του fetch — βλ. summaryLoading στο
+ * Index.tsx. Οι 10 πηγές του Summary γυρίζουν ανεξάρτητα, οπότε κάθε κάρτα δείχνει
+ * skeleton μόνο όσο λείπουν ΤΑ ΔΙΚΑ ΤΗΣ δεδομένα αντί να περιμένουν όλες την πιο αργή.
+ */
+export interface SummaryLoading {
+  /** /api/calls — GSM/FREE tables, KPI tiles, hero CSR. */
+  voice: boolean;
+  /** PS Data sections: data_calls + ookla + ping_1000 + interactivity + dns μαζί. */
+  data: boolean;
+  technologyMix: boolean;
+  servingBandTech: boolean;
+  /** Πόσες από τις πηγές έχουν φορτώσει — για το "Loaded n/10" chip. */
+  done: number;
+  totalSources: number;
+}
+
+const NOT_LOADING: SummaryLoading = {
+  voice: false,
+  data: false,
+  technologyMix: false,
+  servingBandTech: false,
+  done: 0,
+  totalSources: 0,
+};
+
 interface SummaryTabProps {
   allCallsRows: AllCallsRow[];
   dataCallsRows: DataCallRow[];
@@ -47,6 +76,8 @@ interface SummaryTabProps {
   cellBandCountRows?: CellBandCountRow[];
   /** "Total/Successful/Failed SRVCC attempts" (μόνο FREE table) — βλ. /api/srvcc / buildSrvccTable. */
   srvccRows?: SrvccRow[];
+  /** Progressive load: ποιο κομμάτι δείχνει skeleton. Χωρίς αυτό, τίποτα δεν "φορτώνει". */
+  loading?: SummaryLoading;
   database?: string;
   collections?: string[];
   /** Για το dropdown επιλογής database μέσα στο banner· χωρίς αυτά, το banner δείχνει απλό κείμενο. */
@@ -639,6 +670,12 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
     hint: "ErrorCode=108003, μόνο FREE table — βλ. SRVCC RAW.sql",
     cell: (s) => ({ kind: "value", value: s.srvcc?.failed ?? null, decimals: 0 }),
   },
+  {
+    label: "Fake Event(s)",
+    emphasis: true,
+    hint: "Sessions με isValid=0 (Sessions.valid='0') — μετράει ανεξάρτητα από το 'Valid calls only' toggle, GSM ΚΑΙ FREE table — βλ. FAKE EVENT LIST reference query.",
+    cell: (s) => ({ kind: "value", value: s.fakeEvents, decimals: 0 }),
+  },
 ];
 
 const dataRows = (stats: DataTestStats): KpiRowSpec<DataTestStats>[] => [
@@ -926,6 +963,30 @@ const EmptyState = ({ message }: { message: string }) => (
   <p className="px-4 py-8 text-center text-xs text-muted-foreground">{message}</p>
 );
 
+/** Το κέλυφος ενός KpiTable όσο τρέχει ακόμα το fetch του — ίδιο ύψος γραμμής με τον πίνακα. */
+const TableSkeleton = ({ rows = 6 }: { rows?: number }) => (
+  <div className="space-y-2 px-4 py-4">
+    {Array.from({ length: rows }, (_, index) => (
+      <div key={index} className="flex items-center gap-4">
+        <Skeleton className="h-4 w-56 shrink-0" />
+        <Skeleton className="h-4 flex-1" />
+        <Skeleton className="h-4 w-20 shrink-0" />
+      </div>
+    ))}
+  </div>
+);
+
+/**
+ * Οι 4 γραμμές που επιβιώνουν στο compact mode των Voice tables: AVG MOS, DROP, FAIL,
+ * SUCCESS. Τα labels πρέπει να ταιριάζουν ΑΚΡΙΒΩΣ με τα voiceRows παρακάτω.
+ */
+const COMPACT_VOICE_ROW_LABELS = new Set([
+  "Call Success Rate (%)",
+  "Dropped Call Rate (%)",
+  "Access Failure Rate (%)",
+  "POLQA avg (Speech quality ITU P.863)",
+]);
+
 /* ────────────────────────── Το tab ────────────────────────── */
 
 const SummaryTab = ({
@@ -935,6 +996,7 @@ const SummaryTab = ({
   servingBandTechRows = [],
   cellBandCountRows = [],
   srvccRows = [],
+  loading = NOT_LOADING,
   database,
   collections = [],
   databases = [],
@@ -951,6 +1013,12 @@ const SummaryTab = ({
   const [excludeSysRelease, setExcludeSysRelease] = useState(true);
   /** "Valid calls": κρατάει έξω τις σειρές που έχουν ρητά σημαδευτεί isValid = 0. */
   const [onlyValidCalls, setOnlyValidCalls] = useState(true);
+  /**
+   * "Compact": πολύ λιγότερα δεδομένα στην οθόνη — τα PS Data sections συμπτύσσονται στα 5
+   * Ε-groups με ένα AVG το καθένα, και τα Voice tables κρατάνε μόνο MOS/Drop/Fail/Success.
+   * Σε localStorage γιατί είναι προτίμηση προβολής, όχι κάτι που θέλεις να ξαναδιαλέγεις.
+   */
+  const [compact, setCompact] = useLocalStorage<boolean>("perf-insights-summary-compact", false);
   const [collectionsMenuOpen, setCollectionsMenuOpen] = useState(false);
 
   const validAllCallsRows = useMemo(
@@ -962,7 +1030,17 @@ const SummaryTab = ({
     [dataCallsRows, onlyValidCalls],
   );
 
-  const rows = useMemo(() => voiceRows(excludeSysRelease), [excludeSysRelease]);
+  const allRows = useMemo(() => voiceRows(excludeSysRelease), [excludeSysRelease]);
+  /**
+   * Compact: μόνο AVG MOS / DROP / FAIL / SUCCESS. Τα 4 labels είναι σταθερά ανεξάρτητα
+   * από το excludeSysRelease — μόνο τα "Call Attempts"/"Total Calls" αλλάζουν label με το
+   * toggle (βλ. voiceRows), οπότε το set δεν σπάει. Ό,τι άλλο (counts, codec/technology
+   * mix, SRVCC, setup times) φεύγει αυτόματα επειδή δεν είναι εδώ μέσα.
+   */
+  const rows = useMemo(
+    () => (compact ? allRows.filter((row) => COMPACT_VOICE_ROW_LABELS.has(row.label)) : allRows),
+    [allRows, compact],
+  );
   /**
    * Ίδιο με rows, χωρίς τις 3 SRVCC γραμμές (μόνο FREE table — βλ. VoiceStats.srvcc) και τα
    * per-CustomCallMode VoLTE/CS attempts/dropped (μόνο FREE table — βλ. LQCallData.sql /
@@ -1006,14 +1084,24 @@ const SummaryTab = ({
   );
 
   const gsmTable = useMemo(
-    () => buildVoiceTable(validAllCallsRows, "GSM", cellBandCountRows),
-    [validAllCallsRows, cellBandCountRows],
+    // allCallsRows (ΟΧΙ validAllCallsRows) για τα fake events: θέλουμε να φαίνονται ακόμα
+    // κι όταν το "Valid calls only" toggle τα κρύβει από τα υπόλοιπα στατιστικά.
+    () => buildVoiceTable(validAllCallsRows, "GSM", cellBandCountRows, [], allCallsRows),
+    [validAllCallsRows, cellBandCountRows, allCallsRows],
   );
   const freeTable = useMemo(
-    () => buildVoiceTable(validAllCallsRows, "FREE", [], srvccRows),
-    [validAllCallsRows, srvccRows],
+    () => buildVoiceTable(validAllCallsRows, "FREE", [], srvccRows, allCallsRows),
+    [validAllCallsRows, srvccRows, allCallsRows],
   );
-  const dataSections = useMemo(() => buildDataSections(validDataCallsRows), [validDataCallsRows]);
+  const fullDataSections = useMemo(() => buildDataSections(validDataCallsRows), [validDataCallsRows]);
+  /**
+   * Compact: τα ~23 sections συμπτύσσονται στα 5 Ε-groups (+ "Λοιπά tests"), ένα AVG το
+   * καθένα. Τρέχει πάνω στο ήδη υπολογισμένο fullDataSections — δεν ξαναδιαβάζει raw rows.
+   */
+  const dataSections = useMemo(
+    () => (compact ? buildDataGroupSections(fullDataSections) : fullDataSections),
+    [fullDataSections, compact],
+  );
 
   // Πραγματικό ανά-band technology mix (βλ. σχόλιο στο SummaryTabProps.technologyMixRows) —
   // άδειο όταν δεν έχει φορτώσει ακόμα ή το schema δεν έχει CallSession, οπότε το
@@ -1073,6 +1161,8 @@ const SummaryTab = ({
   );
 
   const hasData = validAllCallsRows.length > 0 || validDataCallsRows.length > 0;
+  /** Όσο τρέχει έστω μία πηγή, το "δεν υπάρχουν δεδομένα" θα ήταν πρόωρο ψέμα. */
+  const anyLoading = loading.voice || loading.data || loading.technologyMix || loading.servingBandTech;
 
   const formatDate = (date: Date | null) =>
     date
@@ -1111,6 +1201,19 @@ const SummaryTab = ({
               <MetaChip icon={MapPin} label="Subroutes" value={locations.length > 0 ? `${locations.length}` : "—"} />
               <MetaChip label="Week" value={period.week != null ? String(period.week) : "—"} />
               <MetaChip label="Period" value={`${formatDate(period.from)} – ${formatDate(period.to)}`} />
+              {/* Ρητή πρόοδος όσο οι 10 πηγές γυρίζουν μία-μία — αλλιώς η σταδιακή εμφάνιση
+                  των καρτών μοιάζει με "τελείωσε, λείπουν κομμάτια". */}
+              {loading.done < loading.totalSources && (
+                <MetaChip
+                  label="Loading"
+                  value={
+                    <span className="flex items-center gap-1.5">
+                      <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+                      {loading.done}/{loading.totalSources} sources
+                    </span>
+                  }
+                />
+              )}
             </div>
           </div>
 
@@ -1257,16 +1360,21 @@ const SummaryTab = ({
             <div className="text-[10px] uppercase tracking-wider text-muted-foreground">
               Overall call success rate{excludeSysRelease && " (excl. SR)"}
             </div>
-            <div
-              className="mt-1 text-5xl font-semibold leading-none tracking-tight text-foreground"
-              style={
-                excludeSysRelease && onlyValidCalls
-                  ? { color: heroCsrColor(ratesOf(overallStats, excludeSysRelease).csr) }
-                  : undefined
-              }
-            >
-              {formatPercent(ratesOf(overallStats, excludeSysRelease).csr, 1)}
-            </div>
+            {loading.voice ? (
+              // Χωρίς αυτό, το hero θα έδειχνε ένα σίγουρο "0.0%" πριν καν έρθουν οι κλήσεις.
+              <Skeleton className="mt-1 ml-auto h-12 w-40" />
+            ) : (
+              <div
+                className="mt-1 text-5xl font-semibold leading-none tracking-tight text-foreground"
+                style={
+                  excludeSysRelease && onlyValidCalls
+                    ? { color: heroCsrColor(ratesOf(overallStats, excludeSysRelease).csr) }
+                    : undefined
+                }
+              >
+                {formatPercent(ratesOf(overallStats, excludeSysRelease).csr, 1)}
+              </div>
+            )}
             <div className="mt-2 text-[11px] text-muted-foreground">
               {formatCount(overallStats.completed)} normal releases /{" "}
               {formatCount(ratesOf(overallStats, excludeSysRelease).attempts)} attempts
@@ -1293,6 +1401,27 @@ const SummaryTab = ({
           ))}
 
           <div className="ml-auto flex items-center gap-4">
+            {/* Segmented, όχι checkbox: αλλάζει το σχήμα ΟΛΗΣ της αναφοράς, όχι μία στήλη. */}
+            <div
+              className="flex items-center gap-0.5 rounded-md border border-border bg-background p-0.5"
+              title="Compact: τα PS Data tests συμπτύσσονται στα 5 groups με ένα AVG το καθένα, και τα Voice tables κρατάνε μόνο MOS / Drop / Fail / Success."
+            >
+              {([false, true] as const).map((value) => (
+                <button
+                  key={String(value)}
+                  type="button"
+                  onClick={() => setCompact(value)}
+                  aria-pressed={compact === value}
+                  className={`rounded px-2 py-0.5 text-[11px] transition-colors ${
+                    compact === value
+                      ? "bg-primary/15 font-semibold text-foreground"
+                      : "text-muted-foreground hover:text-foreground"
+                  }`}
+                >
+                  {value ? "Compact" : "Full"}
+                </button>
+              ))}
+            </div>
             <label
               className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground"
               title="Κρατάει έξω τις σειρές που έχουν σημαδευτεί isValid = 0."
@@ -1339,75 +1468,103 @@ const SummaryTab = ({
         </div>
       </section>
 
-      {!hasData && (
+      {!hasData && !anyLoading && (
         <div className="rounded-xl border border-border bg-card">
           <EmptyState message='Δεν υπάρχουν δεδομένα. Επιλέξτε database / collections από το tab "All Calls".' />
         </div>
       )}
 
       {/* ── KPI tiles ανά operator ── */}
-      {operators.length > 0 && validAllCallsRows.length > 0 && (
+      {loading.voice ? (
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {operators.map((operator) => {
-            const stats = voiceByOperator.get(operator.key);
-            if (!stats || stats.attempts === 0) return null;
-            return (
-              <OperatorTile
-                key={operator.key}
-                operator={operator}
-                stats={stats}
-                excludeSysRelease={excludeSysRelease}
-              />
-            );
-          })}
+          {Array.from({ length: 3 }, (_, index) => (
+            <Skeleton key={index} className="h-40 rounded-xl" />
+          ))}
         </div>
+      ) : (
+        operators.length > 0 &&
+        validAllCallsRows.length > 0 && (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {operators.map((operator) => {
+              const stats = voiceByOperator.get(operator.key);
+              if (!stats || stats.attempts === 0) return null;
+              return (
+                <OperatorTile
+                  key={operator.key}
+                  operator={operator}
+                  stats={stats}
+                  excludeSysRelease={excludeSysRelease}
+                />
+              );
+            })}
+          </div>
+        )
       )}
 
       {/* ── TABLE 20 — GSM ── */}
-      {gsmTable.total.attempts > 0 && (
+      {(loading.voice || gsmTable.total.attempts > 0) && (
         <ReportCard
           title="GSM Call Stats"
-          subtitle={`${formatCount(gsmTable.total.attempts)} call attempts`}
+          subtitle={loading.voice ? "loading…" : `${formatCount(gsmTable.total.attempts)} call attempts`}
           icon={Radio}
-          footer={<OutcomeLegend />}
+          footer={loading.voice ? undefined : <OutcomeLegend />}
         >
-          <KpiTable
-            operators={operators.filter((operator) => (gsmTable.byOperator.get(operator.key)?.attempts ?? 0) > 0)}
-            rows={gsmRows}
-            hideEmptyRows={hideEmptyRows}
-            markBest={markBest}
-            {...voiceTableFor(gsmTable, gsmTechMix)}
-          />
+          {loading.voice ? (
+            <TableSkeleton />
+          ) : (
+            <KpiTable
+              operators={operators.filter((operator) => (gsmTable.byOperator.get(operator.key)?.attempts ?? 0) > 0)}
+              rows={gsmRows}
+              hideEmptyRows={hideEmptyRows}
+              markBest={markBest}
+              {...voiceTableFor(gsmTable, gsmTechMix)}
+            />
+          )}
         </ReportCard>
       )}
 
       {/* ── TABLE 21 — FREE ── */}
-      {freeTable.total.attempts > 0 && (
+      {(loading.voice || freeTable.total.attempts > 0) && (
         <ReportCard
           title="Free (2G-3G-LTE) Call Stats"
-          subtitle={`${formatCount(freeTable.total.attempts)} call attempts`}
+          subtitle={loading.voice ? "loading…" : `${formatCount(freeTable.total.attempts)} call attempts`}
           icon={Phone}
-          footer={<OutcomeLegend />}
+          footer={loading.voice ? undefined : <OutcomeLegend />}
         >
-          <KpiTable
-            operators={operators.filter((operator) => (freeTable.byOperator.get(operator.key)?.attempts ?? 0) > 0)}
-            rows={freeRows}
-            hideEmptyRows={hideEmptyRows}
-            markBest={markBest}
-            {...voiceTableFor(freeTable, freeTechMix)}
-          />
+          {loading.voice ? (
+            <TableSkeleton />
+          ) : (
+            <KpiTable
+              operators={operators.filter((operator) => (freeTable.byOperator.get(operator.key)?.attempts ?? 0) > 0)}
+              rows={freeRows}
+              hideEmptyRows={hideEmptyRows}
+              markBest={markBest}
+              {...voiceTableFor(freeTable, freeTechMix)}
+            />
+          )}
         </ReportCard>
       )}
 
       {/* ── TABLE 22 — PS DATA ── */}
-      {dataSections.length > 0 && (
+      {(loading.data || dataSections.length > 0) && (
         <ReportCard
           title="PS Data Stats"
-          subtitle={`${dataSections.length} test sections · ${formatCount(validDataCallsRows.length)} tests`}
+          subtitle={
+            loading.data
+              ? "loading…"
+              : `${dataSections.length} ${compact ? "groups" : "test sections"} · ${formatCount(validDataCallsRows.length)} tests`
+          }
           icon={Wifi}
         >
+          {loading.data && <TableSkeleton rows={8} />}
           <div className="divide-y divide-border/60">
-            {servingBandTech.total.some((share) => share.total > 0) && (
+            {/* Οι πίτες είναι το πιο βαρύ οπτικά μπλοκ της κάρτας — έξω από το compact. */}
+            {!compact && !loading.data && loading.servingBandTech && (
+              <div className="px-4 py-4">
+                <Skeleton className="h-32 w-full" />
+              </div>
+            )}
+            {!compact && servingBandTech.total.some((share) => share.total > 0) && (
               <div>
                 <div className="px-4 pt-4">
                   <div className="text-xs font-bold text-foreground">Serving Band / Serving Technology (per Time)</div>
@@ -1423,15 +1580,24 @@ const SummaryTab = ({
                 />
               </div>
             )}
-            {dataSections.map((section) => (
-              <DataSectionBlock
-                key={section.key}
-                section={section}
-                operators={operators}
-                hideEmptyRows={hideEmptyRows}
-                markBest={markBest}
-              />
-            ))}
+            {dataSections.map((section, index) => {
+              const previousGroup = index > 0 ? dataSections[index - 1].group : "";
+              return (
+                <Fragment key={section.key}>
+                  {section.group && section.group !== previousGroup && (
+                    <div className="px-4 pt-4 pb-1">
+                      <div className="text-[11px] font-bold uppercase tracking-wider text-primary">{section.group}</div>
+                    </div>
+                  )}
+                  <DataSectionBlock
+                    section={section}
+                    operators={operators}
+                    hideEmptyRows={hideEmptyRows}
+                    markBest={markBest}
+                  />
+                </Fragment>
+              );
+            })}
           </div>
         </ReportCard>
       )}

@@ -1,4 +1,5 @@
 import { useState, useMemo, useEffect, Fragment } from "react";
+import { useQueries } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp, History } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
@@ -17,7 +18,12 @@ import ValidationTab from "@/components/ValidationTab";
 import SummaryTab from "@/components/SummaryTab";
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import type { CallRecord } from "@/lib/callData";
-import { mapInteractivityRowsToDataCallRows, mapOoklaRowsToDataCallRows, mapPing1000RowsToDataCallRows } from "@/lib/attachmentC";
+import {
+  mapDnsRowsToDataCallRows,
+  mapInteractivityRowsToDataCallRows,
+  mapOoklaRowsToDataCallRows,
+  mapPing1000RowsToDataCallRows,
+} from "@/lib/attachmentC";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -25,6 +31,7 @@ import {
   fetchAllCalls,
   fetchCellBandCount,
   fetchDataCalls,
+  fetchDns,
   fetchInteractivity,
   fetchOokla,
   fetchPing1000,
@@ -38,6 +45,7 @@ import {
   type AllCallsRow,
   type CellBandCountRow,
   type DataCallRow,
+  type DnsRow,
   type InteractivityRow,
   type OoklaRow,
   type PingRow,
@@ -45,6 +53,20 @@ import {
   type SrvccRow,
   type TechnologyMixRow,
 } from "@/lib/api";
+
+// Σταθερή ταυτότητα για το "δεν ήρθε ακόμα / απέτυχε" fallback κάθε summary query.
+// Module-level επίτηδες: ένα inline `?? []` θα έφτιαχνε νέο array σε κάθε render και θα
+// ακύρωνε κάθε useMemo μέσα στο SummaryTab (buildVoiceTable/buildDataSections κ.λπ.).
+const EMPTY_ALL_CALLS_ROWS: AllCallsRow[] = [];
+const EMPTY_DATA_CALL_ROWS: DataCallRow[] = [];
+const EMPTY_TECHNOLOGY_MIX_ROWS: TechnologyMixRow[] = [];
+const EMPTY_SERVING_BAND_TECH_ROWS: ServingBandTechRow[] = [];
+const EMPTY_CELL_BAND_COUNT_ROWS: CellBandCountRow[] = [];
+const EMPTY_SRVCC_ROWS: SrvccRow[] = [];
+const EMPTY_OOKLA_ROWS: OoklaRow[] = [];
+const EMPTY_PING_ROWS: PingRow[] = [];
+const EMPTY_INTERACTIVITY_ROWS: InteractivityRow[] = [];
+const EMPTY_DNS_ROWS: DnsRow[] = [];
 
 const formatApiError = (error: unknown, fallbackTitle: string) => {
   if (error instanceof ApiClientError) {
@@ -242,24 +264,6 @@ const Index = () => {
   const [dataCallsRows, setDataCallsRows] = useState<DataCallRow[]>([]);
   /** Ανά-band technology mix (GSM 900/1800, LTE E-UTRA N, ...) για το SummaryTab — βλ. /api/technology_mix. */
   const [technologyMixRows, setTechnologyMixRows] = useState<TechnologyMixRow[]>([]);
-  // Ξεχωριστό dataset για το Summary tab: ίδιο database/collections με το "All Calls" αλλά ΠΑΝΤΑ
-  // όλα τα locations — το Locations φίλτρο του "Edit Filters" panel δεν πρέπει να το περιορίζει
-  // (Attachment C αγνοεί όλα τα global φίλτρα, όχι μόνο session valid / status / file group).
-  const [summaryAllCallsRows, setSummaryAllCallsRows] = useState<AllCallsRow[]>([]);
-  const [summaryDataCallsRows, setSummaryDataCallsRows] = useState<DataCallRow[]>([]);
-  const [summaryTechnologyMixRows, setSummaryTechnologyMixRows] = useState<TechnologyMixRow[]>([]);
-  /** Serving Band (NR) / Serving Technology (per Time) για το "PS Data Stats" block — βλ. /api/serving_band_tech. */
-  const [summaryServingBandTechRows, setSummaryServingBandTechRows] = useState<ServingBandTechRow[]>([]);
-  /** "Number of 900/1800 band Cells" (GSM table) για το SummaryTab — βλ. /api/cell_band_count. */
-  const [summaryCellBandCountRows, setSummaryCellBandCountRows] = useState<CellBandCountRow[]>([]);
-  /** "Total/Successful/Failed SRVCC attempts" (FREE table) για το SummaryTab — βλ. /api/srvcc. */
-  const [summarySrvccRows, setSummarySrvccRows] = useState<SrvccRow[]>([]);
-  /** "Ookla DL"/"Ookla UL" PS Data sections — βλ. /api/ookla / mapOoklaRowsToDataCallRows. */
-  const [summaryOoklaRows, setSummaryOoklaRows] = useState<OoklaRow[]>([]);
-  /** "Ping 1000" PS Data section — βλ. /api/ping_1000 / mapPing1000RowsToDataCallRows. */
-  const [summaryPing1000Rows, setSummaryPing1000Rows] = useState<PingRow[]>([]);
-  /** "Interactivity" PS Data section — βλ. /api/interactivity / mapInteractivityRowsToDataCallRows. */
-  const [summaryInteractivityRows, setSummaryInteractivityRows] = useState<InteractivityRow[]>([]);
   // Database/collections επιλογή αποκλειστικά για το Summary tab — ΔΕΝ μοιράζεται state με το
   // selectedDatabase/selectedCallsCollections του "Edit Filters" panel / "All Calls" tab, ώστε η
   // επιλογή στο ένα tab να μην αλλάζει καθόλου το άλλο.
@@ -596,129 +600,146 @@ const Index = () => {
   // Summary tab: δικό του database/collections (summaryDatabase/summaryCollections, καθόλου σχέση με
   // selectedDatabase/selectedCallsCollections) και ΠΑΝΤΑ effectiveLocations = [] (όλα τα locations).
   // Έτσι δεν ξαναφορτώνει ποτέ όταν αλλάζει κάτι στο "Edit Filters" panel / "All Calls" tab.
-  useEffect(() => {
-    const loadSummary = async () => {
-      if (!summaryDatabase || summaryCollections.length === 0) {
-        setSummaryAllCallsRows([]);
-        setSummaryDataCallsRows([]);
-        setSummaryTechnologyMixRows([]);
-        setSummaryServingBandTechRows([]);
-        setSummaryCellBandCountRows([]);
-        setSummarySrvccRows([]);
-        setSummaryOoklaRows([]);
-        setSummaryPing1000Rows([]);
-        setSummaryInteractivityRows([]);
-        return;
-      }
+  //
+  // 10 ΞΕΧΩΡΙΣΤΑ queries, όχι ένα await Promise.allSettled([...]): έτσι κάθε πηγή βάφει το
+  // δικό της κομμάτι του SummaryTab μόλις γυρίσει, αντί να περιμένουν όλες την πιο αργή
+  // (το /api/srvcc είναι 3 γραμμές, το /api/calls/ping_1000 χιλιάδες). Το react-query
+  // δίνει επιπλέον cache ανά (database, collections) και race-safety στη γρήγορη αλλαγή
+  // επιλογής — δεν μπορεί παλιό response να γράψει πάνω σε νεότερο.
+  const summaryEnabled = Boolean(summaryDatabase) && summaryCollections.length > 0;
+  // Ταξινομημένα collections μέσα στο key: αλλαγή σειράς δεν είναι αλλαγή dataset.
+  const summaryCollectionsKey = useMemo(() => [...summaryCollections].sort(), [summaryCollections]);
 
-      const [
-        voiceResult,
-        dataResult,
-        technologyMixResult,
-        servingBandTechResult,
-        cellBandCountResult,
-        srvccResult,
-        ooklaResult,
-        ping1000Result,
-        interactivityResult,
-      ] = await Promise.allSettled([
-        fetchAllCalls(summaryDatabase, summaryCollections, []),
-        fetchDataCalls(summaryDatabase, summaryCollections, []),
-        fetchTechnologyMix(summaryDatabase, summaryCollections, []),
-        fetchServingBandTech(summaryDatabase, summaryCollections, []),
-        fetchCellBandCount(summaryDatabase, summaryCollections),
-        fetchSrvcc(summaryDatabase, summaryCollections),
-        fetchOokla(summaryDatabase, summaryCollections, []),
-        fetchPing1000(summaryDatabase, summaryCollections, []),
-        fetchInteractivity(summaryDatabase, summaryCollections, []),
-      ]);
+  const summaryQueries = useQueries({
+    queries: [
+      {
+        queryKey: ["summary", "calls", summaryDatabase, summaryCollectionsKey],
+        queryFn: () => fetchAllCalls(summaryDatabase, summaryCollections, []),
+        enabled: summaryEnabled,
+      },
+      {
+        queryKey: ["summary", "dataCalls", summaryDatabase, summaryCollectionsKey],
+        queryFn: () => fetchDataCalls(summaryDatabase, summaryCollections, []),
+        enabled: summaryEnabled,
+      },
+      {
+        queryKey: ["summary", "technologyMix", summaryDatabase, summaryCollectionsKey],
+        queryFn: () => fetchTechnologyMix(summaryDatabase, summaryCollections, []),
+        enabled: summaryEnabled,
+      },
+      {
+        queryKey: ["summary", "servingBandTech", summaryDatabase, summaryCollectionsKey],
+        queryFn: () => fetchServingBandTech(summaryDatabase, summaryCollections, []),
+        enabled: summaryEnabled,
+      },
+      {
+        queryKey: ["summary", "cellBandCount", summaryDatabase, summaryCollectionsKey],
+        queryFn: () => fetchCellBandCount(summaryDatabase, summaryCollections),
+        enabled: summaryEnabled,
+      },
+      {
+        queryKey: ["summary", "srvcc", summaryDatabase, summaryCollectionsKey],
+        queryFn: () => fetchSrvcc(summaryDatabase, summaryCollections),
+        enabled: summaryEnabled,
+      },
+      {
+        queryKey: ["summary", "ookla", summaryDatabase, summaryCollectionsKey],
+        queryFn: () => fetchOokla(summaryDatabase, summaryCollections, []),
+        enabled: summaryEnabled,
+      },
+      {
+        queryKey: ["summary", "ping1000", summaryDatabase, summaryCollectionsKey],
+        queryFn: () => fetchPing1000(summaryDatabase, summaryCollections, []),
+        enabled: summaryEnabled,
+      },
+      {
+        queryKey: ["summary", "interactivity", summaryDatabase, summaryCollectionsKey],
+        queryFn: () => fetchInteractivity(summaryDatabase, summaryCollections, []),
+        enabled: summaryEnabled,
+      },
+      {
+        queryKey: ["summary", "dns", summaryDatabase, summaryCollectionsKey],
+        queryFn: () => fetchDns(summaryDatabase, summaryCollections, []),
+        enabled: summaryEnabled,
+      },
+    ],
+  });
 
-      if (voiceResult.status === "fulfilled") {
-        setSummaryAllCallsRows(voiceResult.value);
-      } else {
-        console.error("Failed to fetch summary voice calls:", voiceResult.reason);
-        setSummaryAllCallsRows([]);
-      }
+  const [
+    summaryVoiceQuery,
+    summaryDataQuery,
+    summaryTechnologyMixQuery,
+    summaryServingBandTechQuery,
+    summaryCellBandCountQuery,
+    summarySrvccQuery,
+    summaryOoklaQuery,
+    summaryPing1000Query,
+    summaryInteractivityQuery,
+    summaryDnsQuery,
+  ] = summaryQueries;
 
-      if (dataResult.status === "fulfilled") {
-        setSummaryDataCallsRows(dataResult.value);
-      } else {
-        console.error("Failed to fetch summary data calls:", dataResult.reason);
-        setSummaryDataCallsRows([]);
-      }
+  // Καμία αποτυχία δεν βγάζει toast — ίδιο σκεπτικό με πριν: το SummaryTab υποβαθμίζεται
+  // σιωπηλά (το block που λείπει απλά δεν εμφανίζεται / δείχνει "—") αντί να διακόψει τη
+  // σελίδα. Τα module-level EMPTY_* κρατάνε σταθερή ταυτότητα πίνακα ανάμεσα στα renders:
+  // ένα inline `?? []` θα έφτιαχνε νέο array κάθε φορά και θα ακύρωνε κάθε useMemo μέσα
+  // στο SummaryTab.
+  const summaryAllCallsRows = summaryVoiceQuery.data ?? EMPTY_ALL_CALLS_ROWS;
+  const summaryDataCallsRows = summaryDataQuery.data ?? EMPTY_DATA_CALL_ROWS;
+  const summaryTechnologyMixRows = summaryTechnologyMixQuery.data ?? EMPTY_TECHNOLOGY_MIX_ROWS;
+  const summaryServingBandTechRows = summaryServingBandTechQuery.data ?? EMPTY_SERVING_BAND_TECH_ROWS;
+  const summaryCellBandCountRows = summaryCellBandCountQuery.data ?? EMPTY_CELL_BAND_COUNT_ROWS;
+  const summarySrvccRows = summarySrvccQuery.data ?? EMPTY_SRVCC_ROWS;
+  const summaryOoklaRows = summaryOoklaQuery.data ?? EMPTY_OOKLA_ROWS;
+  const summaryPing1000Rows = summaryPing1000Query.data ?? EMPTY_PING_ROWS;
+  const summaryInteractivityRows = summaryInteractivityQuery.data ?? EMPTY_INTERACTIVITY_ROWS;
+  const summaryDnsRows = summaryDnsQuery.data ?? EMPTY_DNS_ROWS;
 
-      if (technologyMixResult.status === "fulfilled") {
-        setSummaryTechnologyMixRows(technologyMixResult.value);
-      } else {
-        console.error("Failed to fetch summary technology mix:", technologyMixResult.reason);
-        setSummaryTechnologyMixRows([]);
-      }
+  /**
+   * Ποιο κομμάτι του SummaryTab περιμένει ακόμα τα δικά του δεδομένα. Τα PS Data sections
+   * χτίζονται από 5 πηγές μαζί (data_calls + ookla + ping_1000 + interactivity + dns),
+   * οπότε το `data` είναι pending όσο έστω μία από αυτές τρέχει — αλλιώς ο πίνακας θα
+   * εμφανιζόταν μισός σαν να ήταν πλήρης.
+   */
+  const voicePending = summaryEnabled && summaryVoiceQuery.isPending;
+  const dataPending =
+    summaryEnabled &&
+    [summaryDataQuery, summaryOoklaQuery, summaryPing1000Query, summaryInteractivityQuery, summaryDnsQuery].some(
+      (query) => query.isPending,
+    );
+  const technologyMixPending = summaryEnabled && summaryTechnologyMixQuery.isPending;
+  const servingBandTechPending = summaryEnabled && summaryServingBandTechQuery.isPending;
+  const summarySourcesDone = summaryEnabled
+    ? summaryQueries.filter((query) => !query.isPending).length
+    : summaryQueries.length;
 
-      // Χωρίς toast σε αποτυχία, ίδιο σκεπτικό με το technology mix: το "Serving
-      // Band / Technology" block απλά δεν εμφανίζεται στο PS Data Stats.
-      if (servingBandTechResult.status === "fulfilled") {
-        setSummaryServingBandTechRows(servingBandTechResult.value);
-      } else {
-        console.error("Failed to fetch summary serving band/tech:", servingBandTechResult.reason);
-        setSummaryServingBandTechRows([]);
-      }
-
-      // Ίδιο σκεπτικό: χωρίς toast, το "Number of 900/1800 band Cells" απλά δείχνει "—".
-      if (cellBandCountResult.status === "fulfilled") {
-        setSummaryCellBandCountRows(cellBandCountResult.value);
-      } else {
-        console.error("Failed to fetch summary cell band count:", cellBandCountResult.reason);
-        setSummaryCellBandCountRows([]);
-      }
-
-      // Ίδιο σκεπτικό: χωρίς toast, τα "SRVCC attempts" απλά δείχνουν "—".
-      if (srvccResult.status === "fulfilled") {
-        setSummarySrvccRows(srvccResult.value);
-      } else {
-        console.error("Failed to fetch summary SRVCC:", srvccResult.reason);
-        setSummarySrvccRows([]);
-      }
-
-      // Ίδιο σκεπτικό: χωρίς toast, τα "Ookla DL/UL" sections απλά δεν εμφανίζονται.
-      if (ooklaResult.status === "fulfilled") {
-        setSummaryOoklaRows(ooklaResult.value);
-      } else {
-        console.error("Failed to fetch summary Ookla:", ooklaResult.reason);
-        setSummaryOoklaRows([]);
-      }
-
-      // Ίδιο σκεπτικό: χωρίς toast, το "Ping 1000" section απλά δεν εμφανίζεται.
-      if (ping1000Result.status === "fulfilled") {
-        setSummaryPing1000Rows(ping1000Result.value);
-      } else {
-        console.error("Failed to fetch summary Ping 1000:", ping1000Result.reason);
-        setSummaryPing1000Rows([]);
-      }
-
-      // Ίδιο σκεπτικό: χωρίς toast, το "Interactivity" section απλά δεν εμφανίζεται.
-      if (interactivityResult.status === "fulfilled") {
-        setSummaryInteractivityRows(interactivityResult.value);
-      } else {
-        console.error("Failed to fetch summary Interactivity:", interactivityResult.reason);
-        setSummaryInteractivityRows([]);
-      }
-    };
-
-    loadSummary();
-  }, [summaryDatabase, summaryCollections]);
+  // Memo σε primitives (όχι στο summaryQueries array, που αλλάζει ταυτότητα κάθε render)
+  // ώστε το prop να μένει σταθερό όσο δεν αλλάζει πραγματικά κάποιο loading state.
+  const summaryLoading = useMemo(
+    () => ({
+      voice: voicePending,
+      data: dataPending,
+      technologyMix: technologyMixPending,
+      servingBandTech: servingBandTechPending,
+      done: summarySourcesDone,
+      totalSources: summaryQueries.length,
+    }),
+    [voicePending, dataPending, technologyMixPending, servingBandTechPending, summarySourcesDone, summaryQueries.length],
+  );
 
   // "Ookla DL"/"Ookla UL" (mapOoklaRowsToDataCallRows), "Ping 1000"
-  // (mapPing1000RowsToDataCallRows) και "Interactivity" (mapInteractivityRowsToDataCallRows)
-  // μπαίνουν στο ίδιο DataCallRow[] που τροφοδοτεί το SummaryTab's buildDataSections —
-  // έτσι εμφανίζονται σαν ακόμα PS Data sections χωρίς να αγγίξουμε καθόλου το SummaryTab.
+  // (mapPing1000RowsToDataCallRows), "Interactivity" (mapInteractivityRowsToDataCallRows)
+  // και "DNS" (mapDnsRowsToDataCallRows) μπαίνουν στο ίδιο DataCallRow[] που τροφοδοτεί
+  // το SummaryTab's buildDataSections — έτσι εμφανίζονται σαν ακόμα PS Data sections
+  // χωρίς να αγγίξουμε καθόλου το SummaryTab.
   const summaryDataCallsWithOokla = useMemo(
     () => [
       ...summaryDataCallsRows,
       ...mapOoklaRowsToDataCallRows(summaryOoklaRows),
       ...mapPing1000RowsToDataCallRows(summaryPing1000Rows),
       ...mapInteractivityRowsToDataCallRows(summaryInteractivityRows),
+      ...mapDnsRowsToDataCallRows(summaryDnsRows),
     ],
-    [summaryDataCallsRows, summaryOoklaRows, summaryPing1000Rows, summaryInteractivityRows],
+    [summaryDataCallsRows, summaryOoklaRows, summaryPing1000Rows, summaryInteractivityRows, summaryDnsRows],
   );
 
   const handleRunQueries = async (queries: string[]) => {
@@ -1353,6 +1374,7 @@ const Index = () => {
               servingBandTechRows={summaryServingBandTechRows}
               cellBandCountRows={summaryCellBandCountRows}
               srvccRows={summarySrvccRows}
+              loading={summaryLoading}
               database={summaryDatabase}
               collections={summaryCollections}
               databases={databases}

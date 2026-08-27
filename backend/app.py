@@ -20,6 +20,7 @@
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 
 from routers import (
     antennas,
@@ -39,6 +40,12 @@ from routers import (
 )
 
 app = FastAPI()
+
+# Τα rows endpoints (/api/calls, /api/data_calls, /api/ping_1000, ...) στέλνουν
+# επαναλαμβανόμενο JSON — ίδια κλειδιά σε κάθε γραμμή — οπότε συμπιέζονται πολύ καλά.
+# ΠΡΙΝ το CORS: το Starlette χτίζει το τελευταίο-προστιθέμενο middleware ως εξωτερικότερο,
+# άρα έτσι το CORS μένει outermost και δεν συμπιέζονται τα preflight responses.
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 app.add_middleware(
     CORSMiddleware,

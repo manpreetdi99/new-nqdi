@@ -1,0 +1,985 @@
+<!doctype html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Πώς γεμίζει το Attachment C</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Saira+Condensed:wght@500;600;700&family=Source+Sans+3:wght@400;600&display=swap">
+
+<style>
+  :root {
+    --ground: #F1F4F5;
+    --surface: #FFFFFF;
+    --surface-2: #F7F9FA;
+    --ink: #14191E;
+    --ink-2: #3B4750;
+    --muted: #62707B;
+    --line: #D3DDE1;
+    --line-soft: #E4EBEE;
+    --voice: #9C5417;
+    --voice-soft: #C79A70;
+    --voice-wash: #F7EEE5;
+    --data: #0C6B74;
+    --data-soft: #74B0B6;
+    --data-wash: #E5F0F1;
+
+    --font-display: "Saira Condensed", "Arial Narrow", Arial, sans-serif;
+    --font-body: "Source Sans 3", -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: "IBM Plex Mono", ui-monospace, "SF Mono", Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ground: #0D1215;
+      --surface: #141A1E;
+      --surface-2: #192126;
+      --ink: #E3EAEE;
+      --ink-2: #B4C1C8;
+      --muted: #849099;
+      --line: #263137;
+      --line-soft: #1D262B;
+      --voice: #E0A063;
+      --voice-soft: #8A6034;
+      --voice-wash: #241B12;
+      --data: #45BCC6;
+      --data-soft: #2C6B71;
+      --data-wash: #0F2427;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0D1215;
+    --surface: #141A1E;
+    --surface-2: #192126;
+    --ink: #E3EAEE;
+    --ink-2: #B4C1C8;
+    --muted: #849099;
+    --line: #263137;
+    --line-soft: #1D262B;
+    --voice: #E0A063;
+    --voice-soft: #8A6034;
+    --voice-wash: #241B12;
+    --data: #45BCC6;
+    --data-soft: #2C6B71;
+    --data-wash: #0F2427;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    background: var(--ground);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 16px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .wrap {
+    max-width: 1320px;
+    margin: 0 auto;
+    padding: 40px 28px 96px;
+  }
+
+  /* ── Header ────────────────────────────────────────────── */
+
+  .masthead { display: flex; flex-direction: column; gap: 14px; }
+
+  .eyebrow {
+    font-family: var(--font-display);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.22em;
+    text-transform: uppercase;
+    color: var(--data);
+  }
+
+  h1 {
+    font-family: var(--font-display);
+    font-size: clamp(34px, 5vw, 54px);
+    font-weight: 700;
+    line-height: 1.02;
+    letter-spacing: -0.005em;
+    margin: 0;
+    text-wrap: balance;
+  }
+
+  .standfirst {
+    max-width: 64ch;
+    margin: 0;
+    font-size: 17px;
+    color: var(--ink-2);
+  }
+
+  .chips { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 6px; }
+
+  .chip {
+    display: inline-flex;
+    align-items: baseline;
+    gap: 7px;
+    padding: 5px 11px;
+    border: 1px solid var(--line);
+    border-radius: 4px;
+    background: var(--surface);
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  .chip b {
+    font-family: var(--font-mono);
+    font-weight: 500;
+    font-size: 13px;
+    color: var(--ink);
+    font-variant-numeric: tabular-nums;
+  }
+
+  .rule { height: 1px; background: var(--line); border: 0; margin: 40px 0 0; }
+
+  /* ── Sections ──────────────────────────────────────────── */
+
+  section { margin-top: 52px; }
+
+  h2 {
+    font-family: var(--font-display);
+    font-size: 27px;
+    font-weight: 600;
+    letter-spacing: 0.005em;
+    margin: 0 0 10px;
+    text-wrap: balance;
+  }
+
+  h2 .num {
+    font-family: var(--font-mono);
+    font-size: 14px;
+    font-weight: 500;
+    color: var(--data);
+    margin-right: 12px;
+    vertical-align: 2px;
+  }
+
+  h3 {
+    font-family: var(--font-display);
+    font-size: 19px;
+    font-weight: 600;
+    margin: 34px 0 8px;
+  }
+
+  p { max-width: 68ch; margin: 0 0 14px; }
+
+  .lede { color: var(--ink-2); }
+
+  code {
+    font-family: var(--font-mono);
+    font-size: 0.86em;
+    background: var(--surface-2);
+    border: 1px solid var(--line-soft);
+    border-radius: 3px;
+    padding: 1px 5px;
+    color: var(--ink);
+  }
+
+  strong { font-weight: 600; }
+
+  /* ── Figures ───────────────────────────────────────────── */
+
+  figure {
+    margin: 26px 0 0;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow: hidden;
+  }
+
+  .canvas { overflow-x: auto; padding: 22px 22px 6px; }
+
+  figure svg { display: block; max-width: 100%; height: auto; }
+
+  figcaption {
+    border-top: 1px solid var(--line-soft);
+    padding: 13px 22px;
+    font-size: 13.5px;
+    line-height: 1.55;
+    color: var(--muted);
+    background: var(--surface-2);
+  }
+
+  figcaption b { color: var(--ink-2); font-weight: 600; }
+
+  /* ── SVG element styling (page stylesheet, so it stays theme-token driven) ── */
+
+  .dg .node { fill: var(--surface); stroke: var(--line); stroke-width: 1; }
+  .dg .lane-v .node { stroke: var(--voice-soft); }
+  .dg .lane-d .node { stroke: var(--data-soft); }
+  .dg .dest { fill: var(--surface-2); stroke-width: 1.5; }
+  .dg .lane-v .dest { stroke: var(--voice); }
+  .dg .lane-d .dest { stroke: var(--data); }
+  .dg .wash-v { fill: var(--voice-wash); stroke: none; }
+  .dg .wash-d { fill: var(--data-wash); stroke: none; }
+
+  .dg .t-col {
+    font-family: var(--font-display); font-size: 12px; font-weight: 600;
+    letter-spacing: 0.16em; text-transform: uppercase; fill: var(--muted);
+  }
+  .dg .t-band {
+    font-family: var(--font-display); font-size: 14px; font-weight: 700;
+    letter-spacing: 0.2em; text-transform: uppercase;
+  }
+  .dg .lane-v .t-band, .dg .t-band.v { fill: var(--voice); }
+  .dg .lane-d .t-band, .dg .t-band.d { fill: var(--data); }
+  .dg .t-node { font-family: var(--font-mono); font-size: 11.5px; font-weight: 500; fill: var(--ink); }
+  .dg .t-dest { font-family: var(--font-display); font-size: 15px; font-weight: 700; letter-spacing: 0.02em; fill: var(--ink); }
+  .dg .t-sub { font-family: var(--font-body); font-size: 11px; fill: var(--muted); }
+  .dg .t-sub.em { fill: var(--ink-2); font-weight: 600; }
+  .dg .t-edge { font-family: var(--font-body); font-size: 11px; font-weight: 600; }
+  .dg .t-edge.v { fill: var(--voice); }
+  .dg .t-edge.d { fill: var(--data); }
+  .dg .t-mono { font-family: var(--font-mono); font-size: 10.5px; fill: var(--muted); }
+
+  .dg .hair { stroke: var(--line); stroke-width: 1; }
+  .dg .hair-soft { stroke: var(--line-soft); stroke-width: 1; }
+  .dg .edge { fill: none; stroke: var(--muted); stroke-width: 1.2; }
+  .dg .edge-v { fill: none; stroke: var(--voice); stroke-width: 1.4; }
+  .dg .edge-d { fill: none; stroke: var(--data); stroke-width: 1.4; }
+  .dg .edge-drop { fill: none; stroke: var(--muted); stroke-width: 1.2; stroke-dasharray: 3 3; }
+  .dg .dot-v { fill: var(--voice); }
+  .dg .dot-d { fill: var(--data); }
+  .dg .head-n { fill: var(--muted); }
+  .dg .head-v { fill: var(--voice); }
+  .dg .head-d { fill: var(--data); }
+  .dg .bar-v { fill: var(--voice); }
+  .dg .bar-d { fill: var(--data); }
+  .dg .bar-idle { fill: var(--line); }
+
+  /* ── Table ─────────────────────────────────────────────── */
+
+  .tablewrap {
+    margin-top: 26px;
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    overflow-x: auto;
+    background: var(--surface);
+  }
+
+  table { border-collapse: collapse; width: 100%; min-width: 940px; font-size: 13.5px; }
+
+  thead th {
+    text-align: left;
+    font-family: var(--font-display);
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface-2);
+    padding: 11px 14px;
+    border-bottom: 1px solid var(--line);
+    white-space: nowrap;
+  }
+
+  tbody td { padding: 10px 14px; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  tbody tr:last-child td { border-bottom: 0; }
+  tbody tr.lane-head td {
+    background: var(--surface-2);
+    font-family: var(--font-display);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.18em;
+    text-transform: uppercase;
+    padding: 8px 14px;
+  }
+  tbody tr.lane-head.v td { color: var(--voice); }
+  tbody tr.lane-head.d td { color: var(--data); }
+
+  td.ep { font-family: var(--font-mono); font-size: 12.5px; white-space: nowrap; color: var(--ink); }
+  td.src { font-family: var(--font-mono); font-size: 11.5px; color: var(--muted); }
+  td.grain { white-space: nowrap; }
+
+  .tag {
+    display: inline-block;
+    padding: 1px 7px;
+    border-radius: 3px;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    white-space: nowrap;
+  }
+  .tag.raw { background: var(--voice-wash); color: var(--voice); border: 1px solid var(--voice-soft); }
+  .tag.agg { background: var(--data-wash); color: var(--data); border: 1px solid var(--data-soft); }
+
+  /* ── Notes ─────────────────────────────────────────────── */
+
+  .notes { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(268px, 1fr)); margin-top: 24px; }
+
+  .note {
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--data);
+    border-radius: 5px;
+    padding: 14px 16px;
+  }
+
+  .note.v { border-left-color: var(--voice); }
+
+  .note h4 {
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-weight: 600;
+    margin: 0 0 5px;
+  }
+
+  .note p { font-size: 13.5px; margin: 0; color: var(--muted); max-width: none; }
+
+  footer {
+    margin-top: 64px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    font-size: 12.5px;
+    color: var(--muted);
+  }
+
+  footer code { font-size: 12px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    * { animation: none !important; transition: none !important; }
+  }
+</style>
+
+</head>
+<body>
+<div class="wrap">
+
+  <header class="masthead">
+    <div class="eyebrow">A-Level · Summary tab</div>
+    <h1>Πώς γεμίζει το Attachment C</h1>
+    <p class="standfirst">
+      Ο πίνακας δεν διαβάζει ποτέ μία πηγή. Δέκα ανεξάρτητα endpoints χτυπάνε το SQL Server,
+      γυρίζουν δέκα διαφορετικά σχήματα γραμμών, και μία σειρά από builders στο
+      <code>attachmentC.ts</code> τα συμπτύσσει στους τρεις πίνακες της αναφοράς.
+    </p>
+    <div class="chips">
+      <span class="chip">Πηγές <b>10</b></span>
+      <span class="chip">Πίνακες <b>3</b></span>
+      <span class="chip">PS Data sections <b>~23</b></span>
+      <span class="chip">Ομάδες <b>Ε1–Ε5</b></span>
+    </div>
+  </header>
+
+  <hr class="rule">
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section>
+    <h2><span class="num">01</span>Η διαδρομή, από το SQL μέχρι τον πίνακα</h2>
+    <p class="lede">
+      Δύο λωρίδες, με ξεχωριστό προορισμό η καθεμία. Η <strong>Voice</strong> λωρίδα ταΐζει τους δύο
+      πίνακες κλήσεων· η <strong>PS Data</strong> λωρίδα καταλήγει σε έναν. Η σειρά των γραμμών μέσα
+      σε κάθε λωρίδα δεν είναι τυχαία — αντικατοπτρίζει ποιον πίνακα ταΐζει η καθεμία.
+    </p>
+
+    <figure>
+      <div class="canvas">
+        <svg class="dg" viewBox="0 0 1280 748" role="img"
+             aria-label="Διάγραμμα ροής: δέκα API endpoints γυρίζουν δέκα τύπους γραμμών, που περνάνε από builders και καταλήγουν στους τρεις πίνακες του Attachment C. Η λωρίδα Voice ταΐζει τους πίνακες 20 και 21, η λωρίδα PS Data τον πίνακα 22.">
+          <defs>
+            <marker id="hN" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon class="head-n" points="0,1.5 10,5 0,8.5"></polygon>
+            </marker>
+            <marker id="hV" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon class="head-v" points="0,1.5 10,5 0,8.5"></polygon>
+            </marker>
+            <marker id="hD" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon class="head-d" points="0,1.5 10,5 0,8.5"></polygon>
+            </marker>
+          </defs>
+
+          <!-- column headers -->
+          <text class="t-col" x="24" y="26">1 · Endpoint</text>
+          <text class="t-col" x="306" y="26">2 · Γραμμές που γυρνάει</text>
+          <text class="t-col" x="538" y="26">3 · Μετασχηματισμός</text>
+          <text class="t-col" x="856" y="26">4 · Πού προσγειώνεται</text>
+          <line class="hair" x1="24" y1="40" x2="1256" y2="40"></line>
+
+          <!-- ══ VOICE LANE ══ -->
+          <g class="lane-v">
+            <text class="t-band" x="24" y="68">Voice</text>
+            <line class="hair-soft" x1="96" y1="63" x2="1256" y2="63"></line>
+
+            <!-- r1 cell_band_count -->
+            <rect class="node" x="24" y="84" width="250" height="44" rx="5"></rect>
+            <text class="t-node" x="38" y="103">/api/cell_band_count</text>
+            <text class="t-sub" x="38" y="118">NetworkInfo · NetworkIdRelation</text>
+            <path class="edge-v" d="M274 106 H300" marker-end="url(#hV)"></path>
+            <rect class="node" x="306" y="84" width="200" height="44" rx="5"></rect>
+            <text class="t-node" x="320" y="103">CellBandCountRow[]</text>
+            <text class="t-sub" x="320" y="118">συγκεντρωτικό</text>
+            <path class="edge-v" d="M506 106 H532" marker-end="url(#hV)"></path>
+            <rect class="node" x="538" y="84" width="270" height="44" rx="5"></rect>
+            <text class="t-node" x="552" y="103">buildCellBandCountTable()</text>
+            <text class="t-sub em" x="552" y="118">→ μόνο στον GSM πίνακα</text>
+            <path class="edge-v" d="M808 106 H850" marker-end="url(#hV)"></path>
+
+            <!-- r2 calls -->
+            <rect class="node" x="24" y="140" width="250" height="44" rx="5"></rect>
+            <text class="t-node" x="38" y="159">/api/calls</text>
+            <text class="t-sub" x="38" y="174">CallAnalysis · ResultsLQ08Avg</text>
+            <path class="edge-v" d="M274 162 H300" marker-end="url(#hV)"></path>
+            <rect class="node" x="306" y="140" width="200" height="44" rx="5"></rect>
+            <text class="t-node" x="320" y="159">AllCallsRow[]</text>
+            <text class="t-sub" x="320" y="174">1 γραμμή / κλήση · ~50 πεδία</text>
+            <path class="edge-v" d="M506 162 H532" marker-end="url(#hV)"></path>
+            <rect class="node" x="538" y="140" width="270" height="44" rx="5"></rect>
+            <text class="t-node" x="552" y="159">buildVoiceStats / buildVoiceTable</text>
+            <text class="t-sub" x="552" y="174">split ανά mode &amp; operator</text>
+            <path class="edge-v" d="M808 162 H826"></path>
+
+            <!-- r3 technology_mix -->
+            <rect class="node" x="24" y="196" width="250" height="44" rx="5"></rect>
+            <text class="t-node" x="38" y="215">/api/technology_mix</text>
+            <text class="t-sub" x="38" y="230">Position · NetworkInfo</text>
+            <path class="edge-v" d="M274 218 H300" marker-end="url(#hV)"></path>
+            <rect class="node" x="306" y="196" width="200" height="44" rx="5"></rect>
+            <text class="t-node" x="320" y="215">TechnologyMixRow[]</text>
+            <text class="t-sub" x="320" y="230">συγκεντρωτικό</text>
+            <path class="edge-v" d="M506 218 H532" marker-end="url(#hV)"></path>
+            <rect class="node" x="538" y="196" width="270" height="44" rx="5"></rect>
+            <text class="t-node" x="552" y="215">buildTechnologyMixTable()</text>
+            <text class="t-sub" x="552" y="230">γραμμή «Technology mix»</text>
+            <path class="edge-v" d="M808 218 H826"></path>
+
+            <!-- shared junction for r2 + r3 -->
+            <path class="edge-v" d="M826 162 V218"></path>
+            <circle class="dot-v" cx="826" cy="190" r="3.5"></circle>
+            <path class="edge-v" d="M826 190 H842 V134 H850" marker-end="url(#hV)"></path>
+            <path class="edge-v" d="M842 190 V246 H850" marker-end="url(#hV)"></path>
+
+            <!-- r4 srvcc -->
+            <rect class="node" x="24" y="252" width="250" height="44" rx="5"></rect>
+            <text class="t-node" x="38" y="271">/api/srvcc</text>
+            <text class="t-sub" x="38" y="286">ResultsKPI 38040 / 38050</text>
+            <path class="edge-v" d="M274 274 H300" marker-end="url(#hV)"></path>
+            <rect class="node" x="306" y="252" width="200" height="44" rx="5"></rect>
+            <text class="t-node" x="320" y="271">SrvccRow[]</text>
+            <text class="t-sub" x="320" y="286">συγκεντρωτικό</text>
+            <path class="edge-v" d="M506 274 H532" marker-end="url(#hV)"></path>
+            <rect class="node" x="538" y="252" width="270" height="44" rx="5"></rect>
+            <text class="t-node" x="552" y="271">buildSrvccTable()</text>
+            <text class="t-sub em" x="552" y="286">→ μόνο στον FREE πίνακα</text>
+            <path class="edge-v" d="M808 274 H850" marker-end="url(#hV)"></path>
+
+            <!-- destinations -->
+            <rect class="dest" x="856" y="84" width="400" height="72" rx="6"></rect>
+            <text class="t-dest" x="874" y="112">Table 20 · GSM Call Stats</text>
+            <text class="t-sub" x="874" y="131">buildVoiceTable(rows, "GSM")</text>
+            <text class="t-sub" x="874" y="147">KPI γραμμές × στήλη ανά operator + Total</text>
+
+            <rect class="dest" x="856" y="204" width="400" height="72" rx="6"></rect>
+            <text class="t-dest" x="874" y="232">Table 21 · Free (2G-3G-LTE)</text>
+            <text class="t-sub" x="874" y="251">buildVoiceTable(rows, "FREE")</text>
+            <text class="t-sub" x="874" y="267">+ VoLTE / CS split, + SRVCC γραμμές</text>
+          </g>
+
+          <!-- ══ PS DATA LANE ══ -->
+          <g class="lane-d">
+            <text class="t-band" x="24" y="334">PS Data</text>
+            <line class="hair-soft" x1="118" y1="329" x2="1256" y2="329"></line>
+
+            <!-- r5 data_calls -->
+            <rect class="node" x="24" y="348" width="250" height="44" rx="5"></rect>
+            <text class="t-node" x="38" y="367">/api/data_calls</text>
+            <text class="t-sub" x="38" y="382">CDRCombined (view)</text>
+            <path class="edge-d" d="M274 370 H300" marker-end="url(#hD)"></path>
+            <rect class="node" x="306" y="348" width="200" height="44" rx="5"></rect>
+            <text class="t-node" x="320" y="367">DataCallRow[]</text>
+            <text class="t-sub" x="320" y="382">1 γραμμή / test</text>
+            <path class="edge-d" d="M506 370 H532" marker-end="url(#hD)"></path>
+            <rect class="node" x="538" y="348" width="270" height="44" rx="5"></rect>
+            <text class="t-node" x="552" y="367">— (ήδη σε σχήμα DataCallRow)</text>
+            <text class="t-sub" x="552" y="382">περνάει αυτούσιο</text>
+            <path class="edge-d" d="M808 370 H826"></path>
+
+            <!-- r6 ookla -->
+            <rect class="node" x="24" y="404" width="250" height="44" rx="5"></rect>
+            <text class="t-node" x="38" y="423">/api/ookla</text>
+            <text class="t-sub" x="38" y="438">ResultsKPI · ResultsAppAction*</text>
+            <path class="edge-d" d="M274 426 H300" marker-end="url(#hD)"></path>
+            <rect class="node" x="306" y="404" width="200" height="44" rx="5"></rect>
+            <text class="t-node" x="320" y="423">OoklaRow[]</text>
+            <text class="t-sub" x="320" y="438">1 γραμμή / action</text>
+            <path class="edge-d" d="M506 426 H532" marker-end="url(#hD)"></path>
+            <rect class="node" x="538" y="404" width="270" height="44" rx="5"></rect>
+            <text class="t-node" x="552" y="423">mapOoklaRowsToDataCallRows()</text>
+            <text class="t-sub" x="552" y="438">DL / UL από το actionName</text>
+            <path class="edge-d" d="M808 426 H826"></path>
+
+            <!-- r7 ping_1000 -->
+            <rect class="node" x="24" y="460" width="250" height="44" rx="5"></rect>
+            <text class="t-node" x="38" y="479">/api/ping_1000</text>
+            <text class="t-sub" x="38" y="494">ResultsPingTest (PacketSize 1000)</text>
+            <path class="edge-d" d="M274 482 H300" marker-end="url(#hD)"></path>
+            <rect class="node" x="306" y="460" width="200" height="44" rx="5"></rect>
+            <text class="t-node" x="320" y="479">PingRow[]</text>
+            <text class="t-sub em" x="320" y="494">1 γραμμή / ICMP πακέτο</text>
+            <path class="edge-d" d="M506 482 H532" marker-end="url(#hD)"></path>
+            <rect class="node" x="538" y="460" width="270" height="44" rx="5"></rect>
+            <text class="t-node" x="552" y="479">mapPing1000RowsToDataCallRows()</text>
+            <text class="t-sub" x="552" y="494">RTT μόνο στα επιτυχημένα</text>
+            <path class="edge-d" d="M808 482 H826"></path>
+
+            <!-- r8 interactivity -->
+            <rect class="node" x="24" y="516" width="250" height="44" rx="5"></rect>
+            <text class="t-node" x="38" y="535">/api/interactivity</text>
+            <text class="t-sub" x="38" y="550">FactInteractivity · DmnInteractivity</text>
+            <path class="edge-d" d="M274 538 H300" marker-end="url(#hD)"></path>
+            <rect class="node" x="306" y="516" width="200" height="44" rx="5"></rect>
+            <text class="t-node" x="320" y="535">InteractivityRow[]</text>
+            <text class="t-sub" x="320" y="550">1 γραμμή / test</text>
+            <path class="edge-d" d="M506 538 H532" marker-end="url(#hD)"></path>
+            <rect class="node" x="538" y="516" width="270" height="44" rx="5"></rect>
+            <text class="t-node" x="552" y="535">mapInteractivityRows…()</text>
+            <text class="t-sub" x="552" y="550">5 eGaming μετρικές</text>
+            <path class="edge-d" d="M808 538 H826"></path>
+
+            <!-- r9 dns -->
+            <rect class="node" x="24" y="572" width="250" height="44" rx="5"></rect>
+            <text class="t-node" x="38" y="591">/api/dns</text>
+            <text class="t-sub" x="38" y="606">vResultsKPI (KPIID 31100)</text>
+            <path class="edge-d" d="M274 594 H300" marker-end="url(#hD)"></path>
+            <rect class="node" x="306" y="572" width="200" height="44" rx="5"></rect>
+            <text class="t-node" x="320" y="591">DnsRow[]</text>
+            <text class="t-sub" x="320" y="606">συγκεντρωτικό (count + avg)</text>
+            <path class="edge-d" d="M506 594 H532" marker-end="url(#hD)"></path>
+            <rect class="node" x="538" y="572" width="270" height="44" rx="5"></rect>
+            <text class="t-node" x="552" y="591">mapDnsRowsToDataCallRows()</text>
+            <text class="t-sub" x="552" y="606">ξεδιπλώνει count → count γραμμές</text>
+            <path class="edge-d" d="M808 594 H826"></path>
+
+            <!-- collector bus -->
+            <path class="edge-d" d="M826 370 V594"></path>
+            <circle class="dot-d" cx="826" cy="482" r="3.5"></circle>
+            <path class="edge-d" d="M826 482 H850" marker-end="url(#hD)"></path>
+            <text class="t-edge d" x="826" y="634" text-anchor="middle">5 σχήματα → ένα DataCallRow[]</text>
+
+            <rect class="dest" x="856" y="446" width="400" height="72" rx="6"></rect>
+            <text class="t-dest" x="874" y="474">Table 22 · PS Data Stats</text>
+            <text class="t-sub" x="874" y="493">buildDataSections(DataCallRow[])</text>
+            <text class="t-sub" x="874" y="509">~23 sections, ομαδοποιημένα Ε1–Ε5</text>
+
+            <!-- r10 serving_band_tech -->
+            <rect class="node" x="24" y="648" width="250" height="44" rx="5"></rect>
+            <text class="t-node" x="38" y="667">/api/serving_band_tech</text>
+            <text class="t-sub" x="38" y="682">Position · FactNR5GCellInfo</text>
+            <path class="edge-d" d="M274 670 H300" marker-end="url(#hD)"></path>
+            <rect class="node" x="306" y="648" width="200" height="44" rx="5"></rect>
+            <text class="t-node" x="320" y="667">ServingBandTechRow[]</text>
+            <text class="t-sub" x="320" y="682">συγκεντρωτικό</text>
+            <path class="edge-d" d="M506 670 H532" marker-end="url(#hD)"></path>
+            <rect class="node" x="538" y="648" width="270" height="44" rx="5"></rect>
+            <text class="t-node" x="552" y="667">buildServingBandTechTable()</text>
+            <text class="t-sub" x="552" y="682">BAND % και TECH % ξεχωριστά</text>
+            <path class="edge-d" d="M808 670 H850" marker-end="url(#hD)"></path>
+
+            <rect class="dest" x="856" y="644" width="400" height="52" rx="6"></rect>
+            <text class="t-dest" x="874" y="668">Serving Band / Technology πίτες</text>
+            <text class="t-sub" x="874" y="685">στην κορυφή της κάρτας του Table 22</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>
+        Κάθε βέλος διαβάζεται με τις κεφαλίδες των στηλών: <b>endpoint → γραμμές → μετασχηματισμός → προορισμός</b>.
+        Το ενδιαφέρον σημείο είναι η σύγκλιση στη λωρίδα PS Data: πέντε endpoints γυρίζουν πέντε εντελώς
+        διαφορετικά σχήματα, και τέσσερις <b>map…RowsToDataCallRows</b> adapters τα κανονικοποιούν σε ένα
+        ενιαίο <b>DataCallRow[]</b> — γι' αυτό ο <b>buildDataSections</b> βλέπει μία μόνο είσοδο.
+        Στη λωρίδα Voice, δύο πηγές τροφοδοτούν και τους δύο πίνακες, ενώ οι άλλες δύο είναι αποκλειστικές:
+        τα cells μόνο στον GSM, τα SRVCC μόνο στον FREE.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section>
+    <h2><span class="num">02</span>Πώς μια γραμμή βρίσκει το section της</h2>
+    <p class="lede">
+      Μέσα στο <code>buildDataSections</code>, κάθε <code>DataCallRow</code> περνάει από τέσσερα βήματα
+      πριν καταλήξει σε γραμμή του πίνακα. Το ίδιο raw <code>testType</code> μπορεί να φτάσει σε τρεις
+      μορφές — γυμνό, τυλιγμένο σε <code>Browser (…)</code>, ή σαν πλήρες URL — και τα βήματα είναι
+      φτιαγμένα ανεκτικά ώστε να καταλήγουν όλα στο ίδιο section.
+    </p>
+
+    <figure>
+      <div class="canvas">
+        <svg class="dg" viewBox="0 0 1180 172" role="img"
+             aria-label="Αλυσίδα τεσσάρων βημάτων: μια γραμμή DataCallRow περνάει από sectionLabel, isExcludedSection, sectionGroupOf και sectionRank για να βρει τη θέση της στον πίνακα. Οι BIDIRECTIONAL γραμμές απορρίπτονται στο δεύτερο βήμα.">
+          <defs>
+            <marker id="h2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <polygon class="head-d" points="0,1.5 10,5 0,8.5"></polygon>
+            </marker>
+            <marker id="h2n" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <polygon class="head-n" points="0,1.5 10,5 0,8.5"></polygon>
+            </marker>
+          </defs>
+
+          <g class="lane-d">
+            <rect class="node" x="16" y="30" width="182" height="52" rx="5"></rect>
+            <text class="t-node" x="30" y="53">DataCallRow</text>
+            <text class="t-sub" x="30" y="70">testType · direction</text>
+            <path class="edge-d" d="M198 56 H230" marker-end="url(#h2)"></path>
+
+            <rect class="node" x="236" y="30" width="238" height="52" rx="5"></rect>
+            <text class="t-node" x="250" y="53">sectionLabel(row)</text>
+            <text class="t-sub" x="250" y="70">"Capacity" + "DL" → "Capacity DL 10GB"</text>
+            <path class="edge-d" d="M474 56 H506" marker-end="url(#h2)"></path>
+
+            <rect class="node" x="512" y="30" width="214" height="52" rx="5"></rect>
+            <text class="t-node" x="526" y="53">isExcludedSection()</text>
+            <text class="t-sub" x="526" y="70">κόβει τα *BIDIRECTIONAL</text>
+            <path class="edge-d" d="M726 56 H758" marker-end="url(#h2)"></path>
+
+            <rect class="node" x="764" y="30" width="196" height="52" rx="5"></rect>
+            <text class="t-node" x="778" y="53">sectionGroupOf()</text>
+            <text class="t-sub" x="778" y="70">→ "Ε2 · Latency…" ή ""</text>
+            <path class="edge-d" d="M960 56 H992" marker-end="url(#h2)"></path>
+
+            <rect class="node" x="998" y="30" width="166" height="52" rx="5"></rect>
+            <text class="t-node" x="1012" y="53">sectionRank()</text>
+            <text class="t-sub" x="1012" y="70">θέση μέσα στο group</text>
+
+            <!-- drop-out -->
+            <path class="edge-drop" d="M619 82 V116" marker-end="url(#h2n)"></path>
+            <text class="t-mono" x="631" y="120">απορρίπτεται εντελώς</text>
+
+            <!-- unmatched note -->
+            <path class="edge-drop" d="M862 82 V116" marker-end="url(#h2n)"></path>
+            <text class="t-mono" x="874" y="120">"" → «Λοιπά tests», δεν χάνεται</text>
+          </g>
+        </svg>
+      </div>
+      <figcaption>
+        Δύο διαφυγές, με διαφορετική σημασία. Το <b>isExcludedSection</b> πετάει οριστικά τα
+        <code>*BIDIRECTIONAL</code> tests — δεν είναι ζητούμενα του Attachment C. Ένα άγνωστο test type
+        όμως δεν πετιέται: παίρνει κενό group και προσγειώνεται στο <b>UNMATCHED_RANK</b>, ώστε ένα καινούριο
+        test να εμφανιστεί αντί να εξαφανιστεί σιωπηλά.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section>
+    <h2><span class="num">03</span>Full ή Compact — πόσο γεμίζει</h2>
+    <p class="lede">
+      Το ίδιο <code>DataTestSection[]</code> ζωγραφίζεται με δύο τρόπους. Το κουμπί
+      <strong>Compact</strong> δεν ξαναδιαβάζει τίποτα: τρέχει το
+      <code>buildDataGroupSections</code> πάνω στο ήδη υπολογισμένο αποτέλεσμα.
+    </p>
+
+    <figure>
+      <div class="canvas">
+        <svg class="dg" viewBox="0 0 1140 452" role="img"
+             aria-label="Σύγκριση Full και Compact προβολής. Στο Full κάθε test type έχει δικό του section με έξι γραμμές. Στο Compact τα sections κάθε ομάδας συγχωνεύονται σε ένα μπλοκ με πέντε γραμμές και έναν σταθμισμένο μέσο όρο.">
+          <defs>
+            <marker id="h3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+              <polygon class="head-d" points="0,1.5 10,5 0,8.5"></polygon>
+            </marker>
+          </defs>
+
+          <!-- FULL -->
+          <text class="t-band d" x="16" y="22">Full</text>
+          <rect class="node" x="16" y="34" width="424" height="398" rx="6"></rect>
+          <text class="t-sub em" x="34" y="60">Ε1 · Bulk throughput</text>
+          <line class="hair-soft" x1="34" y1="70" x2="422" y2="70"></line>
+
+          <g class="lane-d">
+            <rect class="wash-d" x="34" y="80" width="388" height="28" rx="4"></rect>
+            <text class="t-node" x="46" y="99">Capacity DL 10GB</text>
+            <text class="t-mono" x="410" y="99" text-anchor="end">6 γραμμές</text>
+
+            <rect class="wash-d" x="34" y="114" width="388" height="28" rx="4"></rect>
+            <text class="t-node" x="46" y="133">Capacity UL 1GB</text>
+            <text class="t-mono" x="410" y="133" text-anchor="end">6 γραμμές</text>
+
+            <rect class="wash-d" x="34" y="148" width="388" height="28" rx="4"></rect>
+            <text class="t-node" x="46" y="167">HTTP Transfer (DL) 10MB</text>
+            <text class="t-mono" x="410" y="167" text-anchor="end">6 γραμμές</text>
+
+            <rect class="wash-d" x="34" y="182" width="388" height="28" rx="4"></rect>
+            <text class="t-node" x="46" y="201">HTTP Transfer (UL) 5MB</text>
+            <text class="t-mono" x="410" y="201" text-anchor="end">6 γραμμές</text>
+
+            <rect class="wash-d" x="34" y="216" width="388" height="28" rx="4"></rect>
+            <text class="t-node" x="46" y="235">Ookla DL</text>
+            <text class="t-mono" x="410" y="235" text-anchor="end">6 γραμμές</text>
+
+            <rect class="wash-d" x="34" y="250" width="388" height="28" rx="4"></rect>
+            <text class="t-node" x="46" y="269">Ookla UL</text>
+            <text class="t-mono" x="410" y="269" text-anchor="end">6 γραμμές</text>
+          </g>
+
+          <text class="t-sub" x="34" y="300">Ε2 · Latency / Responsiveness</text>
+          <text class="t-sub" x="34" y="318">Ε3 · Browser engines</text>
+          <text class="t-sub" x="34" y="336">Ε4 · HTTPS sites</text>
+          <text class="t-sub" x="34" y="354">Ε5 · Video streaming</text>
+          <line class="hair-soft" x1="34" y1="374" x2="422" y2="374"></line>
+          <text class="t-edge d" x="34" y="396">~23 sections × ~6 γραμμές</text>
+          <text class="t-sub" x="34" y="414">κάθε test type με τη δική του μετρική</text>
+
+          <!-- transform arrow -->
+          <path class="edge-d" d="M448 216 H688" marker-end="url(#h3)"></path>
+          <text class="t-node" x="568" y="200" text-anchor="middle">buildDataGroupSections()</text>
+          <text class="t-mono" x="568" y="240" text-anchor="middle">Σ(value × samples)</text>
+          <line class="hair" x1="500" y1="248" x2="636" y2="248"></line>
+          <text class="t-mono" x="568" y="266" text-anchor="middle">Σ samples</text>
+          <text class="t-sub" x="568" y="292" text-anchor="middle">μόνο τα sections με το</text>
+          <text class="t-sub" x="568" y="308" text-anchor="middle">επικρατέστερο unit του group</text>
+
+          <!-- COMPACT -->
+          <text class="t-band d" x="700" y="22">Compact</text>
+          <g class="lane-d">
+            <rect class="dest" x="700" y="34" width="424" height="398" rx="6"></rect>
+            <rect class="wash-d" x="718" y="52" width="388" height="30" rx="4"></rect>
+            <text class="t-node" x="730" y="72">Ε1 · Bulk throughput</text>
+            <text class="t-mono" x="1094" y="72" text-anchor="end">5 γραμμές</text>
+
+            <text class="t-sub" x="742" y="106">Test Success Rate (%)</text>
+            <text class="t-mono" x="1094" y="106" text-anchor="end">98.2%</text>
+            <text class="t-sub" x="742" y="130">Total Tests</text>
+            <text class="t-mono" x="1094" y="130" text-anchor="end">412</text>
+            <text class="t-sub" x="742" y="154">Successful tests</text>
+            <text class="t-mono" x="1094" y="154" text-anchor="end">405</text>
+            <text class="t-sub" x="742" y="178">Failed Tests</text>
+            <text class="t-mono" x="1094" y="178" text-anchor="end">7</text>
+            <text class="t-sub em" x="742" y="202">Avg throughput (Mbps)</text>
+            <text class="t-node" x="1094" y="202" text-anchor="end">142.6</text>
+            <line class="hair-soft" x1="718" y1="218" x2="1106" y2="218"></line>
+
+            <rect class="wash-d" x="718" y="232" width="388" height="26" rx="4"></rect>
+            <text class="t-node" x="730" y="250">Ε2 · Latency / Responsiveness</text>
+            <text class="t-mono" x="1094" y="250" text-anchor="end">Avg latency · ms</text>
+
+            <rect class="wash-d" x="718" y="264" width="388" height="26" rx="4"></rect>
+            <text class="t-node" x="730" y="282">Ε3 · Browser engines</text>
+            <text class="t-mono" x="1094" y="282" text-anchor="end">Avg throughput · Mbps</text>
+
+            <rect class="wash-d" x="718" y="296" width="388" height="26" rx="4"></rect>
+            <text class="t-node" x="730" y="314">Ε4 · HTTPS sites</text>
+            <text class="t-mono" x="1094" y="314" text-anchor="end">Avg throughput · Mbps</text>
+
+            <rect class="wash-d" x="718" y="328" width="388" height="26" rx="4"></rect>
+            <text class="t-node" x="730" y="346">Ε5 · Video streaming</text>
+            <text class="t-mono" x="1094" y="346" text-anchor="end">Avg video MOS</text>
+
+            <rect class="wash-d" x="718" y="360" width="388" height="26" rx="4"></rect>
+            <text class="t-node" x="730" y="378">Λοιπά tests</text>
+            <text class="t-mono" x="1094" y="378" text-anchor="end">ό,τι δεν ταίριαξε</text>
+          </g>
+          <line class="hair-soft" x1="718" y1="396" x2="1106" y2="396"></line>
+          <text class="t-edge d" x="718" y="418">6 μπλοκ × 5 γραμμές</text>
+        </svg>
+      </div>
+      <figcaption>
+        Ο μέσος όρος είναι <b>σταθμισμένος με τα samples</b>, όχι μέσος-των-μέσων: κάθε τιμή section είναι
+        ήδη απλός μέσος πάνω σε <code>samples</code> μετρήσεις, οπότε η στάθμιση επαναφέρει το σωστό
+        συνολικό avg. Ένα section με ασύμβατο unit — π.χ. το Interactivity στο Ε2, που μετράει kbps και
+        όχι ms — <b>μετράει κανονικά στα Total / Successful / Failed αλλά μένει έξω από τον μέσο όρο</b>.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section>
+    <h2><span class="num">04</span>Πότε γεμίζει: μία-μία, όχι όλες μαζί</h2>
+    <p class="lede">
+      Οι δέκα πηγές είναι ανεξάρτητες, αλλά μέχρι πρόσφατα ο πίνακας τις περίμενε όλες.
+      Με το <code>useQueries</code> κάθε πηγή βάφει το δικό της κομμάτι μόλις προσγειωθεί.
+    </p>
+
+    <figure>
+      <div class="canvas">
+        <svg class="dg" viewBox="0 0 1120 336" role="img"
+             aria-label="Σύγκριση χρονισμού. Πριν, και οι δέκα κλήσεις έτρεχαν παράλληλα αλλά η οθόνη ζωγραφιζόταν μόνο μία φορά, στο τέλος της πιο αργής. Μετά, κάθε κλήση ζωγραφίζει το δικό της κομμάτι μόλις τελειώσει.">
+          <defs>
+            <marker id="h4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+              <polygon class="head-n" points="0,1.5 10,5 0,8.5"></polygon>
+            </marker>
+          </defs>
+
+          <!-- ΠΡΙΝ -->
+          <text class="t-band v" x="16" y="22">Πριν · Promise.allSettled</text>
+
+          <text class="t-mono" x="16" y="52">/api/srvcc</text>
+          <rect class="bar-idle" x="196" y="42" width="58" height="12" rx="3"></rect>
+          <text class="t-mono" x="16" y="76">/api/dns</text>
+          <rect class="bar-idle" x="196" y="66" width="86" height="12" rx="3"></rect>
+          <text class="t-mono" x="16" y="100">/api/technology_mix</text>
+          <rect class="bar-idle" x="196" y="90" width="248" height="12" rx="3"></rect>
+          <text class="t-mono" x="16" y="124">/api/calls</text>
+          <rect class="bar-idle" x="196" y="114" width="512" height="12" rx="3"></rect>
+          <text class="t-mono" x="16" y="148">/api/ping_1000</text>
+          <rect class="bar-idle" x="196" y="138" width="694" height="12" rx="3"></rect>
+
+          <line class="hair" x1="196" y1="34" x2="196" y2="168"></line>
+          <path class="edge-v" d="M890 34 V168"></path>
+          <text class="t-edge v" x="900" y="112">ένα paint, στο τέλος</text>
+          <text class="t-sub" x="900" y="128">ώσπου τότε: άδειο, χωρίς loading</text>
+
+          <!-- ΜΕΤΑ -->
+          <text class="t-band d" x="16" y="212">Μετά · useQueries</text>
+
+          <text class="t-mono" x="16" y="242">/api/srvcc</text>
+          <rect class="bar-d" x="196" y="232" width="58" height="12" rx="3"></rect>
+          <circle class="dot-d" cx="262" cy="238" r="4"></circle>
+          <text class="t-mono" x="16" y="266">/api/dns</text>
+          <rect class="bar-d" x="196" y="256" width="86" height="12" rx="3"></rect>
+          <circle class="dot-d" cx="290" cy="262" r="4"></circle>
+          <text class="t-mono" x="16" y="290">/api/technology_mix</text>
+          <rect class="bar-d" x="196" y="280" width="248" height="12" rx="3"></rect>
+          <circle class="dot-d" cx="452" cy="286" r="4"></circle>
+          <text class="t-mono" x="16" y="314">/api/calls</text>
+          <rect class="bar-d" x="196" y="304" width="512" height="12" rx="3"></rect>
+          <circle class="dot-d" cx="716" cy="310" r="4"></circle>
+
+          <line class="hair" x1="196" y1="224" x2="196" y2="326"></line>
+          <text class="t-edge d" x="740" y="290">κάθε πηγή βάφει το δικό της card</text>
+          <text class="t-sub" x="740" y="306">skeleton μέχρι να έρθει · chip «n/10 sources»</text>
+        </svg>
+      </div>
+      <figcaption>
+        Και στις δύο περιπτώσεις οι κλήσεις τρέχουν <b>παράλληλα</b> — αυτό δεν άλλαξε. Αυτό που άλλαξε είναι
+        πότε γράφεται το αποτέλεσμα: το <code>await Promise.allSettled([…])</code> κρατούσε και τα δέκα
+        <code>setState</code> μέχρι να γυρίσει το πιο αργό, οπότε ένα <code>/api/srvcc</code> τριών γραμμών
+        περίμενε το <code>/api/ping_1000</code>. Οι κουκκίδες είναι τα σημεία όπου κάτι εμφανίζεται στην οθόνη.
+      </figcaption>
+    </figure>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section>
+    <h2><span class="num">05</span>Οι δέκα πηγές</h2>
+    <p class="lede">
+      Πέντε endpoints γυρίζουν raw γραμμές και πέντε ήδη συγκεντρωτικές. Η διάκριση μετράει:
+      τα raw κυριαρχούν στον χρόνο και στο μέγεθος του payload.
+    </p>
+
+    <div class="tablewrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Endpoint</th>
+            <th>Βασικός πίνακας SQL</th>
+            <th>Κόκκος</th>
+            <th>Builder</th>
+            <th>Προορισμός</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr class="lane-head v"><td colspan="5">Voice</td></tr>
+          <tr>
+            <td class="ep">/api/calls</td>
+            <td class="src">CallAnalysis · ResultsLQ08Avg</td>
+            <td class="grain"><span class="tag raw">1 / κλήση</span></td>
+            <td class="src">buildVoiceStats · buildVoiceTable</td>
+            <td>Table 20 + Table 21, KPI tiles, hero CSR</td>
+          </tr>
+          <tr>
+            <td class="ep">/api/technology_mix</td>
+            <td class="src">Position · NetworkInfo</td>
+            <td class="grain"><span class="tag agg">συγκεντρωτικό</span></td>
+            <td class="src">buildTechnologyMixTable</td>
+            <td>γραμμή «Technology mix», και στους δύο πίνακες</td>
+          </tr>
+          <tr>
+            <td class="ep">/api/cell_band_count</td>
+            <td class="src">NetworkInfo · NetworkIdRelation</td>
+            <td class="grain"><span class="tag agg">συγκεντρωτικό</span></td>
+            <td class="src">buildCellBandCountTable</td>
+            <td>«Number of 900 / 1800 band Cells» — μόνο GSM</td>
+          </tr>
+          <tr>
+            <td class="ep">/api/srvcc</td>
+            <td class="src">ResultsKPI 38040 / 38050</td>
+            <td class="grain"><span class="tag agg">συγκεντρωτικό</span></td>
+            <td class="src">buildSrvccTable</td>
+            <td>«Total / Successful / Failed SRVCC» — μόνο FREE</td>
+          </tr>
+
+          <tr class="lane-head d"><td colspan="5">PS Data</td></tr>
+          <tr>
+            <td class="ep">/api/data_calls</td>
+            <td class="src">CDRCombined (view)</td>
+            <td class="grain"><span class="tag raw">1 / test</span></td>
+            <td class="src">— (ήδη DataCallRow)</td>
+            <td>Table 22, όλα τα sections</td>
+          </tr>
+          <tr>
+            <td class="ep">/api/ookla</td>
+            <td class="src">ResultsKPI · ResultsAppAction*</td>
+            <td class="grain"><span class="tag raw">1 / action</span></td>
+            <td class="src">mapOoklaRowsToDataCallRows</td>
+            <td>sections «Ookla DL» / «Ookla UL» (Ε1)</td>
+          </tr>
+          <tr>
+            <td class="ep">/api/ping_1000</td>
+            <td class="src">ResultsPingTest (PacketSize 1000)</td>
+            <td class="grain"><span class="tag raw">1 / πακέτο</span></td>
+            <td class="src">mapPing1000RowsToDataCallRows</td>
+            <td>section «Ping 1000 B» (Ε2)</td>
+          </tr>
+          <tr>
+            <td class="ep">/api/interactivity</td>
+            <td class="src">FactInteractivity · DmnInteractivity</td>
+            <td class="grain"><span class="tag raw">1 / test</span></td>
+            <td class="src">mapInteractivityRowsToDataCallRows</td>
+            <td>section «Interactivity (eGaming)» (Ε2)</td>
+          </tr>
+          <tr>
+            <td class="ep">/api/dns</td>
+            <td class="src">vResultsKPI (KPIID 31100)</td>
+            <td class="grain"><span class="tag agg">συγκεντρωτικό</span></td>
+            <td class="src">mapDnsRowsToDataCallRows</td>
+            <td>section «DNS Resolution» (Ε2)</td>
+          </tr>
+          <tr>
+            <td class="ep">/api/serving_band_tech</td>
+            <td class="src">Position · FactNR5GCellInfo</td>
+            <td class="grain"><span class="tag agg">συγκεντρωτικό</span></td>
+            <td class="src">buildServingBandTechTable</td>
+            <td>πίτες Serving Band / Technology, κορυφή Table 22</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <!-- ══════════════════════════════════════════════════════ -->
+  <section>
+    <h2><span class="num">06</span>Τι μπαίνει ανάμεσα</h2>
+    <p class="lede">
+      Ανάμεσα στις γραμμές που ήρθαν και στους builders υπάρχουν τρεις διακόπτες. Κανένας δεν
+      ξαναφορτώνει δεδομένα — όλοι φιλτράρουν ή αναδιπλώνουν ό,τι υπάρχει ήδη στη μνήμη.
+    </p>
+
+    <div class="notes">
+      <div class="note v">
+        <h4>Valid calls</h4>
+        <p>Κόβει τις γραμμές με ρητό <code>isValid = 0</code>, πριν από κάθε builder. Επηρεάζει και τις δύο λωρίδες.</p>
+      </div>
+      <div class="note v">
+        <h4>Avoid system release</h4>
+        <p>Δεν κόβει γραμμές· αλλάζει βάση. Τα ποσοστά διαβάζονται από το <code>withoutSysRelease</code> και η τιμή με τα system releases μένει ορατή από κάτω ως «incl. SR».</p>
+      </div>
+      <div class="note">
+        <h4>Compact</h4>
+        <p>Καθαρά προβολή. Τα PS Data sections περνάνε από το <code>buildDataGroupSections</code>, και οι πίνακες κλήσεων κρατάνε τέσσερις γραμμές: MOS, Drop, Fail, Success.</p>
+      </div>
+    </div>
+  </section>
+
+  <footer>
+    Πηγές: <code>backend/routers/calls.py</code> · <code>backend/routers/data_calls.py</code> ·
+    <code>src/lib/api.ts</code> · <code>src/pages/Index.tsx</code> ·
+    <code>src/lib/attachmentC.ts</code> · <code>src/components/SummaryTab.tsx</code>
+  </footer>
+
+</div>
+</body>
+</html>
