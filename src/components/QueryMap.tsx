@@ -1954,11 +1954,18 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                 <X className="h-2.5 w-2.5 shrink-0" /> <span className="truncate">{selectedGroup}</span>
               </button>
             )}
-            {selectedBuckets.size > 0 && (
+            {[...selectedBuckets].map((label) => (
+              <button type="button" key={label} onClick={() => toggleBucket(label)}
+                title="Αφαίρεση αυτής της τιμής από την επιλογή"
+                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 truncate max-w-[160px]">
+                <X className="h-2.5 w-2.5 shrink-0" /> <span className="truncate">{label}</span>
+              </button>
+            ))}
+            {selectedBuckets.size > 1 && (
               <button type="button" onClick={() => setSelectedBuckets(new Set())}
                 title="Καθαρισμός επιλογής legend — εμφάνιση όλων"
-                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 truncate max-w-[220px]">
-                <X className="h-2.5 w-2.5 shrink-0" /> <span className="truncate">{[...selectedBuckets].join(", ")}</span>
+                className="text-[9px] text-muted-foreground hover:text-primary underline underline-offset-2">
+                καθαρισμός όλων
               </button>
             )}
             {(filterCollection || filterLocation) && (
