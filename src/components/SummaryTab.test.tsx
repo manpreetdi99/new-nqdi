@@ -76,6 +76,9 @@ describe("SummaryTab", () => {
     ];
 
     render(<SummaryTab allCallsRows={rows} dataCallsRows={[] as DataCallRow[]} />);
+    // "Technology mix" δεν είναι στο COMPACT_VOICE_ROW_ORDER — Full mode για να φανεί
+    // (Compact είναι πλέον το default).
+    fireEvent.click(screen.getByRole("button", { name: "Full" }));
 
     expect(screen.getByText("Technology mix")).toBeInTheDocument();
     expect(screen.getAllByText(/GSM 900/).length).toBeGreaterThan(0);
@@ -95,6 +98,9 @@ describe("SummaryTab", () => {
     ];
 
     render(<SummaryTab allCallsRows={rows} dataCallsRows={[] as DataCallRow[]} technologyMixRows={technologyMixRows} />);
+    // "Technology mix" δεν είναι στο COMPACT_VOICE_ROW_ORDER — Full mode για να φανεί
+    // (Compact είναι πλέον το default).
+    fireEvent.click(screen.getByRole("button", { name: "Full" }));
 
     expect(screen.getAllByText(/GSM 900/).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/GSM 1800/).length).toBeGreaterThan(0);
@@ -112,50 +118,263 @@ describe("SummaryTab", () => {
     ];
     const dataRows: DataCallRow[] = [
       dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
+      dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 40000 }),
       dataTest({ testType: "Ookla Speedtest", direction: null, throughputKbps: 100000 }),
       dataTest({ testType: "ICMP Ping 40", direction: null, pingRttAvg: 20 }),
       dataTest({ testType: "YouTube Service", direction: null, youtubeMos: 4.3 }),
     ];
 
-    it("collapses the PS Data sections into the Ε-groups with one AVG each", () => {
+    it("merges Capacity DL/UL into one directional table, DL rows before UL (Compact is the default)", () => {
       render(<SummaryTab allCallsRows={rows} dataCallsRows={dataRows} />);
 
-      // Full mode: κάθε test type έχει το δικό του section, με τη δική του μετρική.
-      // (Τα "Ε1 · ..." υπάρχουν ήδη κι εδώ, σαν κεφαλίδες ομάδας πάνω από τα sections.)
-      expect(screen.getByText("Capacity DL 10GB")).toBeInTheDocument();
-      expect(screen.getAllByText(/Mean sustainable throughput/).length).toBeGreaterThan(0);
-      expect(screen.queryByText(/^Avg throughput/)).not.toBeInTheDocument();
-
-      fireEvent.click(screen.getByRole("button", { name: "Compact" }));
-
-      // Compact: τα sections έγιναν group blocks με ένα "Avg ..." metric το καθένα.
+      // Compact is now the default — no click needed. Capacity DL 10GB + Capacity UL 1GB
+      // ενώνονται σε ΕΝΑ table — βλ. "comapct_data .txt" (2026-08-31).
       expect(screen.queryByText("Capacity DL 10GB")).not.toBeInTheDocument();
-      expect(screen.queryByText(/Mean sustainable throughput/)).not.toBeInTheDocument();
-      expect(screen.getByText("Ε1 · Bulk throughput")).toBeInTheDocument();
-      expect(screen.getByText("Ε5 · Video streaming")).toBeInTheDocument();
-      // Το unit μπαίνει στο label της γραμμής, όχι στο κελί — βλ. dataRows/cellText.
-      expect(screen.getByText("Avg throughput (Mbps)")).toBeInTheDocument();
-      // Capacity DL (400 Mbps, n=1) + Ookla (100 Mbps, n=1) -> σταθμισμένο 250,
-      // με τα decimals του επικρατέστερου metric του group (Capacity, 1 δεκαδικό).
-      expect(screen.getAllByText("250.0").length).toBeGreaterThan(0);
+      expect(screen.queryByText("Capacity UL 1GB")).not.toBeInTheDocument();
+      expect(screen.getByText("Capacity DL 10GB / Capacity UL 1GB")).toBeInTheDocument();
+      expect(screen.getAllByText("Test Success Rate (%) DL").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Test Success Rate (%) UL").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Mean sustainable throughput (Mbps) DL").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Mean sustainable throughput (Mbps) UL").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("400.0").length).toBeGreaterThan(0); // DL throughput
+      expect(screen.getAllByText("40.0").length).toBeGreaterThan(0); // UL throughput
+      // Total Tests / Successful tests ενώνονται σε ΕΝΑ row: "total / successful" cell.
+      expect(screen.getAllByText("Total Tests DL").length).toBeGreaterThan(0);
+      expect(screen.queryByText("Successful tests DL")).not.toBeInTheDocument();
+      expect(screen.getAllByText("1 / 1").length).toBeGreaterThan(0); // 1 test, 1 success
+
+      // "όλα πρώτα dl και μετά ul" — τα DL rows προηγούνται των UL rows στο DOM.
+      const bodyText = document.body.textContent ?? "";
+      expect(bodyText.indexOf("Test Success Rate (%) DL")).toBeLessThan(bodyText.indexOf("Test Success Rate (%) UL"));
+
+      // Ό,τι δεν είχε DL/UL pair ΚΑΙ δεν είναι στο COMPACT_EXCLUDED_GROUPS/LABELS μένει
+      // ξεχωριστό section (π.χ. Ookla Speedtest). Το YouTube Service (Ε5 · Video
+      // streaming) καταργείται εντελώς στο compact (2026-08-31).
+      expect(screen.getByText("Ookla Speedtest")).toBeInTheDocument();
+      expect(screen.queryByText("YouTube Service")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Full" }));
+
+      // Full mode: το merged table σπάει πίσω στα δύο ξεχωριστά sections, και το Ε5
+      // section ξαναφαίνεται.
+      expect(screen.getByText("Capacity DL 10GB")).toBeInTheDocument();
+      expect(screen.getByText("Capacity UL 1GB")).toBeInTheDocument();
+      expect(screen.queryByText("Capacity DL 10GB / Capacity UL 1GB")).not.toBeInTheDocument();
+      expect(screen.getByText("YouTube Service")).toBeInTheDocument();
     });
 
-    it("keeps only AVG MOS / Drop / Fail / Success in the voice tables", () => {
+    it("shows 'rest' sections (no DL/UL pair) as a compact card — Success Rate/Total Tests/metric only, no Successful/Failed tests", () => {
+      const ooklaRows: DataCallRow[] = [dataTest({ testType: "Ookla Speedtest", direction: null, throughputKbps: 100000 })];
+      render(<SummaryTab allCallsRows={rows} dataCallsRows={ooklaRows} />);
+
+      // Compact is now the default — no click needed.
+      expect(screen.getByText("Ookla Speedtest")).toBeInTheDocument();
+      expect(screen.getAllByText("Test Success Rate (%)").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Total Tests").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Mean application throughput (Mbps)").length).toBeGreaterThan(0);
+      expect(screen.queryByText("Successful tests")).not.toBeInTheDocument();
+      expect(screen.queryByText("Failed Tests")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Full" }));
+
+      // Full mode: το section ξαναπαίρνει τις Successful/Failed tests γραμμές.
+      expect(screen.getAllByText("Successful tests").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Failed Tests").length).toBeGreaterThan(0);
+    });
+
+    it("drops HTTP Transfer DL/UL, DNS Resolution, Interactivity (eGaming) and all of Ε5 in compact — Full mode still shows them", () => {
+      const rest: DataCallRow[] = [
+        dataTest({ testType: "HTTP Transfer (DL)", direction: null, throughputKbps: 10000 }),
+        dataTest({ testType: "HTTP UL", direction: null, throughputKbps: 5000 }),
+        dataTest({ testType: "DNS", direction: null, pingRttAvg: 20 }),
+        dataTest({ testType: "Interactivity", direction: null, throughputKbps: 300 }),
+        dataTest({ testType: "YouTube Service", direction: null, youtubeMos: 4.3 }),
+        // "HTTP Browser (Kepler_2)" — underscore raw format, βλ. sectionLabel fix (2026-08-31).
+        dataTest({ testType: "HTTP Browser (Kepler_2)", direction: null, throughputKbps: 5000 }),
+      ];
+      render(<SummaryTab allCallsRows={rows} dataCallsRows={rest} />);
+
+      // Compact is now the default — no click needed.
+      expect(screen.queryByText("HTTP Transfer (DL) 10MB")).not.toBeInTheDocument();
+      expect(screen.queryByText("HTTP Transfer (UL) 5MB")).not.toBeInTheDocument();
+      expect(screen.queryByText("DNS Resolution")).not.toBeInTheDocument();
+      expect(screen.queryByText("Interactivity (eGaming)")).not.toBeInTheDocument();
+      expect(screen.queryByText("YouTube Service")).not.toBeInTheDocument();
+      // "Kepler_2" (underscore) πρέπει να αναγνωρίζεται σαν Kepler +30s Pause -> Ε3 -> έξω.
+      expect(screen.queryByText("Kepler +30s Pause")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Full" }));
+
+      expect(screen.getByText("HTTP Transfer (DL) 10MB")).toBeInTheDocument();
+      expect(screen.getByText("HTTP Transfer (UL) 5MB")).toBeInTheDocument();
+      expect(screen.getByText("DNS Resolution")).toBeInTheDocument();
+      expect(screen.getByText("Interactivity (eGaming)")).toBeInTheDocument();
+      expect(screen.getByText("YouTube Service")).toBeInTheDocument();
+      expect(screen.getByText("Kepler +30s Pause")).toBeInTheDocument();
+    });
+
+    it("shows a 'Packet Size (bytes)' row for Ping 40/800/1000 B sections in Full mode — merged away in compact (βλ. buildPingTotal)", () => {
+      const pingRows: DataCallRow[] = [
+        dataTest({ testType: "ICMP Ping 40", direction: null, pingRttAvg: 20 }),
+        dataTest({ testType: "YouTube Service", direction: null, youtubeMos: 4.3 }),
+      ];
+      render(<SummaryTab allCallsRows={rows} dataCallsRows={pingRows} />);
+
+      // Compact is now the default — no click needed. Ping 40 B μπαίνει στο "Ping (all
+      // sizes combined)" merge — δεν αντιστοιχεί πια σε ΕΝΑ μέγεθος, οπότε το Packet Size
+      // row δεν εμφανίζεται (pingPacketSizeBytes δεν ταιριάζει με το merged label).
+      expect(screen.queryByText("Ping 40 B")).not.toBeInTheDocument();
+      expect(screen.getByText("Ping (all sizes combined)")).toBeInTheDocument();
+      expect(screen.queryByText("Packet Size (bytes)")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Full" }));
+
+      // Full mode: το section ξαναγίνεται ξεχωριστό "Ping 40 B", μαζί με το row.
+      expect(screen.getByText("Ping 40 B")).toBeInTheDocument();
+      expect(screen.getAllByText("Packet Size (bytes)").length).toBe(1);
+      expect(screen.getAllByText("40").length).toBeGreaterThan(0);
+    });
+
+    it("gathers all Ε4 HTTPS sites into one total card in compact — Full mode keeps them separate", () => {
+      const siteRows: DataCallRow[] = [
+        dataTest({ testType: "https://www.amazon.com", direction: null, throughputKbps: 6000 }),
+        dataTest({ testType: "https://www.car.gr", direction: null, throughputKbps: 3000 }),
+      ];
+      render(<SummaryTab allCallsRows={rows} dataCallsRows={siteRows} />);
+
+      // Compact is now the default — no click needed. Χωρίς group headers στο compact πια
+      // (βλ. "μισο πλατος", 2026-08-31) — το section label μέσα στην κάρτα αρκεί.
+      expect(screen.queryByText("https://www.amazon.com")).not.toBeInTheDocument();
+      expect(screen.queryByText("https://www.car.gr")).not.toBeInTheDocument();
+      expect(screen.getByText("HTTPS sites (all sites combined)")).toBeInTheDocument();
+      expect(screen.queryByText("Ε4 · HTTPS sites")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Full" }));
+
+      // Full mode: κάθε site ξαναπαίρνει το δικό του section, με το group header πίσω.
+      expect(screen.getByText("https://www.amazon.com")).toBeInTheDocument();
+      expect(screen.getByText("https://www.car.gr")).toBeInTheDocument();
+      expect(screen.getByText("Ε4 · HTTPS sites")).toBeInTheDocument();
+      expect(screen.queryByText("HTTPS sites (all sites combined)")).not.toBeInTheDocument();
+    });
+
+    it("drops Ε3 · Browser engines entirely in compact — Full mode still shows Kepler/Newton", () => {
+      const browserRows: DataCallRow[] = [
+        dataTest({ testType: "KEPLER", direction: null, throughputKbps: 5000 }),
+        dataTest({ testType: "NEWTON", direction: null, throughputKbps: 5000 }),
+      ];
+      render(<SummaryTab allCallsRows={rows} dataCallsRows={browserRows} />);
+
+      // Compact is now the default — no click needed.
+      expect(screen.queryByText("KEPLER")).not.toBeInTheDocument();
+      expect(screen.queryByText("NEWTON")).not.toBeInTheDocument();
+      expect(screen.queryByText("Ε3 · Browser engines")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Full" }));
+
+      expect(screen.getByText("KEPLER")).toBeInTheDocument();
+      expect(screen.getByText("NEWTON")).toBeInTheDocument();
+      expect(screen.getByText("Ε3 · Browser engines")).toBeInTheDocument();
+    });
+
+    it("merges Ookla DL/UL the same way (same directionalDataRows, not Capacity-specific)", () => {
+      const ooklaRows: DataCallRow[] = [
+        dataTest({ testType: "Ookla", direction: "DL", throughputKbps: 100000 }),
+        dataTest({ testType: "Ookla", direction: "UL", throughputKbps: 10000 }),
+      ];
+      render(<SummaryTab allCallsRows={rows} dataCallsRows={ooklaRows} />);
+
+      // Compact is now the default — no click needed.
+      expect(screen.queryByText("Ookla DL")).not.toBeInTheDocument();
+      expect(screen.queryByText("Ookla UL")).not.toBeInTheDocument();
+      expect(screen.getByText("Ookla DL / Ookla UL")).toBeInTheDocument();
+      expect(screen.getAllByText("Test Success Rate (%) DL").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Test Success Rate (%) UL").length).toBeGreaterThan(0);
+      // Total Tests / Successful tests ενώνονται σε ΕΝΑ row εδώ επίσης.
+      expect(screen.getAllByText("Total Tests DL").length).toBeGreaterThan(0);
+      expect(screen.queryByText("Successful tests DL")).not.toBeInTheDocument();
+      expect(screen.getAllByText("1 / 1").length).toBeGreaterThan(0);
+
+      fireEvent.click(screen.getByRole("button", { name: "Full" }));
+
+      expect(screen.getByText("Ookla DL")).toBeInTheDocument();
+      expect(screen.getByText("Ookla UL")).toBeInTheDocument();
+      expect(screen.queryByText("Ookla DL / Ookla UL")).not.toBeInTheDocument();
+    });
+
+    it("hides the per-operator 'GSM+FREE call success rate' tiles in compact — Full brings them back", () => {
       render(<SummaryTab allCallsRows={rows} dataCallsRows={[] as DataCallRow[]} />);
 
-      expect(screen.getAllByText("System Release Rate (%)").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("Technology mix").length).toBeGreaterThan(0);
+      // Compact is now the default — no click needed. Ήδη καλύπτεται από τα GSM/FREE table
+      // rows (Total Calls/Success/Drop/Fail).
+      expect(screen.queryByText(/GSM\+FREE call success rate/)).not.toBeInTheDocument();
 
-      fireEvent.click(screen.getByRole("button", { name: "Compact" }));
+      fireEvent.click(screen.getByRole("button", { name: "Full" }));
 
+      expect(screen.getAllByText(/GSM\+FREE call success rate/).length).toBeGreaterThan(0);
+    });
+
+    it("keeps only Total Calls / Success / Drop / Fail rate (count folded in) / POLQA avg in the voice tables (Compact is the default)", () => {
+      render(<SummaryTab allCallsRows={rows} dataCallsRows={[] as DataCallRow[]} />);
+
+      // Compact is now the default — no click needed. excludeSysRelease defaults to true,
+      // so "Total Calls" carries the "(excl. SR)" suffix — βλ. COMPACT_VOICE_ROW_ORDER.
+      expect(screen.getAllByText("Total Calls (excl. SR)").length).toBeGreaterThan(0);
       expect(screen.getAllByText("Call Success Rate (%)").length).toBeGreaterThan(0);
       expect(screen.getAllByText("Dropped Call Rate (%)").length).toBeGreaterThan(0);
       expect(screen.getAllByText("Access Failure Rate (%)").length).toBeGreaterThan(0);
       expect(screen.getAllByText("POLQA avg (Speech quality ITU P.863)").length).toBeGreaterThan(0);
-      // Ό,τι δεν είναι στις 4 γραμμές φεύγει — counts, codec/technology mix, SRVCC.
+      // 1 completed + 1 dropped — το count είναι πλέον μέσα στο rate cell σαν "sum=...".
+      expect(screen.getAllByText("sum=1").length).toBeGreaterThan(0);
+      // Total Calls πρώτο (2026-08-31: μετακινήθηκε από προτελευταίο σε πρώτο) — βλ.
+      // COMPACT_VOICE_ROW_ORDER. Στη σειρά εμφάνισης στο DOM, πρέπει να προηγείται
+      // ακόμα και του πρώτου rate row.
+      const bodyText = document.body.textContent ?? "";
+      const totalCallsIndex = bodyText.indexOf("Total Calls (excl. SR)");
+      const successRateIndex = bodyText.indexOf("Call Success Rate (%)");
+      expect(totalCallsIndex).toBeGreaterThan(-1);
+      expect(totalCallsIndex).toBeLessThan(successRateIndex);
+      // Οι standalone count rows δεν χρειάζονται πια στο compact — merged μέσα στο rate.
+      expect(screen.queryByText("Normal Releases")).not.toBeInTheDocument();
+      expect(screen.queryByText("Dropped Calls")).not.toBeInTheDocument();
+      expect(screen.queryByText("Unsuccessful Call Attempts")).not.toBeInTheDocument();
+      // Ό,τι δεν είναι στο COMPACT_VOICE_ROW_ORDER φεύγει — Call Attempts, codec/technology mix, SRVCC.
       expect(screen.queryByText("System Release Rate (%)")).not.toBeInTheDocument();
       expect(screen.queryByText("Technology mix")).not.toBeInTheDocument();
-      expect(screen.queryByText("Normal Releases")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Full" }));
+
+      // Full: οι standalone count rows ξαναφαίνονται (μαζί με το "sum=..." κάτω από το rate).
+      expect(screen.getAllByText("System Release Rate (%)").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Technology mix").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Normal Releases").length).toBeGreaterThan(0);
+    });
+  });
+
+  describe("incl. SR visibility", () => {
+    const rows: AllCallsRow[] = [
+      call({ Location: "Cosmote Free A", status: "completed" }),
+      call({ Location: "Cosmote Free A", status: "completed" }),
+      call({ Location: "Cosmote Free A", status: "System Release" }),
+    ];
+
+    it("hides the 'incl. SR' secondary line by default — unchecking the checkbox reveals it", () => {
+      render(<SummaryTab allCallsRows={rows} dataCallsRows={[] as DataCallRow[]} />);
+
+      // "Hide incl. SR" είναι checked (active) by default — ίδιο checkbox look με τα
+      // "Valid calls"/"Avoid system release" (2026-08-31). Το regex θέλει ψηφίο μετά το
+      // "incl. SR" ώστε να μην πιάνει το ίδιο το label του checkbox ή το footnote (που
+      // αναφέρουν "incl. SR" σε εισαγωγικά ανεξάρτητα από το toggle).
+      const toggle = screen.getByRole("checkbox", { name: "Hide incl. SR" });
+      expect(toggle).toBeChecked();
+      expect(screen.queryByText(/incl\. SR \d/)).not.toBeInTheDocument();
+      expect(screen.queryByText(/incl\. system releases/)).not.toBeInTheDocument();
+
+      fireEvent.click(toggle);
+
+      expect(toggle).not.toBeChecked();
+      expect(screen.getAllByText(/incl\. SR \d/).length).toBeGreaterThan(0);
+      expect(screen.getAllByText(/incl\. system releases/).length).toBeGreaterThan(0);
     });
   });
 

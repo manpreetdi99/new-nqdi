@@ -589,14 +589,26 @@ def get_serving_band_tech(
     """Serving Band (NR) / Serving Technology (per Time) — ποσοστά για το SummaryTab
     "PS Data Stats" block. Οι δύο "kind" έχουν ΔΙΑΦΟΡΕΤΙΚΗ βάση δειγμάτων:
 
-    TECH ("Serving Technology (per Time)") — ίδια μεθοδολογία με το reference query
-    στο "bi queries" (βλ. Ord list στο buildServingBandTechTable): ένα "sample" = μία
-    Position πάνω σε valid PS Data DL test (Capacity DL / FTP DL / HTTP TRANSFER (DL)).
-    Technology = Technology.CurrTechnology της πιο πρόσφατης εγγραφής πριν από το
-    sample (NULL -> '#NODATA' = "No data transfer"). Η στήλη CurrTechnology αποθηκεύει
-    το raw 5G-NSA label ως 'LTE-5G NR' (με κενό) — γίνεται REPLACE σε 'LTE-5GNR' (χωρίς
-    κενό, ίδιο με το reference SQL) ώστε να ταιριάζει με το literal code του
-    SERVING_BAND_TECH_METRICS στο frontend.
+    TECH ("Serving Technology (per Time)") — ακριβής μεταγραφή του πραγματικού "bi
+    queries" reference query (δόθηκε αυτούσιο 2026-08-31, βλ. Ord list στο
+    buildServingBandTechTable): ένα "sample" = μία Position πάνω σε valid PS Data DL
+    test (Capacity DL / FTP DL / HTTP TRANSFER (DL)) που ΕΧΕΙ NetworkInfo row για το
+    TestInfo.NetworkId ΚΑΙ Technology row πριν από αυτή (plain/INNER join και στα δύο,
+    όπως η reference — ΟΧΙ LEFT/OUTER APPLY σαν πριν). Technology =
+    Technology.CurrTechnology της πιο πρόσφατης τέτοιας εγγραφής (Technology.SessionId
+    = Sessions.SessionId, Technology.MsgTime = MAX(...) πριν το sample — ίδιο
+    "correlated MAX" pattern με τη reference, ΟΧΙ το OUTER APPLY TOP 1 του παλιού
+    query). Η στήλη CurrTechnology αποθηκεύει το raw 5G-NSA label ως 'LTE-5G NR' (με
+    κενό) — γίνεται REPLACE σε 'LTE-5GNR' (χωρίς κενό, ίδιο με το reference SQL) ώστε
+    να ταιριάζει με το literal code του SERVING_BAND_TECH_METRICS στο frontend.
+
+    ΣΗΜΕΙΩΣΗ '#NODATA' / "No data transfer (%)" (ord 16 στο SERVING_BAND_TECH_METRICS):
+    η reference ΔΕΝ έχει bucket γι' αυτό — ένα sample χωρίς NetworkInfo ή χωρίς
+    Technology row πριν από αυτό αποκλείεται εντελώς από το TECH count (δεν εμφανίζεται
+    πουθενά, ούτε ως 'Other'), αντί να μπαίνει σε '#NODATA' όπως έκανε το παλιό OUTER
+    APPLY. Ρητή επιλογή (2026-08-31) ώστε το TECH να ταιριάζει 1:1 με τη reference — το
+    "No data transfer (%)" row στο SummaryTab πλέον βγαίνει 0 αντί να μετράει πραγματικά
+    samples.
 
     BAND ("Serving Band (per Time)") — ΟΧΙ πάνω στα ίδια DL-test Position δείγματα
     (αυτό υποεκτιμούσε δραστικά τα NR28/NR1/NR78 ποσοστά, μόνο τα download-test
@@ -614,43 +626,42 @@ def get_serving_band_tech(
         cursor = conn.cursor()
 
         query = """
-            WITH BaseSamples AS (
-                SELECT fl.ASideLocation AS Location, p.PosId, p.TestId, p.MsgTime
-                FROM Sessions s
-                JOIN FileList fl ON fl.FileId = s.FileId
-                JOIN TestInfo ti ON ti.SessionId = s.SessionId
-                JOIN Position p ON p.TestId = ti.TestId
-                WHERE s.Valid = 1 AND ti.Valid = 1
-                  AND ti.TestName IN ('Capacity DL','FTP DL','HTTP TRANSFER (DL)')
+            SELECT 'TECH' AS kind, FileList.ASideLocation AS location,
+                   REPLACE(Technology.CurrTechnology, 'LTE-5G NR', 'LTE-5GNR') AS code,
+                   COUNT(*) AS samples
+            FROM Sessions
+            JOIN FileList ON FileList.FileId = Sessions.FileId
+            JOIN TestInfo ON TestInfo.SessionId = Sessions.SessionId
+            JOIN Position ON Position.TestId = TestInfo.TestId
+            JOIN NetworkInfo ON NetworkInfo.NetworkId = TestInfo.NetworkId
+            JOIN Technology ON Technology.SessionId = Sessions.SessionId
+                AND Technology.MsgTime = (
+                    SELECT MAX(tech_2.MsgTime)
+                    FROM Technology tech_2
+                    WHERE tech_2.TestId = Position.TestId
+                      AND tech_2.MsgTime < Position.MsgTime
+                      AND tech_2.CurrTechnology IS NOT NULL
+                )
+            WHERE Sessions.Valid = 1
+              AND TestInfo.Valid = 1
+              AND TestInfo.TestName IN ('Capacity DL','FTP DL','HTTP TRANSFER (DL)')
         """
 
         params: list[object] = []
         selected_collections = [col for col in (collection or []) if col and col.strip()]
         if selected_collections:
             placeholders = ", ".join(["?"] * len(selected_collections))
-            query += f" AND fl.CollectionName IN ({placeholders})"
+            query += f" AND FileList.CollectionName IN ({placeholders})"
             params.extend(selected_collections)
 
         selected_locations = [loc for loc in (location or []) if loc and loc.strip()]
         if selected_locations:
             placeholders = ", ".join(["?"] * len(selected_locations))
-            query += f" AND fl.ASideLocation IN ({placeholders})"
+            query += f" AND FileList.ASideLocation IN ({placeholders})"
             params.extend(selected_locations)
 
         query += """
-            )
-            SELECT 'TECH' AS kind, b.Location AS location,
-                   REPLACE(ISNULL(t.CurrTechnology, '#NODATA'), 'LTE-5G NR', 'LTE-5GNR') AS code,
-                   COUNT(*) AS samples
-            FROM BaseSamples b
-            OUTER APPLY (
-                SELECT TOP 1 t2.CurrTechnology
-                FROM Technology t2
-                WHERE t2.TestId = b.TestId AND t2.MsgTime < b.MsgTime
-                  AND t2.CurrTechnology IS NOT NULL
-                ORDER BY t2.MsgTime DESC
-            ) t
-            GROUP BY b.Location, REPLACE(ISNULL(t.CurrTechnology, '#NODATA'), 'LTE-5G NR', 'LTE-5GNR')
+            GROUP BY FileList.ASideLocation, REPLACE(Technology.CurrTechnology, 'LTE-5G NR', 'LTE-5GNR')
 
             UNION ALL
 
@@ -1014,16 +1025,26 @@ def get_ping_1000(
     collection: list[str] | None = Query(default=None),
     location: list[str] | None = Query(default=None),
 ):
-    """"Ping 1000" (PS Data Stats) — δεν φτάνει σαν δικό του TestName από το
-    CDRCombined view (βλ. /api/data_calls· από εκεί φτάνουν μόνο "Ping"/"Payload Ping
-    BIDIRECTIONAL"), οπότε το φτιάχνουμε από το raw ResultsPingTest, φιλτραρισμένο σε
-    PacketSize = 1000 — ίδιο query με το A-LEVEL "PING RAW.sql" reference query (ίδιο
-    query με το "Ping RAW" saved query του QueryEditor).
+    """Ping 40/800/1000 (PS Data Stats) — δεν φτάνουν σαν δικό τους TestName από το
+    CDRCombined view (βλ. /api/data_calls· από εκεί φτάνει μόνο "Ping"/"Payload Ping
+    BIDIRECTIONAL"), οπότε τα φτιάχνουμε από το raw ResultsPingTest — ίδιο query με το
+    A-LEVEL "PING RAW.sql" reference query (ίδιο query με το "Ping RAW" saved query του
+    QueryEditor).
+
+    ΕΝΗΜΕΡΩΣΗ (2026-08-31): ΧΩΡΙΣ PacketSize filter πλέον — γυρνάει packets ΚΑΙ για τα
+    τρία μεγέθη (40/800/1000) σε ΕΝΑ call, το frontend τα χωρίζει σε "Ping 40"/"Ping 800"/
+    "Ping 1000" βάσει του packetSize (βλ. mapPing1000RowsToDataCallRows στο
+    attachmentC.ts). Πριν, φιλτράραμε εδώ σε PacketSize=1000 μόνο επειδή τα "Ping 40 B"/
+    "Ping 800 B" έφταναν από το CDRCombined view (TestName "ICMP Ping 40"/"ICMP Ping
+    800") — αυτό το endpoint είναι ΠΛΕΟΝ η ΜΟΝΗ πηγή και για τα τρία, οπότε το frontend
+    βγάζει ρητά τα "ICMP Ping 40"/"ICMP Ping 800" από τα /api/data_calls rows πριν μπουν
+    στο summary pipeline (βλ. excludeCdrPingDuplicates στο attachmentC.ts) — αλλιώς το
+    Ping 40 B/800 B θα μετρούσε διπλά.
 
     Ένα row ανά ping packet (raw, όχι ήδη-αθροισμένο ανά test) — RTT μόνο όταν
     ErrorCode=0 (αλλιώς NULL), success/failed από το ίδιο ErrorCode. Το frontend τα
-    μετατρέπει σε DataCallRow σχήμα (testType="Ping 1000") ώστε να μπουν στο ίδιο
-    buildDataSections pipeline με τα υπόλοιπα PS Data tests — βλ.
+    μετατρέπει σε DataCallRow σχήμα (testType="Ping 40"/"Ping 800"/"Ping 1000") ώστε να
+    μπουν στο ίδιο buildDataSections pipeline με τα υπόλοιπα PS Data tests — βλ.
     mapPing1000RowsToDataCallRows στο attachmentC.ts.
     """
     try:
@@ -1051,7 +1072,6 @@ def get_ping_1000(
               AND ResultsPingTest.TestId = TestInfo.TestId
               AND ResultsPingTest.ErrorCode = ErrorCodes.Code
               AND TestInfo.NetworkId = NetworkInfo.NetworkId
-              AND ResultsPingTest.PacketSize = 1000
         """
 
         params: list[object] = []

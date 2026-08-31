@@ -3,11 +3,14 @@ import { describe, it, expect } from "vitest";
 import {
   bucketTechnology,
   buildCellBandCountTable,
-  buildDataGroupSections,
   buildDataSections,
   buildDetailedTechnologyMix,
+  buildDirectionalDataSections,
   buildFakeEventTable,
+  buildHttpsSitesTotal,
+  buildPingTotal,
   buildReportPeriod,
+  excludeCdrPingDuplicates,
   buildServingBandTechTable,
   buildSrvccTable,
   buildTechnologyMix,
@@ -22,9 +25,10 @@ import {
   mapInteractivityRowsToDataCallRows,
   mapOoklaRowsToDataCallRows,
   mapPing1000RowsToDataCallRows,
+  pingPacketSizeBytes,
   resolveMode,
   resolveOperator,
-  UNMATCHED_GROUP_LABEL,
+  SECTION_GROUP_LABELS,
 } from "@/lib/attachmentC";
 import type { AllCallsRow, DataCallRow, DnsRow, InteractivityRow, OoklaRow, PingRow } from "@/lib/api";
 
@@ -387,6 +391,17 @@ describe("PS data KPIs", () => {
     expect(mapped[1]).toMatchObject({ testType: "Ping 1000", pingRttAvg: null, scoringStatus: "failed" });
   });
 
+  it("mapPing1000RowsToDataCallRows sets testType from row.packetSize — 40/800/1000 all go through the same mapping (2026-08-31: backend no longer filters to PacketSize=1000)", () => {
+    const mapped = mapPing1000RowsToDataCallRows([
+      pingRow({ packetSize: 40 }),
+      pingRow({ packetSize: 800 }),
+      pingRow({ packetSize: 1000 }),
+      pingRow({ packetSize: null }),
+    ]);
+
+    expect(mapped.map((row) => row.testType)).toEqual(["Ping 40", "Ping 800", "Ping 1000", "Ping ? B"]);
+  });
+
   it("feeds Ping 1000 rows through buildDataSections into a renamed 'Ping 1000 B' section, alongside plain Ping", () => {
     const rows = mapPing1000RowsToDataCallRows([
       pingRow({ rtt: 30, success: 1, failed: 0 }),
@@ -408,7 +423,7 @@ describe("PS data KPIs", () => {
     expect(ping1000.total.metrics[0]).toMatchObject({ label: "Mean RTT", unit: "ms", value: 40 });
   });
 
-  it("renames ICMP Ping 40/800 and groups them with Ping 1000 B, one below the other in ascending size order", () => {
+  it("renames ICMP Ping 40/800 and groups them with Ping 1000 B, one below the other in ascending size order (legacy CDRCombined-shaped rows — SECTION_LABEL_RENAMES still supports them even though the production pipeline no longer sources them this way, βλ. excludeCdrPingDuplicates)", () => {
     const ping1000Rows = mapPing1000RowsToDataCallRows([pingRow({ rtt: 60, success: 1, failed: 0 })]);
 
     const sections = buildDataSections([
@@ -421,6 +436,36 @@ describe("PS data KPIs", () => {
     // "Ping" (κανονικό rank 3) μπαίνει πριν το Ping B group (rank 3.2) — μόνο μεταξύ
     // τους τα Ping 40/800/1000 B κρατάνε τη σειρά μεγέθους, μαζεμένα.
     expect(sections.map((s) => s.key)).toEqual(["Ping", "Ping 40 B", "Ping 800 B", "Ping 1000 B"]);
+  });
+
+  it("feeds Ping 40/800/1000 all from the SAME raw mapPing1000RowsToDataCallRows source into the three renamed 'Ping N B' sections (2026-08-31: the production path — /api/ping_1000 no longer needs the CDRCombined view for 40/800)", () => {
+    const rows = mapPing1000RowsToDataCallRows([
+      pingRow({ packetSize: 40, rtt: 15, success: 1, failed: 0 }),
+      pingRow({ packetSize: 800, rtt: 45, success: 1, failed: 0, sessionId: "2" }),
+      pingRow({ packetSize: 1000, rtt: 60, success: 1, failed: 0, sessionId: "3" }),
+    ]);
+
+    const sections = buildDataSections(rows);
+
+    expect(sections.map((s) => s.key)).toEqual(["Ping 40 B", "Ping 800 B", "Ping 1000 B"]);
+    expect(sections.map((s) => s.total.metrics[0].value)).toEqual([15, 45, 60]);
+  });
+
+  describe("excludeCdrPingDuplicates", () => {
+    it("drops 'ICMP Ping 40'/'ICMP Ping 800' rows — now sourced exclusively from /api/ping_1000 — and keeps everything else", () => {
+      const rows = [
+        dataTest({ testType: "ICMP Ping 40", direction: null, pingRttAvg: 15 }),
+        dataTest({ testType: "ICMP Ping 800", direction: null, pingRttAvg: 45 }),
+        dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
+        dataTest({ testType: "Ping", direction: null, pingRttAvg: 20 }),
+      ];
+
+      expect(excludeCdrPingDuplicates(rows).map((row) => row.testType)).toEqual(["Capacity", "Ping"]);
+    });
+
+    it("returns an empty list unchanged", () => {
+      expect(excludeCdrPingDuplicates([])).toEqual([]);
+    });
   });
 
   const interactivityRow = (overrides: Partial<InteractivityRow>): InteractivityRow => ({
@@ -707,6 +752,17 @@ describe("PS data KPIs", () => {
     expect(sections.map((s) => s.key)).toEqual(["Kepler", "Kepler +30s Pause", "HTTPS Browser (Newton)"]);
   });
 
+  it("recognizes 'Kepler_2' (underscore instead of a space) as the +30s Pause variant too (2026-08-31: real raw TestName format that \\s* didn't match)", () => {
+    const sections = buildDataSections([
+      dataTest({ testType: "HTTP Browser (Kepler_2)", direction: null }),
+      dataTest({ testType: "Kepler_2", direction: null }), // γυμνό, χωρίς "Browser (...)" wrapper
+    ]);
+
+    expect(sections.map((s) => s.key)).toEqual(["Kepler +30s Pause"]);
+    expect(sections[0].group).toBe("Ε3 · Browser engines");
+    expect(sections[0].total.total).toBe(2);
+  });
+
   it("orders every PS Data Stats section into the 5 groups (Ε1..Ε5, ΣΕΙΡΑ ΠΟΥ ΘΕΛΩ 'QoS → QoE', 2026-08-26)", () => {
     const rows: DataCallRow[] = [
       // Δίνονται σκόπιμα σε ανάκατη σειρά — το test επαληθεύει ότι το sort τα βάζει στη σωστή.
@@ -798,103 +854,155 @@ describe("PS data KPIs", () => {
     ]);
   });
 
-  describe("compact view — buildDataGroupSections", () => {
-    it("collapses the full section list into the 5 Ε-groups plus a trailing 'Λοιπά tests'", () => {
-      const groups = buildDataGroupSections(
+  describe("compact view — buildDirectionalDataSections", () => {
+    it("merges the Ε1 DL/UL pairs (Capacity, Ookla) into one directional section each, leaving the rest (incl. HTTP Transfer) untouched", () => {
+      const { merged, rest } = buildDirectionalDataSections(
         buildDataSections([
           dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
+          dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 40000 }),
           dataTest({ testType: "HTTP Transfer (DL)", direction: null, throughputKbps: 10000 }),
+          dataTest({ testType: "HTTP UL", direction: null, throughputKbps: 5000 }),
+          ...mapOoklaRowsToDataCallRows([
+            ooklaRow({ actionName: "Downlink Performance", sessionId: "ook-dl" }),
+            ooklaRow({ actionName: "Uplink Performance", sessionId: "ook-ul" }),
+          ]),
           dataTest({ testType: "ICMP Ping 40", direction: null, pingRttAvg: 15 }),
-          dataTest({ testType: "KEPLER", direction: null, throughputKbps: 5000 }),
-          dataTest({ testType: "https://www.amazon.com", direction: null, throughputKbps: 5000 }),
           dataTest({ testType: "YouTube Service", direction: null, youtubeMos: 4.2 }),
-          // Unmatched (group === "") — δεν πρέπει να χαθεί σιωπηλά.
-          dataTest({ testType: "FTP", direction: "DL", throughputKbps: 1000 }),
         ]),
       );
 
-      expect(groups.map((g) => g.key)).toEqual([
-        "Ε1 · Bulk throughput",
-        "Ε2 · Latency / Responsiveness",
-        "Ε3 · Browser engines",
-        "Ε4 · HTTPS sites",
-        "Ε5 · Video streaming",
-        UNMATCHED_GROUP_LABEL,
-      ]);
-      // group: "" — το label ΕΙΝΑΙ το group name, δεν θέλουμε διπλή κεφαλίδα στο SummaryTab.
-      expect(groups.every((g) => g.group === "")).toBe(true);
-      // Ένα και μόνο ένα metric ανά group — αυτό είναι όλο το νόημα του compact.
-      expect(groups.every((g) => g.total.metrics.length === 1)).toBe(true);
+      // HTTP Transfer (2026-08-31: αφαιρέθηκε από το compact merge) ΔΕΝ είναι εδώ.
+      expect(merged.map((s) => s.key)).toEqual(["Capacity DL 10GB / Capacity UL 1GB", "Ookla DL / Ookla UL"]);
+      expect(merged.every((s) => s.group === "Ε1 · Bulk throughput")).toBe(true);
+      // Ό,τι δεν είχε (ή δεν έχει πια) DL/UL merge μένει ξεχωριστό section, ίδιο με το Full mode.
+      expect(rest.map((s) => s.key)).toEqual(["HTTP Transfer (DL) 10MB", "HTTP Transfer (UL) 5MB", "Ping 40 B", "YouTube Service"]);
     });
 
-    it("sample-weights the group average instead of averaging the section averages", () => {
-      const groups = buildDataGroupSections(
+    it("keeps DL and UL as separate totals instead of averaging them together", () => {
+      const { merged } = buildDirectionalDataSections(
         buildDataSections([
-          // Capacity DL: 3 tests × 400 Mbps -> section avg 400, samples 3.
+          // Capacity DL: 3 tests × 400 Mbps.
           ...Array.from({ length: 3 }, () =>
             dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
           ),
-          // Capacity UL: 1 test × 40 Mbps -> section avg 40, samples 1.
+          // Capacity UL: 1 test × 40 Mbps — δεν πρέπει να μπερδευτεί με το DL avg.
           dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 40000 }),
         ]),
       );
 
-      const [metric] = groups[0].total.metrics;
-      // (400×3 + 40×1) / 4 = 310 — ο μέσος-των-μέσων θα έδινε 220.
-      expect(metric).toMatchObject({ label: "Avg throughput", unit: "Mbps", samples: 4 });
-      expect(metric.value).toBeCloseTo(310, 6);
-      expect(groups[0].total.total).toBe(4);
+      const [capacity] = merged;
+      expect(capacity.total.dl.total).toBe(3);
+      expect(capacity.total.dl.metrics[0]).toMatchObject({ value: 400, samples: 3 });
+      expect(capacity.total.ul.total).toBe(1);
+      expect(capacity.total.ul.metrics[0]).toMatchObject({ value: 40, samples: 1 });
     });
 
-    it("keeps a different-unit section in the counts but out of the average", () => {
-      const groups = buildDataGroupSections(
-        buildDataSections([
-          dataTest({ testType: "ICMP Ping 40", direction: null, pingRttAvg: 20 }),
-          dataTest({ testType: "ICMP Ping 800", direction: null, pingRttAvg: 40 }),
-          // Interactivity's primary metric είναι "eGaming Average of ThroughputKbps" (unit "")
-          // — μετράει στα tests, αλλά δεν έχει νόημα να μπει σε μέσο όρο ms.
-          ...mapInteractivityRowsToDataCallRows([interactivityRow({ throughputKbps: 300, rttAverage: 25 })]),
-        ]),
+    it("zeroes out the missing side instead of dropping the whole pair when only one direction has data", () => {
+      const { merged } = buildDirectionalDataSections(
+        buildDataSections([dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 })]),
       );
 
-      const latency = groups.find((g) => g.key === "Ε2 · Latency / Responsiveness")!;
-      expect(latency.total.total).toBe(3); // και τα 3 tests μετράνε
-      const [metric] = latency.total.metrics;
-      expect(metric).toMatchObject({ label: "Avg latency", unit: "ms", samples: 2 });
-      expect(metric.value).toBeCloseTo(30, 6); // (20 + 40) / 2, χωρίς το Interactivity
+      expect(merged).toHaveLength(1);
+      expect(merged[0].total.dl.total).toBe(1);
+      expect(merged[0].total.ul).toMatchObject({ total: 0, successRate: null });
+      expect(merged[0].total.ul.metrics).toEqual([]);
     });
 
-    it("uses the same unit for the per-operator columns as for the total", () => {
-      const groups = buildDataGroupSections(
+    it("keeps operators separate within each direction", () => {
+      const { merged } = buildDirectionalDataSections(
         buildDataSections([
           dataTest({ Location: "Cosmote Data A", testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
-          dataTest({ Location: "Nova Data A", testType: "Capacity", direction: "DL", capacityThroughputKbps: 200000 }),
-          dataTest({ Location: "Nova Data A", testType: "Ookla Speedtest", direction: null, throughputKbps: 100000 }),
+          dataTest({ Location: "Nova Data A", testType: "Capacity", direction: "UL", capacityThroughputKbps: 40000 }),
         ]),
       );
 
-      const bulk = groups[0];
-      expect(bulk.byOperator.get("COSMOTE")?.metrics[0]).toMatchObject({ unit: "Mbps", value: 400, samples: 1 });
-      // Nova: (200×1 + 100×1) / 2 = 150 — Capacity και Ookla είναι και τα δύο Mbps.
-      expect(bulk.byOperator.get("NOVA")?.metrics[0]).toMatchObject({ unit: "Mbps", value: 150, samples: 2 });
-      expect(bulk.total.metrics[0]?.unit).toBe("Mbps");
+      const [capacity] = merged;
+      expect(capacity.byOperator.get("COSMOTE")?.dl.total).toBe(1);
+      expect(capacity.byOperator.get("COSMOTE")?.ul.total).toBe(0);
+      expect(capacity.byOperator.get("NOVA")?.dl.total).toBe(0);
+      expect(capacity.byOperator.get("NOVA")?.ul.total).toBe(1);
     });
 
-    it("sums success/failed across the group and rescores the success rate on the merged base", () => {
-      const groups = buildDataGroupSections(
-        buildDataSections([
-          dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000, scoringStatus: "A" }),
-          dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 300000, scoringStatus: "F" }),
-          dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 40000, scoringStatus: "A" }),
-          dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 30000, scoringStatus: "A" }),
-        ]),
-      );
+    it("has no merged sections at all for an empty section list", () => {
+      expect(buildDirectionalDataSections([])).toEqual({ merged: [], rest: [] });
+    });
+  });
 
-      expect(groups[0].total).toMatchObject({ total: 4, success: 3, failed: 1, successRate: 0.75 });
+  describe("compact view — buildHttpsSitesTotal", () => {
+    it("merges every Ε4 HTTPS site into one section at the group's original position, leaving other groups untouched", () => {
+      const sections = buildDataSections([
+        dataTest({ testType: "https://www.amazon.com", direction: null, throughputKbps: 6000 }),
+        dataTest({ testType: "https://www.amazon.com", direction: null, throughputKbps: 6000 }),
+        dataTest({ testType: "https://www.car.gr", direction: null, throughputKbps: 3000 }),
+        dataTest({ testType: "ICMP Ping 40", direction: null, pingRttAvg: 15 }),
+      ]);
+
+      const result = buildHttpsSitesTotal(sections);
+
+      // Ping 40 B (Ε2) πριν, ΕΝΑ section στη θέση όπου ξεκινούσε το Ε4.
+      expect(result.map((s) => s.key)).toEqual(["Ping 40 B", SECTION_GROUP_LABELS.httpsSites]);
+      const [, sites] = result;
+      expect(sites.group).toBe(SECTION_GROUP_LABELS.httpsSites);
+      // amazon×2 (6 Mbps) + car.gr×1 (3 Mbps) -> weighted (6+6+3)/3 = 5, total 3.
+      expect(sites.total.total).toBe(3);
+      expect(sites.total.metrics[0]).toMatchObject({ unit: "Mbps", samples: 3 });
+      expect(sites.total.metrics[0].value).toBeCloseTo(5, 6);
     });
 
-    it("has no groups at all for an empty section list", () => {
-      expect(buildDataGroupSections([])).toEqual([]);
+    it("returns the sections unchanged when there is no Ε4 HTTPS site at all", () => {
+      const sections = buildDataSections([dataTest({ testType: "ICMP Ping 40", direction: null, pingRttAvg: 15 })]);
+      expect(buildHttpsSitesTotal(sections)).toBe(sections);
+    });
+
+    it("returns an empty list for an empty section list", () => {
+      expect(buildHttpsSitesTotal([])).toEqual([]);
+    });
+  });
+
+  describe("compact view — buildPingTotal", () => {
+    it("merges Ping 40 B/800 B/1000 B into one 'Ping (all sizes combined)' section at the first one's position, leaving other sections untouched", () => {
+      const ping1000Rows = mapPing1000RowsToDataCallRows([pingRow({ packetSize: 1000, rtt: 60, success: 1, failed: 0 })]);
+      const sections = buildDataSections([
+        dataTest({ testType: "ICMP Ping 40", direction: null, pingRttAvg: 15 }),
+        dataTest({ testType: "ICMP Ping 800", direction: null, pingRttAvg: 45 }),
+        ...ping1000Rows,
+        dataTest({ testType: "Ping", direction: null, pingRttAvg: 20 }),
+        dataTest({ testType: "YouTube Service", direction: null, youtubeMos: 4.2 }),
+      ]);
+
+      const result = buildPingTotal(sections);
+
+      // "Ping" (γυμνό, χωρίς μέγεθος) ΔΕΝ μπαίνει στο merge — μένει ξεχωριστό, στη θέση του.
+      expect(result.map((s) => s.key)).toEqual(["Ping", "Ping (all sizes combined)", "YouTube Service"]);
+      const pingTotal = result.find((s) => s.key === "Ping (all sizes combined)")!;
+      expect(pingTotal.group).toBe(SECTION_GROUP_LABELS.latency);
+      expect(pingTotal.total.total).toBe(3);
+      // (15 + 45 + 60) / 3 = 40.
+      expect(pingTotal.total.metrics[0]).toMatchObject({ unit: "ms", samples: 3 });
+      expect(pingTotal.total.metrics[0].value).toBeCloseTo(40, 6);
+    });
+
+    it("returns the sections unchanged when there is no Ping B section at all", () => {
+      const sections = buildDataSections([dataTest({ testType: "YouTube Service", direction: null, youtubeMos: 4.2 })]);
+      expect(buildPingTotal(sections)).toBe(sections);
+    });
+
+    it("returns an empty list for an empty section list", () => {
+      expect(buildPingTotal([])).toEqual([]);
+    });
+  });
+
+  describe("pingPacketSizeBytes", () => {
+    it("parses the byte count out of the Ping 40 B / 800 B / 1000 B section labels", () => {
+      expect(pingPacketSizeBytes("Ping 40 B")).toBe(40);
+      expect(pingPacketSizeBytes("Ping 800 B")).toBe(800);
+      expect(pingPacketSizeBytes("Ping 1000 B")).toBe(1000);
+    });
+
+    it("returns null for anything that isn't one of the three Ping B sections", () => {
+      expect(pingPacketSizeBytes("Ping")).toBeNull();
+      expect(pingPacketSizeBytes("DNS Resolution")).toBeNull();
+      expect(pingPacketSizeBytes("HTTPS sites (all sites combined)")).toBeNull();
     });
   });
 

@@ -24,6 +24,23 @@ for (const key of ["localStorage", "sessionStorage"] as const) {
   }
 }
 
+// recharts' ResponsiveContainer (VoiceRateBarChart/MiniPie/ServingBandTechPies στο
+// SummaryTab, compact είναι πλέον το default — βλ. 2026-08-31) χρειάζεται ResizeObserver
+// για να μετρήσει το container του· jsdom δεν το υλοποιεί καθόλου, οπότε χωρίς αυτό κάθε
+// render με ένα recharts chart πετάει "ResizeObserver is not defined". No-op stub αρκεί —
+// τα tests δεν εξαρτώνται από πραγματικές διαστάσεις.
+class ResizeObserverStub {
+  observe() {}
+  unobserve() {}
+  disconnect() {}
+}
+if (typeof window.ResizeObserver === "undefined") {
+  Object.defineProperty(window, "ResizeObserver", { writable: true, configurable: true, value: ResizeObserverStub });
+}
+if (typeof globalThis.ResizeObserver === "undefined") {
+  globalThis.ResizeObserver = ResizeObserverStub as unknown as typeof ResizeObserver;
+}
+
 Object.defineProperty(window, "matchMedia", {
   writable: true,
   value: (query: string) => ({

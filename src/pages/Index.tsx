@@ -19,6 +19,7 @@ import SummaryTab from "@/components/SummaryTab";
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import type { CallRecord } from "@/lib/callData";
 import {
+  excludeCdrPingDuplicates,
   mapDnsRowsToDataCallRows,
   mapInteractivityRowsToDataCallRows,
   mapOoklaRowsToDataCallRows,
@@ -726,14 +727,17 @@ const Index = () => {
     [voicePending, dataPending, technologyMixPending, servingBandTechPending, summarySourcesDone, summaryQueries.length],
   );
 
-  // "Ookla DL"/"Ookla UL" (mapOoklaRowsToDataCallRows), "Ping 1000"
+  // "Ookla DL"/"Ookla UL" (mapOoklaRowsToDataCallRows), "Ping 40"/"Ping 800"/"Ping 1000"
   // (mapPing1000RowsToDataCallRows), "Interactivity" (mapInteractivityRowsToDataCallRows)
   // και "DNS" (mapDnsRowsToDataCallRows) μπαίνουν στο ίδιο DataCallRow[] που τροφοδοτεί
   // το SummaryTab's buildDataSections — έτσι εμφανίζονται σαν ακόμα PS Data sections
-  // χωρίς να αγγίξουμε καθόλου το SummaryTab.
+  // χωρίς να αγγίξουμε καθόλου το SummaryTab. excludeCdrPingDuplicates βγάζει τα παλιά
+  // "ICMP Ping 40"/"ICMP Ping 800" (CDRCombined) από το summaryDataCallsRows πρώτα — το
+  // /api/ping_1000 είναι πλέον η ΜΟΝΗ πηγή και για τα δύο (βλ. mapPing1000RowsToDataCallRows),
+  // αλλιώς θα μετρούσαν διπλά.
   const summaryDataCallsWithOokla = useMemo(
     () => [
-      ...summaryDataCallsRows,
+      ...excludeCdrPingDuplicates(summaryDataCallsRows),
       ...mapOoklaRowsToDataCallRows(summaryOoklaRows),
       ...mapPing1000RowsToDataCallRows(summaryPing1000Rows),
       ...mapInteractivityRowsToDataCallRows(summaryInteractivityRows),

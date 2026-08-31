@@ -8,8 +8,10 @@ import type { AllCallsRow, CellBandCountRow, DataCallRow, ServingBandTechRow, Sr
 import { CHART_PALETTE } from "@/lib/chartStyles";
 import {
   BAD_QUALITY_MOS,
-  buildDataGroupSections,
   buildDataSections,
+  buildDirectionalDataSections,
+  buildHttpsSitesTotal,
+  buildPingTotal,
   buildReportPeriod,
   buildServingBandTechTable,
   buildTechnologyMixTable,
@@ -18,15 +20,20 @@ import {
   classifyCallStatus,
   collectOperators,
   EMPTY_VOICE_STATS,
+  emptyDataTestStatsLike,
   formatCount,
   formatMetric,
   formatNumber,
   formatPercent,
   LOW_QUALITY_MOS,
+  pingPacketSizeBytes,
   resolveOperator,
+  SECTION_GROUP_LABELS,
   type CodecShare,
   type DataTestSection,
   type DataTestStats,
+  type DirectionalDataTestSection,
+  type DirectionalDataTestStats,
   type OperatorMeta,
   type ServingBandTechShare,
   type TechnologyShare,
@@ -427,8 +434,17 @@ const MetaChip = ({ icon: Icon, label, value }: { icon?: typeof Database; label:
 
 /** `alt`: η ίδια μέτρηση στο άλλο σενάριο (με ↔ χωρίς system releases). */
 type Cell =
-  | { kind: "rate"; value: number | null; higherIsBetter: boolean; alt?: string }
+  | {
+      kind: "rate";
+      value: number | null;
+      higherIsBetter: boolean;
+      alt?: string;
+      /** Το count πίσω από το rate (π.χ. Normal Releases για το Call Success Rate) — βλ. compact voice rows. */
+      count?: number;
+    }
   | { kind: "count"; value: number; alt?: string }
+  /** "total / part" σε ένα cell — π.χ. Total Tests DL προς Successful tests DL, βλ. directionalDataRows. */
+  | { kind: "countRatio"; total: number; part: number }
   | {
       kind: "value";
       value: number | null;
@@ -453,6 +469,7 @@ interface KpiRowSpec<T> {
 const cellNumber = (cell: Cell): number | null => {
   if (cell.kind === "rate" || cell.kind === "value") return cell.value;
   if (cell.kind === "count") return cell.value;
+  if (cell.kind === "countRatio") return cell.total;
   return null;
 };
 
@@ -465,6 +482,7 @@ const cellHigherIsBetter = (cell: Cell): boolean | null => {
 const cellText = (cell: Cell): string => {
   if (cell.kind === "rate") return formatPercent(cell.value);
   if (cell.kind === "count") return cell.value === 0 ? "0" : formatCount(cell.value);
+  if (cell.kind === "countRatio") return `${formatCount(cell.total)} / ${formatCount(cell.part)}`;
   if (cell.kind === "value") {
     if (cell.value == null) return "—";
     // "%" κολλάει στην τιμή χωρίς κενό (π.χ. "0.668%") — κάθε άλλο unit έχει κενό πριν.
@@ -495,6 +513,8 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
       value: ratesOf(s, excludeSysRelease).csr,
       higherIsBetter: true,
       alt: altPercent(s.csr, excludeSysRelease),
+      // Normal Releases: το count δεν αλλάζει με το excludeSysRelease (μόνο η βάση/rate αλλάζει).
+      count: s.completed,
     }),
   },
   {
@@ -506,6 +526,7 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
       value: ratesOf(s, excludeSysRelease).dcr,
       higherIsBetter: false,
       alt: altPercent(s.dcr, excludeSysRelease),
+      count: s.dropped,
     }),
   },
   {
@@ -517,6 +538,7 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
       value: ratesOf(s, excludeSysRelease).afr,
       higherIsBetter: false,
       alt: altPercent(s.afr, excludeSysRelease),
+      count: s.failed,
     }),
   },
   {
@@ -678,19 +700,14 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
   },
 ];
 
-const dataRows = (stats: DataTestStats): KpiRowSpec<DataTestStats>[] => [
-  {
-    label: "Test Success Rate (%)",
-    hint: "Successful / scored tests",
-    emphasis: true,
-    cell: (s) => ({ kind: "rate", value: s.successRate, higherIsBetter: true }),
-  },
-  { label: "Total Tests", cell: (s) => ({ kind: "count", value: s.total }) },
-  { label: "Successful tests", cell: (s) => ({ kind: "count", value: s.success }) },
-  { label: "Failed Tests", cell: (s) => ({ kind: "count", value: s.failed }) },
-  // "%" εμφανίζεται κολλητό στην τιμή του κελιού (π.χ. "0.668%"), όχι σαν "(%)" στο label
-  // — αντίθετα με τα άλλα units (ms/Mbps) που μπαίνουν μόνο στο label, βλ. cellText.
-  ...stats.metrics.map((metric, index) => ({
+/**
+ * Οι γραμμές ενός section's `metrics[]` (π.χ. "Mean RTT (ms)") — reused από dataRows και
+ * compactDataRows. "%" εμφανίζεται κολλητό στην τιμή του κελιού (π.χ. "0.668%"), όχι σαν
+ * "(%)" στο label — αντίθετα με τα άλλα units (ms/Mbps) που μπαίνουν μόνο στο label, βλ.
+ * cellText.
+ */
+const dataMetricRows = (stats: DataTestStats): KpiRowSpec<DataTestStats>[] =>
+  stats.metrics.map((metric, index) => ({
     label: metric.unit && metric.unit !== "%" ? `${metric.label} (${metric.unit})` : metric.label,
     emphasis: index === 0,
     cell: (s: DataTestStats): Cell => {
@@ -704,8 +721,105 @@ const dataRows = (stats: DataTestStats): KpiRowSpec<DataTestStats>[] => [
         higherIsBetter: match?.higherIsBetter,
       };
     },
-  })),
+  }));
+
+/**
+ * "Packet Size (bytes)" row — μόνο για τα Ping 40 B/800 B/1000 B sections (βλ.
+ * pingPacketSizeBytes). Τα τρία tables έχουν ΑΚΡΙΒΩΣ την ίδια δομή γραμμών· το μόνο που
+ * διαφέρει είναι το packet size, οπότε αυτό το row το δείχνει ρητά μέσα στον πίνακα αντί
+ * να χρειάζεται να διαβάσεις το section label για να τα ξεχωρίσεις. Σταθερή τιμή —
+ * ανεξάρτητη από operator/total, άρα ο cell callback αγνοεί το `s`.
+ */
+const packetSizeRow = (bytes: number): KpiRowSpec<DataTestStats> => ({
+  label: "Packet Size (bytes)",
+  cell: () => ({ kind: "value", value: bytes, decimals: 0 }),
+});
+
+const dataRows = (stats: DataTestStats, packetSizeBytes?: number | null): KpiRowSpec<DataTestStats>[] => [
+  {
+    label: "Test Success Rate (%)",
+    hint: "Successful / scored tests",
+    emphasis: true,
+    cell: (s) => ({ kind: "rate", value: s.successRate, higherIsBetter: true }),
+  },
+  { label: "Total Tests", cell: (s) => ({ kind: "count", value: s.total }) },
+  { label: "Successful tests", cell: (s) => ({ kind: "count", value: s.success }) },
+  { label: "Failed Tests", cell: (s) => ({ kind: "count", value: s.failed }) },
+  ...(packetSizeBytes != null ? [packetSizeRow(packetSizeBytes)] : []),
+  ...dataMetricRows(stats),
 ];
+
+/**
+ * Compact card version του dataRows για τα 'rest' PS Data sections (Ping/HTTP Browser/
+ * DNS/Interactivity/Kepler/Newton/HTTPS sites/YouTube — ό,τι ΔΕΝ μπήκε σε directional
+ * table) — βλ. reference φωτο (2026-08-31): μόνο Test Success Rate / Total Tests / το(α)
+ * metric(s) του section, χωρίς τα ξεχωριστά Successful/Failed tests (ήδη καλύπτονται από
+ * το rate) — ίδιο σκεπτικό με το directionalDataRows/COMPACT_VOICE_ROW_ORDER.
+ */
+const compactDataRows = (stats: DataTestStats, packetSizeBytes?: number | null): KpiRowSpec<DataTestStats>[] => [
+  {
+    label: "Test Success Rate (%)",
+    hint: "Successful / scored tests",
+    emphasis: true,
+    cell: (s) => ({ kind: "rate", value: s.successRate, higherIsBetter: true }),
+  },
+  { label: "Total Tests", cell: (s) => ({ kind: "count", value: s.total }) },
+  ...(packetSizeBytes != null ? [packetSizeRow(packetSizeBytes)] : []),
+  ...dataMetricRows(stats),
+];
+
+/**
+ * Rows για τα directional (DL/UL merged) compact PS Data tables — βλ.
+ * buildDirectionalDataSections. "comapct_data .txt" (2026-08-31): Test Success Rate /
+ * Total Tests (προς Successful tests, ένα cell "total / successful" — βλ. Cell
+ * "countRatio") / το πρώτο metric του section (π.χ. "Mean sustainable throughput
+ * (Mbps)"), ΟΛΑ τα DL rows πρώτα και μετά ΟΛΑ τα UL rows — ΟΧΙ interleaved ανά metric.
+ * Χωρίς "Failed Tests" (δεν ζητήθηκε, ίδιο σκεπτικό με το COMPACT_VOICE_ROW_ORDER).
+ *
+ * `stats` (η τιμή που περνάει το DirectionalSectionBlock είναι πάντα το section.total)
+ * χρησιμοποιείται ΜΟΝΟ για να διαβάσει το label/unit του metric μία φορά — οι πραγματικές
+ * τιμές ανά operator/total έρχονται από το `s` που δίνει το KpiTable σε κάθε cell().
+ */
+const directionalDataRows = (stats: DirectionalDataTestStats): KpiRowSpec<DirectionalDataTestStats>[] => {
+  const directionRows = (
+    direction: "DL" | "UL",
+    pick: (s: DirectionalDataTestStats) => DataTestStats,
+  ): KpiRowSpec<DirectionalDataTestStats>[] => {
+    const metric = pick(stats).metrics[0];
+    const metricLabel = metric ? (metric.unit && metric.unit !== "%" ? `${metric.label} (${metric.unit})` : metric.label) : "Mean result";
+
+    return [
+      {
+        label: `Test Success Rate (%) ${direction}`,
+        hint: "Successful / scored tests",
+        emphasis: true,
+        cell: (s) => ({ kind: "rate", value: pick(s).successRate, higherIsBetter: true }),
+      },
+      {
+        label: `Total Tests ${direction}`,
+        hint: "Total προς Successful tests",
+        cell: (s) => ({ kind: "countRatio", total: pick(s).total, part: pick(s).success }),
+      },
+      {
+        label: `${metricLabel} ${direction}`,
+        emphasis: true,
+        cell: (s): Cell => {
+          const match = pick(s).metrics[0];
+          return {
+            kind: "value",
+            value: match?.value ?? null,
+            decimals: match?.decimals ?? 2,
+            unit: match?.unit === "%" ? "%" : undefined,
+            samples: match?.samples,
+            higherIsBetter: match?.higherIsBetter,
+          };
+        },
+      },
+    ];
+  };
+
+  return [...directionRows("DL", (s) => s.dl), ...directionRows("UL", (s) => s.ul)];
+};
 
 /* ────────────────────────── Ο γενικός πίνακας KPI ────────────────────────── */
 
@@ -716,33 +830,56 @@ interface KpiTableProps<T> {
   total: T;
   hideEmptyRows: boolean;
   markBest: boolean;
+  /** Κρύβει το cell.alt ("incl. SR ...") — βλ. hideInclSr στο SummaryTab. Άσχετο για τα PS Data rows (ποτέ δεν έχουν alt). */
+  hideInclSr?: boolean;
   /** Αντικαθιστά το default "KPI" label στο πάνω-αριστερά κελί (π.χ. τίτλος section). */
   cornerLabel?: ReactNode;
+  /**
+   * Πυκνότερο layout (λιγότερο padding, χωρίς τα row.hint) — βλ. "πιο μαζεμένο ώστε να
+   * χωρέσει σε μια σελίδα" (2026-08-31). Χρησιμοποιείται ΜΟΝΟ στο compact mode.
+   */
+  compact?: boolean;
 }
 
-function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest, cornerLabel }: KpiTableProps<T>) {
+function KpiTable<T>({
+  operators,
+  rows,
+  statsFor,
+  total,
+  hideEmptyRows,
+  markBest,
+  hideInclSr = false,
+  cornerLabel,
+  compact = false,
+}: KpiTableProps<T>) {
   const columns = operators.map((operator) => ({ operator, stats: statsFor(operator.key) }));
 
-  // Πλάτος ανά στήλη ώστε η στήλη με τα ονόματα των KPI να μη στριμώχνεται.
-  const minWidth = 260 + columns.length * 190 + 90;
+  // Πλάτος ανά στήλη ώστε η στήλη με τα ονόματα των KPI να μη στριμώχνεται. Compact:
+  // στενότερες στήλες — τα cells έχουν λιγότερο περιεχόμενο (χωρίς hint/n=/incl. SR lines).
+  const minWidth = (compact ? 190 : 260) + columns.length * (compact ? 130 : 190) + 90;
+  const headPad = compact ? "px-3 py-1.5" : "px-4 py-3";
+  const cellPad = compact ? "px-3 py-1" : "px-4 py-2";
+  const labelPad = compact ? "px-3 py-1" : "px-4 py-2.5";
 
   return (
     <div className="overflow-x-auto">
       <table className="w-full border-collapse text-sm" style={{ minWidth }}>
         <thead>
           <tr className="border-b-2 border-border bg-muted">
-            <th className="sticky left-0 z-10 min-w-[15rem] bg-muted px-4 py-3 text-left text-[11px] font-bold uppercase tracking-wider text-foreground/80">
+            <th
+              className={`sticky left-0 z-10 ${compact ? "min-w-[11rem]" : "min-w-[15rem]"} bg-muted ${headPad} text-left text-[11px] font-bold uppercase tracking-wider text-foreground/80`}
+            >
               {cornerLabel ?? "KPI"}
             </th>
             {columns.map(({ operator }) => (
-              <th key={operator.key} className="px-4 py-3 text-right font-semibold">
+              <th key={operator.key} className={`${headPad} text-right font-semibold`}>
                 <span className="flex items-center justify-end gap-1.5">
                   <OperatorSwatch color={operator.color} />
                   <span className="text-xs font-bold tracking-wide text-foreground">{operator.label}</span>
                 </span>
               </th>
             ))}
-            <th className="border-l-2 border-border/60 px-4 py-3 text-right text-[11px] font-bold uppercase tracking-wider text-foreground/80">
+            <th className={`border-l-2 border-border/60 ${headPad} text-right text-[11px] font-bold uppercase tracking-wider text-foreground/80`}>
               Total
             </th>
           </tr>
@@ -774,9 +911,16 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
 
             return (
               <tr key={row.label} className="border-b border-border/70 last:border-b-0 hover:bg-muted/30">
-                <td className="sticky left-0 z-10 min-w-[15rem] bg-card px-4 py-2.5 align-middle">
-                  <div className={row.emphasis ? "font-semibold text-foreground" : "font-medium text-foreground/80"}>{row.label}</div>
-                  {row.hint && <div className="text-[10px] text-muted-foreground">{row.hint}</div>}
+                <td
+                  className={`sticky left-0 z-10 ${compact ? "min-w-[11rem]" : "min-w-[15rem]"} bg-card ${labelPad} align-middle`}
+                >
+                  <div
+                    className={`${compact ? "text-xs" : ""} ${row.emphasis ? "font-semibold text-foreground" : "font-medium text-foreground/80"}`}
+                  >
+                    {row.label}
+                  </div>
+                  {/* Το hint φεύγει στο compact — λιγότερες γραμμές, βλ. "πιο μαζεμένο". */}
+                  {row.hint && !compact && <div className="text-[10px] text-muted-foreground">{row.hint}</div>}
                 </td>
 
                 {cells.map((cell, index) => {
@@ -785,7 +929,7 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                   const isBest = bestValue != null && value === bestValue;
 
                   return (
-                    <td key={operator.key} className="px-4 py-2 align-middle">
+                    <td key={operator.key} className={`${cellPad} align-middle`}>
                       {cell.kind === "mix" ? (
                         <OutcomeMixBar stats={(cell as Extract<Cell, { kind: "mix" }>).stats} />
                       ) : cell.kind === "codecMix" ? (
@@ -810,7 +954,7 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                             <span
                               className={`block font-mono tabular-nums ${
                                 row.emphasis ? "text-sm font-bold text-foreground" : "text-[13px] font-medium text-foreground/90"
-                              } ${value === 0 && cell.kind === "count" ? "text-muted-foreground/40" : ""}`}
+                              } ${value === 0 && (cell.kind === "count" || cell.kind === "countRatio") ? "text-muted-foreground/40" : ""}`}
                             >
                               {cellText(cell)}
                             </span>
@@ -827,7 +971,16 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                                   )}
                                 </span>
                               )}
-                            {(cell.kind === "rate" || cell.kind === "count") && cell.alt && (
+                            {cell.kind === "rate" && cell.count != null && (
+                              <span
+                                className={`block font-mono tabular-nums ${
+                                  row.emphasis ? "text-sm font-bold text-foreground" : "text-[13px] font-medium text-foreground/90"
+                                } ${cell.count === 0 ? "text-muted-foreground/40" : ""}`}
+                              >
+                                sum={formatCount(cell.count)}
+                              </span>
+                            )}
+                            {(cell.kind === "rate" || cell.kind === "count") && cell.alt && !hideInclSr && (
                               <span
                                 className="block text-[10px] leading-tight text-muted-foreground"
                                 title="Ίδιο KPI με τα system releases μέσα στη βάση"
@@ -842,7 +995,7 @@ function KpiTable<T>({ operators, rows, statsFor, total, hideEmptyRows, markBest
                   );
                 })}
 
-                <td className="border-l border-border/60 px-4 py-1.5 text-right align-middle">
+                <td className={`border-l border-border/60 ${compact ? "px-3 py-1" : "px-4 py-1.5"} text-right align-middle`}>
                   {totalCell.kind === "mix" ? (
                     <OutcomeMixBar stats={(totalCell as Extract<Cell, { kind: "mix" }>).stats} />
                   ) : totalCell.kind === "codecMix" ? (
@@ -907,10 +1060,13 @@ const OperatorTile = ({
   operator,
   stats,
   excludeSysRelease,
+  hideInclSr,
 }: {
   operator: OperatorMeta;
   stats: VoiceStats;
   excludeSysRelease: boolean;
+  /** Κρύβει το "incl. system releases ..." — βλ. hideInclSr στο SummaryTab. */
+  hideInclSr: boolean;
 }) => {
   const rates = ratesOf(stats, excludeSysRelease);
 
@@ -933,7 +1089,7 @@ const OperatorTile = ({
         <RateMeter value={rates.csr} higherIsBetter={true} />
       </div>
 
-      {excludeSysRelease && (
+      {excludeSysRelease && !hideInclSr && (
         <p className="mt-2 text-[10px] text-muted-foreground">
           incl. system releases {formatPercent(stats.csr, 1)} · {formatCount(stats.attempts)} attempts
         </p>
@@ -977,14 +1133,60 @@ const TableSkeleton = ({ rows = 6 }: { rows?: number }) => (
 );
 
 /**
- * Οι 4 γραμμές που επιβιώνουν στο compact mode των Voice tables: AVG MOS, DROP, FAIL,
- * SUCCESS. Τα labels πρέπει να ταιριάζουν ΑΚΡΙΒΩΣ με τα voiceRows παρακάτω.
+ * Οι γραμμές που επιβιώνουν στο compact mode των Voice tables, ΜΕ τη σειρά εμφάνισής
+ * τους — βλ. "comapct_voice .txt": GSM calls/FREE calls total, success/drop/fail rate, και
+ * POLQA avg MOS. Ίδιο set/σειρά και στα δύο tables (GSM ΚΑΙ FREE — βλ. gsmRows/freeRows
+ * παρακάτω). Total Calls πρώτο (2026-08-31: μετακινήθηκε από προτελευταίο σε πρώτο — βλ.
+ * τη σειρά του voiceRows παρακάτω, όπου είναι ΜΕΤΑ τα rates). Τα labels πρέπει να
+ * ταιριάζουν ΑΚΡΙΒΩΣ με τα voiceRows παρακάτω· το "Total Calls" αλλάζει label με το
+ * excludeSysRelease toggle (βλ. voiceRows), οπότε χρειάζονται εδώ και τα δύο variants
+ * (μόνο ένα από τα δύο υπάρχει σε κάθε render, βλ. rows useMemo).
+ *
+ * "rate/count" του txt: ΔΕΝ είναι ξεχωριστή γραμμή — το count (Normal Releases/Dropped
+ * Calls/Unsuccessful Call Attempts) μπαίνει ΜΕΣΑ στο rate cell σαν δεύτερη γραμμή "sum=..."
+ * (βλ. Cell "rate".count / voiceRows), οπότε οι standalone count rows δεν χρειάζονται εδώ.
  */
-const COMPACT_VOICE_ROW_LABELS = new Set([
+const COMPACT_VOICE_ROW_ORDER = [
+  "Total Calls",
+  "Total Calls (excl. SR)",
   "Call Success Rate (%)",
   "Dropped Call Rate (%)",
   "Access Failure Rate (%)",
   "POLQA avg (Speech quality ITU P.863)",
+];
+
+/**
+ * Ένα section του compact PS Data view: είτε κανονικό (ίδιο με το Full mode, όταν δεν είχε
+ * DL/UL pair) είτε directional (Ε1 ζευγάρι DL/UL ενωμένο σε ένα table — βλ.
+ * buildDirectionalDataSections). Discriminated union ώστε το render loop να ξέρει ποιο
+ * KpiTable/rows builder να χρησιμοποιήσει για κάθε section.
+ */
+type DisplaySection =
+  | { kind: "normal"; section: DataTestSection }
+  | { kind: "directional"; section: DirectionalDataTestSection };
+
+/**
+ * Ε-groups που καταργούνται εντελώς στο compact PS Data view (2026-08-31) — μένουν μόνο
+ * στο Full mode. Ε3 · Browser engines (Kepler/Kepler +30s Pause/Newton) και Ε5 · Video
+ * streaming (YouTube Service/4K/Live) φεύγουν σαν σύνολο groups — ασφαλές να φιλτραριστούν
+ * by `group` γιατί δεν έχουν κανένα merged section μέσα τους (αντίθετα με το Ε2, όπου το
+ * merged "Ping (all sizes combined)" ΠΡΕΠΕΙ να μείνει — βλ. COMPACT_EXCLUDED_SECTION_LABELS
+ * για τα μεμονωμένα Ε2 sections που φεύγουν χωρίς να πειράξουν το Ping merge).
+ */
+const COMPACT_EXCLUDED_GROUPS = new Set<string>([SECTION_GROUP_LABELS.browserEngines, SECTION_GROUP_LABELS.videoStreaming]);
+
+/**
+ * Μεμονωμένα sections που καταργούνται εντελώς στο compact (2026-08-31) — by label, όχι
+ * by group, γιατί μοιράζονται group με κάτι που ΠΡΕΠΕΙ να μείνει: HTTP Transfer DL/UL
+ * είναι Ε1 · Bulk throughput (ίδιο group με Capacity/Ookla, ήδη merged directional
+ * tables), DNS Resolution/Interactivity (eGaming) είναι Ε2 · Latency (ίδιο group με το
+ * merged Ping total) — filter by group θα έσβηνε και τα merges αυτά κατά λάθος.
+ */
+const COMPACT_EXCLUDED_SECTION_LABELS = new Set([
+  "HTTP Transfer (DL) 10MB",
+  "HTTP Transfer (UL) 5MB",
+  "DNS Resolution",
+  "Interactivity (eGaming)",
 ]);
 
 /* ────────────────────────── Το tab ────────────────────────── */
@@ -1011,14 +1213,22 @@ const SummaryTab = ({
   const [markBest, setMarkBest] = useState(true);
   /** "Avoid system release": τα ποσοστά υπολογίζονται χωρίς τις κλήσεις που έκλεισε το σύστημα. */
   const [excludeSysRelease, setExcludeSysRelease] = useState(true);
+  /**
+   * Κρύβει τη δευτερεύουσα "incl. SR" γραμμή κάτω από τα rate/count cells (βλ. altPercent/
+   * altCount) — μόνο εμφάνιση, δεν αγγίζει το ίδιο το excludeSysRelease scenario. Active
+   * (κρυμμένο) από προεπιλογή.
+   */
+  const [hideInclSr, setHideInclSr] = useState(true);
   /** "Valid calls": κρατάει έξω τις σειρές που έχουν ρητά σημαδευτεί isValid = 0. */
   const [onlyValidCalls, setOnlyValidCalls] = useState(true);
   /**
    * "Compact": πολύ λιγότερα δεδομένα στην οθόνη — τα PS Data sections συμπτύσσονται στα 5
-   * Ε-groups με ένα AVG το καθένα, και τα Voice tables κρατάνε μόνο MOS/Drop/Fail/Success.
+   * Ε-groups με ένα AVG το καθένα, και τα Voice tables κρατάνε μόνο Total Calls, Success/
+   * Drop/Fail rate (με το count σαν "sum=..." μέσα στο ίδιο cell), και POLQA avg MOS (βλ.
+   * COMPACT_VOICE_ROW_ORDER). Default true — "by default επιλογή Compact" (2026-08-31).
    * Σε localStorage γιατί είναι προτίμηση προβολής, όχι κάτι που θέλεις να ξαναδιαλέγεις.
    */
-  const [compact, setCompact] = useLocalStorage<boolean>("perf-insights-summary-compact", false);
+  const [compact, setCompact] = useLocalStorage<boolean>("perf-insights-summary-compact", true);
   const [collectionsMenuOpen, setCollectionsMenuOpen] = useState(false);
 
   const validAllCallsRows = useMemo(
@@ -1032,15 +1242,21 @@ const SummaryTab = ({
 
   const allRows = useMemo(() => voiceRows(excludeSysRelease), [excludeSysRelease]);
   /**
-   * Compact: μόνο AVG MOS / DROP / FAIL / SUCCESS. Τα 4 labels είναι σταθερά ανεξάρτητα
-   * από το excludeSysRelease — μόνο τα "Call Attempts"/"Total Calls" αλλάζουν label με το
-   * toggle (βλ. voiceRows), οπότε το set δεν σπάει. Ό,τι άλλο (counts, codec/technology
-   * mix, SRVCC, setup times) φεύγει αυτόματα επειδή δεν είναι εδώ μέσα.
+   * Compact: μόνο Total Calls (πρώτο) / Success / Drop / Fail rate (με το count σαν
+   * "sum=..." μέσα στο ίδιο cell, βλ. voiceRows) / POLQA avg MOS — με τη σειρά του
+   * COMPACT_VOICE_ROW_ORDER, όχι τη σειρά του voiceRows (εκεί το Total Calls είναι ΜΕΤΑ τα
+   * rates). Το "Total Calls" αλλάζει label με το excludeSysRelease toggle (βλ. voiceRows) —
+   * μόνο ένα από τα δύο variants ταιριάζει σε κάθε render, το άλλο απλά δεν βρίσκεται στο
+   * byLabel και πέφτει έξω. Ό,τι άλλο (Call Attempts, standalone count rows, codec/
+   * technology mix, SRVCC, setup times) φεύγει αυτόματα επειδή δεν είναι στο order list.
    */
-  const rows = useMemo(
-    () => (compact ? allRows.filter((row) => COMPACT_VOICE_ROW_LABELS.has(row.label)) : allRows),
-    [allRows, compact],
-  );
+  const rows = useMemo(() => {
+    if (!compact) return allRows;
+    const byLabel = new Map(allRows.map((row) => [row.label, row]));
+    return COMPACT_VOICE_ROW_ORDER.map((label) => byLabel.get(label)).filter(
+      (row): row is KpiRowSpec<VoiceStats> => row != null,
+    );
+  }, [allRows, compact]);
   /**
    * Ίδιο με rows, χωρίς τις 3 SRVCC γραμμές (μόνο FREE table — βλ. VoiceStats.srvcc) και τα
    * per-CustomCallMode VoLTE/CS attempts/dropped (μόνο FREE table — βλ. LQCallData.sql /
@@ -1095,13 +1311,41 @@ const SummaryTab = ({
   );
   const fullDataSections = useMemo(() => buildDataSections(validDataCallsRows), [validDataCallsRows]);
   /**
-   * Compact: τα ~23 sections συμπτύσσονται στα 5 Ε-groups (+ "Λοιπά tests"), ένα AVG το
-   * καθένα. Τρέχει πάνω στο ήδη υπολογισμένο fullDataSections — δεν ξαναδιαβάζει raw rows.
+   * Compact: τα Ε1 · Bulk throughput ζευγάρια DL/UL (Capacity, Ookla — ΧΩΡΙΣ HTTP Transfer,
+   * αφαιρέθηκε 2026-08-31) ενώνονται σε ένα directional table το καθένα — βλ.
+   * buildDirectionalDataSections. Τρέχει πάνω στο ήδη υπολογισμένο fullDataSections — δεν
+   * ξαναδιαβάζει raw rows.
    */
-  const dataSections = useMemo(
-    () => (compact ? buildDataGroupSections(fullDataSections) : fullDataSections),
-    [fullDataSections, compact],
+  const directionalDataSections = useMemo(() => buildDirectionalDataSections(fullDataSections), [fullDataSections]);
+  /**
+   * Compact: το Ε4 · HTTPS sites group (9 site tests) μαζεύεται σε ΕΝΑ section (βλ.
+   * buildHttpsSitesTotal, "όλα τα σάιτε μαζεμένα σε total στο compact", 2026-08-31), και
+   * τα Ping 40 B/800 B/1000 B μαζεύονται σε ΕΝΑ ακόμα section (βλ. buildPingTotal, "τα ping
+   * στο compact όλα μαζεμένα", 2026-08-31). Τρέχει πάνω στο `rest` του
+   * directionalDataSections (ό,τι δεν μπήκε ήδη σε DL/UL merge).
+   */
+  const compactRestSections = useMemo(
+    () => buildPingTotal(buildHttpsSitesTotal(directionalDataSections.rest)),
+    [directionalDataSections],
   );
+  /**
+   * Compact: merged directional tables πρώτα, μετά το compactRestSections (Ε4/Ping
+   * μαζεμένα, ό,τι άλλο δεν είχε DL/UL pair σαν ξεχωριστά sections) — ίδιο με το Full mode,
+   * ΟΧΙ πια averaged σε κάθε Ε-group (βλ. "comapct_data .txt", 2026-08-31 — αντικατέστησε
+   * το παλιό buildDataGroupSections). Ε3 · Browser engines/Ε5 · Video streaming (βλ.
+   * COMPACT_EXCLUDED_GROUPS) και HTTP Transfer DL/UL/DNS Resolution/Interactivity
+   * (eGaming) (βλ. COMPACT_EXCLUDED_SECTION_LABELS) καταργούνται εντελώς στο compact
+   * (2026-08-31) — μένουν μόνο στο Full mode.
+   */
+  const dataSections = useMemo<DisplaySection[]>(() => {
+    if (!compact) return fullDataSections.map((section) => ({ kind: "normal", section }) as const);
+    return [
+      ...directionalDataSections.merged.map((section) => ({ kind: "directional", section }) as const),
+      ...compactRestSections
+        .filter((section) => !COMPACT_EXCLUDED_GROUPS.has(section.group) && !COMPACT_EXCLUDED_SECTION_LABELS.has(section.label))
+        .map((section) => ({ kind: "normal", section }) as const),
+    ];
+  }, [compact, fullDataSections, directionalDataSections, compactRestSections]);
 
   // Πραγματικό ανά-band technology mix (βλ. σχόλιο στο SummaryTabProps.technologyMixRows) —
   // άδειο όταν δεν έχει φορτώσει ακόμα ή το schema δεν έχει CallSession, οπότε το
@@ -1267,7 +1511,10 @@ const SummaryTab = ({
                     <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
                   </div>
 
-                  {collections.length > 1 && (
+                  {/* Και για ένα μόνο selected collection — πριν φαινόταν μόνο για 2+, οπότε
+                      το flagged (κόκκινο) χρώμα δεν ήταν ποτέ ορατό όταν ήταν ένα μόνο
+                      επιλεγμένο (το κουμπί πάνω δείχνει το όνομα πάντα σε text-foreground). */}
+                  {collections.length > 0 && (
                     <div className="mt-1 flex max-w-[18rem] flex-wrap items-center justify-center gap-x-1.5 gap-y-0.5">
                       {collections.map((name) => (
                         <span
@@ -1379,7 +1626,7 @@ const SummaryTab = ({
               {formatCount(overallStats.completed)} normal releases /{" "}
               {formatCount(ratesOf(overallStats, excludeSysRelease).attempts)} attempts
             </div>
-            {excludeSysRelease && (
+            {excludeSysRelease && !hideInclSr && (
               <div className="mt-1 text-[11px] text-muted-foreground">
                 incl. system releases {formatPercent(overallStats.csr, 1)} · {formatCount(overallStats.sysRelease)} system
                 releases
@@ -1404,7 +1651,7 @@ const SummaryTab = ({
             {/* Segmented, όχι checkbox: αλλάζει το σχήμα ΟΛΗΣ της αναφοράς, όχι μία στήλη. */}
             <div
               className="flex items-center gap-0.5 rounded-md border border-border bg-background p-0.5"
-              title="Compact: τα PS Data tests συμπτύσσονται στα 5 groups με ένα AVG το καθένα, και τα Voice tables κρατάνε μόνο MOS / Drop / Fail / Success."
+              title="Compact: τα PS Data tests συμπτύσσονται στα 5 groups με ένα AVG το καθένα, και τα Voice tables κρατάνε μόνο Total Calls / Success / Drop / Fail rate (με το count) / POLQA avg MOS."
             >
               {([false, true] as const).map((value) => (
                 <button
@@ -1446,6 +1693,22 @@ const SummaryTab = ({
               />
               Avoid system release
             </label>
+            {/* Ίδιο look με τα "Valid calls"/"Avoid system release" checkboxes — δεν αλλάζει
+                καμία βάση υπολογισμού, μόνο εμφάνιση της "incl. SR" δευτερεύουσας γραμμής.
+                Active (κρυμμένο) by default. */}
+            <label
+              className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground has-[:disabled]:cursor-not-allowed has-[:disabled]:opacity-40"
+              title="Κρύβει τη δευτερεύουσα γραμμή «incl. SR» κάτω από κάθε rate/count. Ενεργό (κρυμμένο) από προεπιλογή."
+            >
+              <input
+                type="checkbox"
+                checked={hideInclSr}
+                onChange={(event) => setHideInclSr(event.target.checked)}
+                disabled={!excludeSysRelease}
+                className="h-3 w-3 accent-[hsl(var(--primary))]"
+              />
+              Hide incl. SR
+            </label>
             <label className="flex cursor-pointer items-center gap-1.5 text-[11px] text-muted-foreground">
               <input
                 type="checkbox"
@@ -1475,75 +1738,88 @@ const SummaryTab = ({
       )}
 
       {/* ── KPI tiles ανά operator ── */}
-      {loading.voice ? (
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {Array.from({ length: 3 }, (_, index) => (
-            <Skeleton key={index} className="h-40 rounded-xl" />
-          ))}
-        </div>
-      ) : (
-        operators.length > 0 &&
-        validAllCallsRows.length > 0 && (
+      {/* Compact: οι κάρτες ("GSM+FREE call success rate" ανά operator) φεύγουν — ήδη
+          καλύπτονται από τα Total Calls/Success/Drop/Fail rate rows στα GSM/FREE tables
+          παρακάτω, βλ. COMPACT_VOICE_ROW_ORDER. Full μόνο. */}
+      {!compact &&
+        (loading.voice ? (
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {operators.map((operator) => {
-              const stats = voiceByOperator.get(operator.key);
-              if (!stats || stats.attempts === 0) return null;
-              return (
-                <OperatorTile
-                  key={operator.key}
-                  operator={operator}
-                  stats={stats}
-                  excludeSysRelease={excludeSysRelease}
-                />
-              );
-            })}
+            {Array.from({ length: 3 }, (_, index) => (
+              <Skeleton key={index} className="h-40 rounded-xl" />
+            ))}
           </div>
-        )
-      )}
+        ) : (
+          operators.length > 0 &&
+          validAllCallsRows.length > 0 && (
+            <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {operators.map((operator) => {
+                const stats = voiceByOperator.get(operator.key);
+                if (!stats || stats.attempts === 0) return null;
+                return (
+                  <OperatorTile
+                    key={operator.key}
+                    operator={operator}
+                    stats={stats}
+                    excludeSysRelease={excludeSysRelease}
+                    hideInclSr={hideInclSr}
+                  />
+                );
+              })}
+            </div>
+          )
+        ))}
 
-      {/* ── TABLE 20 — GSM ── */}
-      {(loading.voice || gsmTable.total.attempts > 0) && (
-        <ReportCard
-          title="GSM Call Stats"
-          subtitle={loading.voice ? "loading…" : `${formatCount(gsmTable.total.attempts)} call attempts`}
-          icon={Radio}
-          footer={loading.voice ? undefined : <OutcomeLegend />}
-        >
-          {loading.voice ? (
-            <TableSkeleton />
-          ) : (
-            <KpiTable
-              operators={operators.filter((operator) => (gsmTable.byOperator.get(operator.key)?.attempts ?? 0) > 0)}
-              rows={gsmRows}
-              hideEmptyRows={hideEmptyRows}
-              markBest={markBest}
-              {...voiceTableFor(gsmTable, gsmTechMix)}
-            />
-          )}
-        </ReportCard>
-      )}
+      {/* ── TABLE 20/21 — GSM + FREE ── */}
+      {/* Compact: μισό πλάτος η καθεμιά, δίπλα-δίπλα (βλ. "μισο πλατος για gsm ... το αλλο
+          μισο free", 2026-08-31) — αντικατέστησε το bar chart, που αφαιρέθηκε εντελώς. Full:
+          η μία κάτω από την άλλη, όπως πάντα (ίδιο κενό με τα υπόλοιπα sections). */}
+      <div className={compact ? "grid gap-3 lg:grid-cols-2" : "space-y-4"}>
+        {(loading.voice || gsmTable.total.attempts > 0) && (
+          <ReportCard
+            title="GSM Call Stats"
+            subtitle={loading.voice ? "loading…" : `${formatCount(gsmTable.total.attempts)} call attempts`}
+            icon={Radio}
+            footer={loading.voice || compact ? undefined : <OutcomeLegend />}
+          >
+            {loading.voice ? (
+              <TableSkeleton />
+            ) : (
+              <KpiTable
+                operators={operators.filter((operator) => (gsmTable.byOperator.get(operator.key)?.attempts ?? 0) > 0)}
+                rows={gsmRows}
+                hideEmptyRows={hideEmptyRows}
+                markBest={markBest}
+                hideInclSr={hideInclSr}
+                compact={compact}
+                {...voiceTableFor(gsmTable, gsmTechMix)}
+              />
+            )}
+          </ReportCard>
+        )}
 
-      {/* ── TABLE 21 — FREE ── */}
-      {(loading.voice || freeTable.total.attempts > 0) && (
-        <ReportCard
-          title="Free (2G-3G-LTE) Call Stats"
-          subtitle={loading.voice ? "loading…" : `${formatCount(freeTable.total.attempts)} call attempts`}
-          icon={Phone}
-          footer={loading.voice ? undefined : <OutcomeLegend />}
-        >
-          {loading.voice ? (
-            <TableSkeleton />
-          ) : (
-            <KpiTable
-              operators={operators.filter((operator) => (freeTable.byOperator.get(operator.key)?.attempts ?? 0) > 0)}
-              rows={freeRows}
-              hideEmptyRows={hideEmptyRows}
-              markBest={markBest}
-              {...voiceTableFor(freeTable, freeTechMix)}
-            />
-          )}
-        </ReportCard>
-      )}
+        {(loading.voice || freeTable.total.attempts > 0) && (
+          <ReportCard
+            title="Free (2G-3G-LTE) Call Stats"
+            subtitle={loading.voice ? "loading…" : `${formatCount(freeTable.total.attempts)} call attempts`}
+            icon={Phone}
+            footer={loading.voice || compact ? undefined : <OutcomeLegend />}
+          >
+            {loading.voice ? (
+              <TableSkeleton />
+            ) : (
+              <KpiTable
+                operators={operators.filter((operator) => (freeTable.byOperator.get(operator.key)?.attempts ?? 0) > 0)}
+                rows={freeRows}
+                hideEmptyRows={hideEmptyRows}
+                markBest={markBest}
+                hideInclSr={hideInclSr}
+                compact={compact}
+                {...voiceTableFor(freeTable, freeTechMix)}
+              />
+            )}
+          </ReportCard>
+        )}
+      </div>
 
       {/* ── TABLE 22 — PS DATA ── */}
       {(loading.data || dataSections.length > 0) && (
@@ -1552,53 +1828,90 @@ const SummaryTab = ({
           subtitle={
             loading.data
               ? "loading…"
-              : `${dataSections.length} ${compact ? "groups" : "test sections"} · ${formatCount(validDataCallsRows.length)} tests`
+              : `${dataSections.length} test sections · ${formatCount(validDataCallsRows.length)} tests`
           }
           icon={Wifi}
         >
           {loading.data && <TableSkeleton rows={8} />}
-          <div className="divide-y divide-border/60">
-            {/* Οι πίτες είναι το πιο βαρύ οπτικά μπλοκ της κάρτας — έξω από το compact. */}
-            {!compact && !loading.data && loading.servingBandTech && (
-              <div className="px-4 py-4">
-                <Skeleton className="h-32 w-full" />
-              </div>
-            )}
-            {!compact && servingBandTech.total.some((share) => share.total > 0) && (
-              <div>
-                <div className="px-4 pt-4">
-                  <div className="text-xs font-bold text-foreground">Serving Band / Serving Technology (per Time)</div>
-                  <div className="mt-0.5 text-[10px] font-normal text-muted-foreground">
-                    FTP, HTTP, CAPACITY DL (Test Data Server) — ανά operator
+          {compact ? (
+            // Compact: 2 στήλες, μισό πλάτος η καθεμιά (βλ. "Aντιστοιχα μισο Πλατος
+            // Capacity ... / Ookla ... HTTPS sites ... μισο Ping ... μισο", 2026-08-31).
+            // Χωρίς group headers (Ε1 · .../Ε2 · ...) — δεν έχει νόημα ένας τίτλος να
+            // "μοιράζεται" πλάτος με ένα δίπλα section από άλλο group· κάθε κάρτα έχει ήδη
+            // δικό της label μέσα στο KpiTable. Κάθε section παίρνει ένα λεπτό border ώστε
+            // να ξεχωρίζει καθαρά μέσα στο grid, αφού δεν υπάρχει πια divide-y ανάμεσά τους.
+            <div className="grid gap-3 p-3 sm:grid-cols-2">
+              {dataSections.map((entry) =>
+                entry.kind === "directional" ? (
+                  <div key={entry.section.key} className="overflow-hidden rounded-lg border border-border/70">
+                    <DirectionalSectionBlock
+                      section={entry.section}
+                      operators={operators}
+                      hideEmptyRows={hideEmptyRows}
+                      markBest={markBest}
+                    />
                   </div>
+                ) : (
+                  <div key={entry.section.key} className="overflow-hidden rounded-lg border border-border/70">
+                    <DataSectionBlock
+                      section={entry.section}
+                      operators={operators}
+                      hideEmptyRows={hideEmptyRows}
+                      markBest={markBest}
+                      compact
+                    />
+                  </div>
+                ),
+              )}
+            </div>
+          ) : (
+            <div className="divide-y divide-border/60">
+              {/* Οι πίτες είναι το πιο βαρύ οπτικά μπλοκ της κάρτας — έξω από το compact. */}
+              {!loading.data && loading.servingBandTech && (
+                <div className="px-4 py-4">
+                  <Skeleton className="h-32 w-full" />
                 </div>
-                <ServingBandTechPies
-                  operators={operators.filter((operator) =>
-                    (servingBandTech.byOperator.get(operator.key) ?? []).some((share) => share.total > 0),
-                  )}
-                  byOperator={servingBandTech.byOperator}
-                />
-              </div>
-            )}
-            {dataSections.map((section, index) => {
-              const previousGroup = index > 0 ? dataSections[index - 1].group : "";
-              return (
-                <Fragment key={section.key}>
-                  {section.group && section.group !== previousGroup && (
-                    <div className="px-4 pt-4 pb-1">
-                      <div className="text-[11px] font-bold uppercase tracking-wider text-primary">{section.group}</div>
+              )}
+              {servingBandTech.total.some((share) => share.total > 0) && (
+                <div>
+                  <div className="px-4 pt-4">
+                    <div className="text-xs font-bold text-foreground">Serving Band / Serving Technology (per Time)</div>
+                    <div className="mt-0.5 text-[10px] font-normal text-muted-foreground">
+                      FTP, HTTP, CAPACITY DL (Test Data Server) — ανά operator
                     </div>
-                  )}
-                  <DataSectionBlock
-                    section={section}
-                    operators={operators}
-                    hideEmptyRows={hideEmptyRows}
-                    markBest={markBest}
+                  </div>
+                  <ServingBandTechPies
+                    operators={operators.filter((operator) =>
+                      (servingBandTech.byOperator.get(operator.key) ?? []).some((share) => share.total > 0),
+                    )}
+                    byOperator={servingBandTech.byOperator}
                   />
-                </Fragment>
-              );
-            })}
-          </div>
+                </div>
+              )}
+              {dataSections.map((entry, index) => {
+                const previousGroup = index > 0 ? dataSections[index - 1].section.group : "";
+                return (
+                  <Fragment key={entry.section.key}>
+                    {entry.section.group && entry.section.group !== previousGroup && (
+                      <div className="px-4 pt-4 pb-1">
+                        <div className="text-[11px] font-bold uppercase tracking-wider text-primary">{entry.section.group}</div>
+                      </div>
+                    )}
+                    {entry.kind === "directional" ? (
+                      <DirectionalSectionBlock
+                        section={entry.section}
+                        operators={operators}
+                        hideEmptyRows={hideEmptyRows}
+                        markBest={markBest}
+                      />
+                    ) : (
+                      <DataSectionBlock section={entry.section} operators={operators} hideEmptyRows={hideEmptyRows} markBest={markBest} />
+                    )}
+                  </Fragment>
+                );
+              })}
+            </div>
+          )}
         </ReportCard>
       )}
 
@@ -1606,7 +1919,9 @@ const SummaryTab = ({
         (*) Τα KPIs ακολουθούν τους ορισμούς του Attachment B. Οι ράβδοι στα ποσοστά δείχνουν κατάσταση (πράσινο → κόκκινο),
         οι ράβδοι στα πλήθη δείχνουν μέγεθος στο χρώμα του operator. Κάθε τιμή υπάρχει και ως αριθμός στον πίνακα.
         {excludeSysRelease &&
-          " Με το «Avoid system release» οι κλήσεις που έκλεισε το σύστημα βγαίνουν από τη βάση των ποσοστών· η τιμή με αυτές μέσα εμφανίζεται ως «incl. SR» κάτω από κάθε νούμερο."}
+          (hideInclSr
+            ? " Με το «Avoid system release» οι κλήσεις που έκλεισε το σύστημα βγαίνουν από τη βάση των ποσοστών· η τιμή με αυτές μέσα («incl. SR») είναι κρυμμένη — σβήσε το «Hide incl. SR» για να τη δεις κάτω από κάθε νούμερο."
+            : " Με το «Avoid system release» οι κλήσεις που έκλεισε το σύστημα βγαίνουν από τη βάση των ποσοστών· η τιμή με αυτές μέσα εμφανίζεται ως «incl. SR» κάτω από κάθε νούμερο.")}
       </p>
     </div>
   );
@@ -1619,24 +1934,30 @@ const DataSectionBlock = ({
   operators,
   hideEmptyRows,
   markBest,
+  compact = false,
 }: {
   section: DataTestSection;
   operators: OperatorMeta[];
   hideEmptyRows: boolean;
   markBest: boolean;
+  /** Compact card: μόνο Success Rate / Total Tests / metric(s) — βλ. compactDataRows. */
+  compact?: boolean;
 }) => {
   const present = operators.filter((operator) => (section.byOperator.get(operator.key)?.total ?? 0) > 0);
-  const empty: DataTestStats = { total: 0, success: 0, failed: 0, successRate: null, metrics: section.total.metrics.map((metric) => ({ ...metric, value: null, samples: 0 })) };
+  const empty = emptyDataTestStatsLike(section.total);
+  // Ping 40 B/800 B/1000 B μόνο — βλ. pingPacketSizeBytes/packetSizeRow.
+  const packetSizeBytes = pingPacketSizeBytes(section.label);
 
   return (
     <div>
       <KpiTable
         operators={present}
-        rows={dataRows(section.total)}
+        rows={compact ? compactDataRows(section.total, packetSizeBytes) : dataRows(section.total, packetSizeBytes)}
         statsFor={(operatorKey) => section.byOperator.get(operatorKey) ?? empty}
         total={section.total}
         hideEmptyRows={hideEmptyRows}
         markBest={markBest}
+        compact={compact}
         cornerLabel={
           <div>
             <div className="text-xs font-bold normal-case tracking-normal text-foreground">{section.label}</div>
@@ -1646,6 +1967,47 @@ const DataSectionBlock = ({
             </div>
           </div>
         }
+      />
+    </div>
+  );
+};
+
+/**
+ * Compact directional table (DL/UL merged) — βλ. buildDirectionalDataSections/
+ * directionalDataRows. Ίδιο σχήμα με DataSectionBlock, απλά με δύο πλευρές (dl/ul) αντί
+ * για ένα DataTestStats.
+ */
+const DirectionalSectionBlock = ({
+  section,
+  operators,
+  hideEmptyRows,
+  markBest,
+}: {
+  section: DirectionalDataTestSection;
+  operators: OperatorMeta[];
+  hideEmptyRows: boolean;
+  markBest: boolean;
+}) => {
+  const present = operators.filter((operator) => {
+    const stats = section.byOperator.get(operator.key);
+    return (stats?.dl.total ?? 0) > 0 || (stats?.ul.total ?? 0) > 0;
+  });
+  const empty: DirectionalDataTestStats = {
+    dl: emptyDataTestStatsLike(section.total.dl),
+    ul: emptyDataTestStatsLike(section.total.ul),
+  };
+
+  return (
+    <div>
+      <KpiTable
+        operators={present}
+        rows={directionalDataRows(section.total)}
+        statsFor={(operatorKey) => section.byOperator.get(operatorKey) ?? empty}
+        total={section.total}
+        hideEmptyRows={hideEmptyRows}
+        markBest={markBest}
+        compact
+        cornerLabel={<div className="text-xs font-bold normal-case tracking-normal text-foreground">{section.label}</div>}
       />
     </div>
   );

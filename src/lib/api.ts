@@ -345,13 +345,17 @@ export async function fetchOokla(
 }
 
 /**
- * Ένα raw ping-packet row (PacketSize=1000) για το "Ping 1000" section του PS Data
- * Stats table — βλ. /api/ping_1000. Ίδιο query με το A-LEVEL "PING RAW.sql" reference
- * query / το "Ping RAW" saved query του QueryEditor, φιλτραρισμένο σε PacketSize=1000
- * (δεν φτάνει σαν δικό του TestName από το CDRCombined view του /api/data_calls).
- * `rtt` είναι NULL όταν το packet απέτυχε (errorCode <> 0). Το frontend τα μετατρέπει
- * σε DataCallRow σχήμα (testType="Ping 1000") — βλ. mapPing1000RowsToDataCallRows
- * στο attachmentC.ts.
+ * Ένα raw ping-packet row — PacketSize 40, 800, Ή 1000 (βλ. `packetSize`, το πεδίο που τα
+ * ξεχωρίζει) — για τα "Ping 40 B"/"Ping 800 B"/"Ping 1000 B" sections του PS Data Stats
+ * table, βλ. /api/ping_1000. Ίδιο query με το A-LEVEL "PING RAW.sql" reference query / το
+ * "Ping RAW" saved query του QueryEditor· δεν φτάνουν σαν δικό τους TestName από το
+ * CDRCombined view του /api/data_calls, γι' αυτό τα φτιάχνουμε από εδώ — και τα τρία
+ * packet sizes μαζί, ΧΩΡΙΣ PacketSize filter (2026-08-31), σε ένα call. `rtt` είναι NULL
+ * όταν το packet απέτυχε (errorCode <> 0). Το frontend τα μετατρέπει σε DataCallRow σχήμα
+ * (testType="Ping 40"/"Ping 800"/"Ping 1000", βάσει `packetSize`) — βλ.
+ * mapPing1000RowsToDataCallRows στο attachmentC.ts. Τα παλιά "ICMP Ping 40"/"ICMP Ping
+ * 800" rows του /api/data_calls βγαίνουν ρητά πριν μπουν στο summary pipeline (βλ.
+ * excludeCdrPingDuplicates), αλλιώς θα μετρούσαν διπλά με αυτά εδώ.
  */
 export interface PingRow {
   location: string | null;
@@ -438,7 +442,10 @@ export async function fetchInteractivity(
  * Ένα (location, kind, code, samples) row για τα "Serving Band (per Time)" / "Serving
  * Technology (per Time)" ποσοστά των PS Data DL tests (Capacity DL / FTP DL / HTTP
  * TRANSFER (DL)) — βλ. /api/serving_band_tech. `kind` = "BAND" (NR band, π.χ. "NR28")
- * ή "TECH" (Technology.CurrTechnology, π.χ. "LTE-5GNR"· "#NODATA" = χωρίς data transfer).
+ * ή "TECH" (Technology.CurrTechnology, π.χ. "LTE-5GNR"). Το backend πλέον ταιριάζει
+ * 1:1 με το reference query (INNER join σε NetworkInfo/Technology) — δείγματα χωρίς
+ * NetworkInfo ή προγενέστερο Technology row αποκλείονται εντελώς, δεν εμφανίζονται
+ * ως "#NODATA" (βλ. σχόλιο στο backend/routers/calls.py::get_serving_band_tech).
  * Flat counts, όχι ποσοστά — βλ. buildServingBandTechTable στο attachmentC.ts.
  */
 export interface ServingBandTechRow {

@@ -1,0 +1,8 @@
+PS Data Stats
+Capacity DL 10GB / Capacity UL 1GB -- ενα πινακας Test Success Rate (%) dl / Test Success Rate (%) 
+Total Tests/succefull test dl / ul
+dl Mean sustainable throughput (Mbps) /ul Mean sustainable throughput (Mbps) 
+ολα πρωτα dl Και μετα ul
+
+
+

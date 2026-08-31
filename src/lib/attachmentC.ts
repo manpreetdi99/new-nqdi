@@ -820,8 +820,15 @@ const NO_DL_SUFFIX_TESTS = /https?\s*browser|^youtube service/i;
 const SECTION_LABEL_RENAMES: Record<string, string> = {
   "HTTP Transfer (DL)": "HTTP Transfer (DL) 10MB",
   "HTTP UL": "HTTP Transfer (UL) 5MB",
+  // "ICMP Ping 40"/"ICMP Ping 800": παλιό CDRCombined TestName, ΔΕΝ φτάνει πια στο summary
+  // pipeline (βλ. excludeCdrPingDuplicates) — μένει εδώ μόνο για ό,τι άλλο διαβάζει raw
+  // /api/data_calls rows χωρίς να περνάει από το dedup. "Ping 40"/"Ping 800": το ΝΕΟ raw
+  // ResultsPingTest testType (βλ. mapPing1000RowsToDataCallRows) — ίδιο "B" section label
+  // και για τα δύο, ώστε το PING_B_ORDER να τα βλέπει ίδια ανεξαρτήτως πηγής.
   "ICMP Ping 40": "Ping 40 B",
   "ICMP Ping 800": "Ping 800 B",
+  "Ping 40": "Ping 40 B",
+  "Ping 800": "Ping 800 B",
   "Ping 1000": "Ping 1000 B",
   // "5 group, QoS → QoE" πρόταση του πελάτη (2026-08-26) — πιο περιγραφικά display labels.
   DNS: "DNS Resolution",
@@ -845,9 +852,11 @@ const sectionLabel = (row: DataCallRow): string => {
   const bareCapacityMatch = /^capacity (dl|ul)$/i.exec(base);
   if (bareCapacityMatch) return `${base} ${BARE_CAPACITY_PAYLOAD[bareCapacityMatch[1].toLowerCase()]}`;
   // "Kepler 2" (αρχική υπόθεση) -> friendly display name — δες KEPLER_PAUSE_RE. Ανεκτικό
-  // και σε "HTTP Browser (Kepler 2)" τυλιγμένο (βλ. parenOrWhole). Αν το raw name λέει
-  // ήδη "pause" δεν ξαναπειράζεται (δεν ταιριάζει με αυτό το regex).
-  if (/^kepler\s*2\b/i.test(parenOrWhole(base))) return "Kepler +30s Pause";
+  // και σε "HTTP Browser (Kepler 2)" τυλιγμένο (βλ. parenOrWhole), ΚΑΙ σε "Kepler_2"
+  // (underscore αντί για κενό — πραγματικό raw TestName format, 2026-08-31: "HTTP
+  // Browser (Kepler_2)" δεν αναγνωριζόταν καθόλου γιατί το \s* δεν πιάνει "_"). Αν το raw
+  // name λέει ήδη "pause" δεν ξαναπειράζεται (δεν ταιριάζει με αυτό το regex).
+  if (/^kepler[\s_]*2\b/i.test(parenOrWhole(base))) return "Kepler +30s Pause";
   return SECTION_LABEL_RENAMES[base] ?? base;
 };
 
@@ -1063,12 +1072,65 @@ const httpsSiteKeyword = (l: string): string | null =>
 const YOUTUBE_SERVICE_ORDER = ["youtube service", "youtube service 4k", "youtube service live"];
 
 /**
+ * Ε2 · Latency / Responsiveness — A-LEVEL "PING RAW.sql" reference query (ίδιο με το
+ * "Ping RAW" saved query του QueryEditor), η πηγή και για τα τρία "Ping 40 B" / "Ping
+ * 800 B" / "Ping 1000 B" sections — μόνο το ResultsPingTest.PacketSize διαφέρει (40/800/
+ * 1000), όλα τα άλλα (RTT/Success/Failed/Host/κ.λπ.) βγαίνουν από το ΙΔΙΟ query:
+ *
+ *   Select FileList.ASideFileName,
+ *   FileList.TestDescription,
+ *   FileList.CollectionName,
+ *   FileList.ASideDevice as 'A Device',
+ *   Sessions.SessionId,
+ *   TestInfo.TestId,
+ *   TestInfo.StartDate as 'Date',
+ *   TestInfo.StartTime as 'Time',
+ *   NetworkInfo.Cid,
+ *   NetworkInfo.LAC,
+ *   FileList.ASideLocation,
+ *   ResultsPingTest.Host,
+ *   case when (ResultsPingTest.ErrorCode=0) then ResultsPingTest.RTT else NULL end as RTT,
+ *   ResultsPingTest.PacketSize,
+ *   ErrorCodes.msg As ErrorCode,
+ *   case when (ResultsPingTest.ErrorCode=0) then 1 else 0 end as Success,
+ *   case when (ResultsPingTest.ErrorCode=0) then 0 else 1 end as Failed,
+ *   ResultsPingTest.seqNumber as 'Sequence Number'
+ *   from FileList, Sessions, TestInfo, NetworkInfo, ResultsPingTest, ErrorCodes
+ *   where CollectionName like '%%' AND Sessions.Valid = 1 AND TestInfo.Valid = 1 AND
+ *   FileList.FileId = Sessions.FileId AND
+ *   TestInfo.SessionId = Sessions.SessionId AND
+ *   ResultsPingTest.TestId = TestInfo.TestId AND
+ *   ResultsPingTest.ErrorCode = ErrorCodes.Code AND
+ *   TestInfo.NetworkId = NetworkInfo.NetworkId
+ *
+ * ΕΝΗΜΕΡΩΣΗ (2026-08-31): πλέον ΚΑΙ τα τρία περνάνε ΚΥΡΙΟΛΕΚΤΙΚΑ από αυτό το query, χωρίς
+ * PacketSize filter — backend /api/ping_1000 (βλ. get_ping_1000 στο backend/routers/
+ * calls.py) γυρνάει packets και για τα 40/800/1000 μαζί σε ένα call, το frontend τα
+ * χωρίζει σε testType "Ping 40"/"Ping 800"/"Ping 1000" βάσει του row.packetSize (βλ.
+ * mapPing1000RowsToDataCallRows). Τα παλιά "ICMP Ping 40"/"ICMP Ping 800" TestName του
+ * CDRCombined view (/api/data_calls) ΔΕΝ χρησιμοποιούνται πια εδώ — βγαίνουν ρητά πριν
+ * μπουν στο summary pipeline (βλ. excludeCdrPingDuplicates), αλλιώς θα μετρούσαν διπλά.
+ */
+
+/**
  * Σειρά μεταξύ των "Ping 40 B" / "Ping 800 B" / "Ping 1000 B" sections, αύξουσα σειρά
- * μεγέθους payload. Οι raw τιμές φτάνουν ως "ICMP Ping 40" / "ICMP Ping 800" (από το
- * CDRCombined view) και "Ping 1000" (από το /api/ping_1000 — βλ.
- * mapPing1000RowsToDataCallRows) — το SECTION_LABEL_RENAMES τα μετονομάζει πριν φτάσουν εδώ.
+ * μεγέθους payload. Και τα τρία φτάνουν πλέον από το ΙΔΙΟ raw query — testType "Ping 40"/
+ * "Ping 800"/"Ping 1000" (βλ. mapPing1000RowsToDataCallRows) — το SECTION_LABEL_RENAMES τα
+ * μετονομάζει πριν φτάσουν εδώ.
  */
 const PING_B_ORDER = ["ping 40 b", "ping 800 b", "ping 1000 b"];
+
+/**
+ * "Ping 40 B" -> 40, "Ping 800 B" -> 800, "Ping 1000 B" -> 1000, αλλιώς null. Οι τρεις
+ * πίνακες έχουν ΑΚΡΙΒΩΣ την ίδια δομή γραμμών (Success Rate/Total Tests/Successful/
+ * Failed/Mean RTT) — το ΜΟΝΟ που διαφέρει είναι το packet size, οπότε το SummaryTab
+ * προσθέτει ένα "Packet Size (bytes)" row (βλ. packetSizeRow) για να ξεχωρίζουν με μια
+ * ματιά, χωρίς να χρειάζεται να διαβάσεις το section label.
+ */
+export const pingPacketSizeBytes = (label: string): number | null => {
+  const match = /^Ping (\d+) B$/.exec(label);
+  return match ? Number(match[1]) : null;
+};
 
 /**
  * "Kepler 2" (η αρχική υπόθεση) ή ό,τι raw name περιέχει "pause" ή μοναχικό "2" μετά
@@ -1197,67 +1259,113 @@ export const buildDataSections = (rows: DataCallRow[]): DataTestSection[] => {
 };
 
 /**
- * 6ο pseudo-group του compact view για ό,τι δεν ταιριάζει σε κανένα Ε1..Ε5 (group === "",
- * π.χ. ένα σκέτο "Ping" χωρίς μέγεθος ή ένα ad-hoc "FTP DL"). Ίδιο σκεπτικό με το
- * UNMATCHED_RANK: ένα άγνωστο/νέο test type δεν εξαφανίζεται σιωπηλά επειδή δεν το
- * προβλέψαμε στο SECTION_ORDER.
+ * DataTestStats "κενό" αντίγραφο — ίδια metric labels/units/decimals/higherIsBetter με το
+ * `total` που δόθηκε, μηδενικές/null τιμές. Για operators χωρίς δικά τους δεδομένα σε ένα
+ * section/side, ώστε η στήλη τους να δείχνει "—" με το σωστό unit αντί να χαθεί το
+ * decimals/unit (βλ. χρήση στο DataSectionBlock/DirectionalSectionBlock του SummaryTab).
  */
-export const UNMATCHED_GROUP_LABEL = "Λοιπά tests";
+export const emptyDataTestStatsLike = (total: DataTestStats): DataTestStats => ({
+  total: 0,
+  success: 0,
+  failed: 0,
+  successRate: null,
+  metrics: total.metrics.map((metric) => ({ ...metric, value: null, samples: 0 })),
+});
+
+/** Ίδιο με emptyDataTestStatsLike, όταν δεν υπάρχει καν ένα `total` για να αντιγράψουμε το σχήμα του metric. */
+const BARE_EMPTY_DATA_TEST_STATS: DataTestStats = { total: 0, success: 0, failed: 0, successRate: null, metrics: [] };
+
+export interface DirectionalDataTestStats {
+  dl: DataTestStats;
+  ul: DataTestStats;
+}
+
+export interface DirectionalDataTestSection {
+  key: string;
+  label: string;
+  group: string;
+  byOperator: Map<string, DirectionalDataTestStats>;
+  total: DirectionalDataTestStats;
+}
 
 /**
- * Το label του ενός συγκεντρωτικού metric κάθε group. Το unit/decimals/higherIsBetter
- * ΔΕΝ έρχονται από εδώ — βγαίνουν από το επικρατέστερο metric των πραγματικών sections
- * (βλ. dominantMetric), ώστε το νούμερο να μένει ειλικρινές ακόμα κι αν αλλάξει η
- * σύνθεση των tests μέσα στο group.
+ * Ζευγάρια section labels (DL/UL) του Ε1 · Bulk throughput που ενώνονται σε ΕΝΑ compact
+ * table — βλ. buildDirectionalDataSections. Τα labels πρέπει να ταιριάζουν ΑΚΡΙΒΩΣ με ό,τι
+ * βγάζει το sectionLabel εδώ πιο πάνω (βλ. BARE_CAPACITY_PAYLOAD / SECTION_LABEL_RENAMES /
+ * mapOoklaRowsToDataCallRows για το πώς προκύπτει κάθε label).
+ *
+ * ΧΩΡΙΣ HTTP Transfer (2026-08-31: αφαιρέθηκε από το compact merge) — τα "HTTP Transfer
+ * (DL) 10MB"/"HTTP Transfer (UL) 5MB" μένουν ασύνδετα, στο `rest`, σαν ξεχωριστά sections
+ * ίδια με το Full mode.
  */
-const GROUP_METRIC_LABELS: Record<string, string> = {
-  [SECTION_GROUP_LABELS.bulkThroughput]: "Avg throughput",
-  [SECTION_GROUP_LABELS.latency]: "Avg latency",
-  [SECTION_GROUP_LABELS.browserEngines]: "Avg throughput",
-  [SECTION_GROUP_LABELS.httpsSites]: "Avg throughput",
-  [SECTION_GROUP_LABELS.videoStreaming]: "Avg video MOS",
-};
-
-/** Σειρά των compact groups: Ε1..Ε5 όπως το SECTION_GROUP_LABELS, unmatched τελευταίο. */
-const COMPACT_GROUP_ORDER = [...Object.values(SECTION_GROUP_LABELS), UNMATCHED_GROUP_LABEL];
+const DIRECTIONAL_MERGE_PAIRS: { label: string; dl: string; ul: string }[] = [
+  { label: "Capacity DL 10GB / Capacity UL 1GB", dl: "Capacity DL 10GB", ul: "Capacity UL 1GB" },
+  { label: "Ookla DL / Ookla UL", dl: "Ookla DL", ul: "Ookla UL" },
+];
 
 /**
- * Το "επικρατέστερο" primary metric ενός group: το unit που συγκεντρώνει τα περισσότερα
- * samples ανάμεσα στα metrics[0] των sections του. Χρειάζεται γιατί ένα group δεν έχει
- * πάντα ομοιογενή units — π.χ. στο Ε2 το Ping/DNS μετράνε ms αλλά το Interactivity έχει
- * primary metric το "eGaming Average of ThroughputKbps" (unit ""). Επιλέγεται ΜΙΑ φορά
- * στο total επίπεδο και μετά επιβάλλεται και στις per-operator στήλες, αλλιώς οι στήλες
- * του ίδιου πίνακα θα έδειχναν διαφορετικές μονάδες μεταξύ τους.
+ * Compact PS Data view — βλ. "comapct_data .txt" (2026-08-31). Αντικατέστησε το παλιό
+ * "5 groups, ένα averaged AVG το καθένα" σχέδιο (πρώην buildDataGroupSections, αφαιρέθηκε
+ * εντελώς): το average πάνω σε DL+UL μαζί έχανε τη διάκριση κατεύθυνσης, που ήταν ακριβώς
+ * αυτό που ζητήθηκε να ξαναφανεί.
+ *
+ * Τα Ε1 · Bulk throughput ζευγάρια DL/UL (Capacity, Ookla — βλ. DIRECTIONAL_MERGE_PAIRS)
+ * ενώνονται σε ΕΝΑ table το καθένα, με τις δύο κατευθύνσεις σαν ξεχωριστές γραμμές (DL
+ * group πρώτα, μετά UL group — βλ. SummaryTab's directionalDataRows, "όλα πρώτα dl και
+ * μετά ul"). Αν λείπει η μία πλευρά (π.χ. καθόλου UL δεδομένα ακόμα), αυτή γίνεται απλά
+ * κενή/μηδενική — δεν χάνεται όλο το table.
+ *
+ * Ό,τι test ΔΕΝ έχει DL/UL pair (HTTP Transfer/Ping/DNS/Interactivity/Kepler/Newton/HTTPS
+ * sites/YouTube) μένει σαν ξεχωριστό section στο `rest`, ίδιο με το Full mode — δεν
+ * ξαναμπαίνει σε average.
+ *
+ * Δουλεύει πάνω στο ήδη υπολογισμένο buildDataSections, δεν ξαναδιαβάζει raw rows.
  */
-const dominantMetric = (sections: DataTestSection[]): DataMetric | null => {
-  const byUnit = new Map<string, { samples: number; metric: DataMetric }>();
+export const buildDirectionalDataSections = (
+  sections: DataTestSection[],
+): { merged: DirectionalDataTestSection[]; rest: DataTestSection[] } => {
+  const byLabel = new Map(sections.map((section) => [section.label, section]));
+  const used = new Set<string>();
+  const merged: DirectionalDataTestSection[] = [];
 
-  for (const section of sections) {
-    const metric = section.total.metrics[0];
-    if (!metric) continue;
-    const entry = byUnit.get(metric.unit);
-    if (entry) entry.samples += metric.samples;
-    else byUnit.set(metric.unit, { samples: metric.samples, metric });
+  for (const pair of DIRECTIONAL_MERGE_PAIRS) {
+    const dl = byLabel.get(pair.dl);
+    const ul = byLabel.get(pair.ul);
+    if (!dl && !ul) continue; // κανένα από τα δύο δεν υπάρχει στα δεδομένα — παράλειψε το ζευγάρι.
+    used.add(pair.dl);
+    used.add(pair.ul);
+
+    const operatorKeys = new Set<string>([...(dl?.byOperator.keys() ?? []), ...(ul?.byOperator.keys() ?? [])]);
+    const byOperator = new Map<string, DirectionalDataTestStats>();
+    for (const key of operatorKeys) {
+      byOperator.set(key, {
+        dl: dl ? (dl.byOperator.get(key) ?? emptyDataTestStatsLike(dl.total)) : BARE_EMPTY_DATA_TEST_STATS,
+        ul: ul ? (ul.byOperator.get(key) ?? emptyDataTestStatsLike(ul.total)) : BARE_EMPTY_DATA_TEST_STATS,
+      });
+    }
+
+    merged.push({
+      key: pair.label,
+      label: pair.label,
+      group: (dl ?? ul)!.group,
+      byOperator,
+      total: { dl: dl?.total ?? BARE_EMPTY_DATA_TEST_STATS, ul: ul?.total ?? BARE_EMPTY_DATA_TEST_STATS },
+    });
   }
 
-  let winner: { samples: number; metric: DataMetric } | null = null;
-  for (const entry of byUnit.values()) {
-    if (!winner || entry.samples > winner.samples) winner = entry;
-  }
-  return winner?.metric ?? null;
+  return { merged, rest: sections.filter((section) => !used.has(section.label)) };
 };
 
 /**
- * Συγχωνεύει τα DataTestStats ενός group σε ένα, με ΕΝΑ metric στο `unit` που δόθηκε.
- *
- * Ο μέσος όρος είναι σταθμισμένος με τα samples (Σ value×samples / Σ samples), όχι
- * μέσος-των-μέσων: κάθε metrics[0].value είναι ήδη απλός μέσος πάνω σε samples τιμές
- * (βλ. mean/Sample), οπότε η στάθμιση επαναφέρει το σωστό συνολικό avg.
- *
- * Τα sections με άλλο unit μετράνε κανονικά στα total/success/failed — απλά μένουν έξω
- * από τον μέσο όρο (δεν υπάρχει νόημα να προστεθούν ms σε Mbps).
+ * Σταθμισμένος μέσος όρος (Σ value×samples / Σ samples) πάνω στο ΠΡΩΤΟ metric κάθε section —
+ * ίδιο σκεπτικό με το παλιό (αφαιρεμένο) mergeGroupStats, εδώ σκοπισμένο σε compact "όλα σε
+ * ένα total" merges όπου τα sections μετράνε το ΙΔΙΟ πράγμα στην ΙΔΙΑ μονάδα — π.χ. Ε4 ·
+ * HTTPS sites (application throughput ανά site, βλ. buildHttpsSitesTotal) ή Ping 40/800/
+ * 1000 B (RTT σε ms, βλ. buildPingTotal). Αντίθετα με τα Ε1 DL/UL pairs
+ * (buildDirectionalDataSections), εδώ δεν υπάρχει direction να χαθεί.
  */
-const mergeGroupStats = (stats: DataTestStats[], label: string, unit: DataMetric | null): DataTestStats => {
+const mergeWeightedTestStats = (stats: DataTestStats[]): DataTestStats => {
+  const unit = stats.find((entry) => entry.metrics[0])?.metrics[0] ?? null;
   let total = 0;
   let success = 0;
   let failed = 0;
@@ -1283,7 +1391,7 @@ const mergeGroupStats = (stats: DataTestStats[], label: string, unit: DataMetric
     metrics: unit
       ? [
           {
-            label,
+            label: unit.label,
             unit: unit.unit,
             decimals: unit.decimals,
             higherIsBetter: unit.higherIsBetter,
@@ -1296,62 +1404,109 @@ const mergeGroupStats = (stats: DataTestStats[], label: string, unit: DataMetric
 };
 
 /**
- * Compact view: συμπτύσσει τα ~23 PS Data sections του buildDataSections στα 5 Ε-groups
- * του SECTION_GROUP_LABELS (+ "Λοιπά tests"), ένα pseudo-section ανά group με ΕΝΑ
- * συγκεντρωτικό metric — η "λιγότερα δεδομένα" προβολή.
+ * Compact "Ε4 · HTTPS sites" total — βλ. "όλα τα σάιτε μαζεμένα σε total στο compact"
+ * (2026-08-31). Τα 9 site tests (alpha/amazon/car.gr/ebay/google/imdb/in.gr/yahoo/youtube)
+ * μαζεύονται σε ΕΝΑ section, στη θέση του πρώτου site section στη λίστα — η υπόλοιπη σειρά
+ * (Ε1..Ε5) μένει ανέπαφη. Επιστρέφει τα sections αυτούσια όταν δεν υπάρχει κανένα Ε4 section.
  *
- * Δουλεύει πάνω στο ήδη υπολογισμένο αποτέλεσμα του buildDataSections, δεν ξαναδιαβάζει
- * raw rows — ουσιαστικά δωρεάν. Το σχήμα που επιστρέφει είναι κανονικό DataTestSection[],
- * οπότε περνάει αυτούσιο στο ίδιο DataSectionBlock/dataRows του SummaryTab: Test Success
- * Rate · Total Tests · Successful · Failed · Avg X.
- *
- * `group` σκόπιμα "" στα pseudo-sections: το label ΕΙΝΑΙ ήδη το group name, δεν θέλουμε
- * το SummaryTab να τυπώσει διπλή κεφαλίδα από πάνω.
+ * Επιστρέφει κανονικό DataTestSection — ίδιο σχήμα με buildDataSections, οπότε περνάει
+ * αυτούσιο στο ίδιο DataSectionBlock/compactDataRows του SummaryTab, δεν χρειάζεται νέο
+ * rendering path (αντίθετα με το directional DL/UL merge).
  */
-export const buildDataGroupSections = (sections: DataTestSection[]): DataTestSection[] => {
-  const grouped = new Map<string, DataTestSection[]>();
+export const buildHttpsSitesTotal = (sections: DataTestSection[]): DataTestSection[] => {
+  const siteSections = sections.filter((section) => section.group === SECTION_GROUP_LABELS.httpsSites);
+  if (siteSections.length === 0) return sections;
 
-  for (const section of sections) {
-    const key = section.group || UNMATCHED_GROUP_LABEL;
-    const bucket = grouped.get(key);
-    if (bucket) bucket.push(section);
-    else grouped.set(key, [section]);
+  const operatorKeys = new Set<string>();
+  for (const section of siteSections) {
+    for (const operatorKey of section.byOperator.keys()) operatorKeys.add(operatorKey);
+  }
+  const byOperator = new Map<string, DataTestStats>();
+  for (const operatorKey of operatorKeys) {
+    byOperator.set(
+      operatorKey,
+      mergeWeightedTestStats(
+        siteSections.map((section) => section.byOperator.get(operatorKey)).filter((s): s is DataTestStats => s != null),
+      ),
+    );
   }
 
-  return COMPACT_GROUP_ORDER.filter((group) => grouped.has(group)).map((group) => {
-    const groupSections = grouped.get(group)!;
-    const metric = dominantMetric(groupSections);
-    const label = GROUP_METRIC_LABELS[group] ?? "Avg result";
+  const merged: DataTestSection = {
+    key: SECTION_GROUP_LABELS.httpsSites,
+    label: "HTTPS sites (all sites combined)",
+    group: SECTION_GROUP_LABELS.httpsSites,
+    byOperator,
+    total: mergeWeightedTestStats(siteSections.map((section) => section.total)),
+  };
 
-    const operatorKeys = new Set<string>();
-    for (const section of groupSections) {
-      for (const operatorKey of section.byOperator.keys()) operatorKeys.add(operatorKey);
+  const result: DataTestSection[] = [];
+  let inserted = false;
+  for (const section of sections) {
+    if (section.group !== SECTION_GROUP_LABELS.httpsSites) {
+      result.push(section);
+      continue;
     }
-
-    const byOperator = new Map<string, DataTestStats>();
-    for (const operatorKey of operatorKeys) {
-      byOperator.set(
-        operatorKey,
-        mergeGroupStats(
-          groupSections.map((section) => section.byOperator.get(operatorKey)).filter((s): s is DataTestStats => s != null),
-          label,
-          metric,
-        ),
-      );
+    if (!inserted) {
+      result.push(merged);
+      inserted = true;
     }
+  }
+  return result;
+};
 
-    return {
-      key: group,
-      label: group,
-      group: "",
-      byOperator,
-      total: mergeGroupStats(
-        groupSections.map((section) => section.total),
-        label,
-        metric,
+/**
+ * Compact "Ping 40 B / 800 B / 1000 B" total — βλ. "τα ping στο compact όλα μαζεμένα"
+ * (2026-08-31), ίδιο σκεπτικό με buildHttpsSitesTotal: τα τρία packet sizes μαζεύονται σε
+ * ΕΝΑ section, στη θέση του πρώτου Ping B section στη λίστα. Ίδια μονάδα (ms RTT) και στα
+ * τρία, οπότε ο σταθμισμένος μέσος όρος έχει νόημα — λιγότερο "καθαρός" απ' ό,τι στα HTTPS
+ * sites βέβαια (διαφορετικό packet size -> ελαφρώς διαφορετικό RTT baseline), αλλά αυτό
+ * ΕΙΝΑΙ το σημείο του compact: λιγότερη λεπτομέρεια.
+ *
+ * ΔΕΝ πιάνει το γυμνό "Ping" section (χωρίς μέγεθος, group === "" — unmatched, ξεχωριστό
+ * test type, βλ. sectionRank) — μόνο τα Ping 40 B/800 B/1000 B (pingPacketSizeBytes !=
+ * null). Το "Packet Size (bytes)" row (βλ. packetSizeRow στο SummaryTab) δεν εμφανίζεται
+ * πια εδώ — το merged section.label δεν ταιριάζει με pingPacketSizeBytes, οπότε φεύγει
+ * αυτόματα (δεν αντιστοιχεί πια σε ΕΝΑ μέγεθος).
+ */
+export const buildPingTotal = (sections: DataTestSection[]): DataTestSection[] => {
+  const pingSections = sections.filter((section) => pingPacketSizeBytes(section.label) != null);
+  if (pingSections.length === 0) return sections;
+
+  const operatorKeys = new Set<string>();
+  for (const section of pingSections) {
+    for (const operatorKey of section.byOperator.keys()) operatorKeys.add(operatorKey);
+  }
+  const byOperator = new Map<string, DataTestStats>();
+  for (const operatorKey of operatorKeys) {
+    byOperator.set(
+      operatorKey,
+      mergeWeightedTestStats(
+        pingSections.map((section) => section.byOperator.get(operatorKey)).filter((s): s is DataTestStats => s != null),
       ),
-    };
-  });
+    );
+  }
+
+  const merged: DataTestSection = {
+    key: "Ping (all sizes combined)",
+    label: "Ping (all sizes combined)",
+    group: SECTION_GROUP_LABELS.latency,
+    byOperator,
+    total: mergeWeightedTestStats(pingSections.map((section) => section.total)),
+  };
+
+  const result: DataTestSection[] = [];
+  let inserted = false;
+  for (const section of sections) {
+    if (pingPacketSizeBytes(section.label) == null) {
+      result.push(section);
+      continue;
+    }
+    if (!inserted) {
+      result.push(merged);
+      inserted = true;
+    }
+  }
+  return result;
 };
 
 /**
@@ -1395,14 +1550,24 @@ export const mapOoklaRowsToDataCallRows = (rows: OoklaRow[]): DataCallRow[] =>
     }));
 
 /**
- * Μετατρέπει τα raw ping-packet rows του /api/ping_1000 (ResultsPingTest,
- * PacketSize=1000 — δεν φτάνει σαν δικό του TestName από το CDRCombined view του
- * /api/data_calls, βλ. σχόλιο εκεί) σε DataCallRow σχήμα (testType="Ping 1000") ώστε
+ * Μετατρέπει τα raw ping-packet rows του /api/ping_1000 (ResultsPingTest — ΟΛΑ τα
+ * PacketSize μαζί: 40, 800, 1000, βλ. ΣΗΜΕΙΩΣΗ παρακάτω) σε DataCallRow σχήμα, ΕΝΑ
+ * testType ανά packet size ("Ping 40" / "Ping 800" / "Ping 1000", βλ. row.packetSize) ώστε
  * να μπουν στο ίδιο buildDataSections pipeline με τα υπόλοιπα PS Data tests — ίδιο
- * σκεπτικό με mapOoklaRowsToDataCallRows. Το SECTION_LABEL_RENAMES μετονομάζει το
- * section σε "Ping 1000 B" (ίδιο "B" suffix με τα "ICMP Ping 40"/"ICMP Ping 800" ->
- * "Ping 40 B"/"Ping 800 B"), και το PING_B_RANK/PING_B_ORDER τα κρατάει μαζεμένα, το
- * ένα κάτω από το άλλο, σε αύξουσα σειρά μεγέθους — βλ. σχόλια στο sectionRank.
+ * σκεπτικό με mapOoklaRowsToDataCallRows. Το SECTION_LABEL_RENAMES μετονομάζει και τα
+ * τρία σε "Ping 40 B"/"Ping 800 B"/"Ping 1000 B", και το PING_B_RANK/PING_B_ORDER τα
+ * κρατάει μαζεμένα, το ένα κάτω από το άλλο, σε αύξουσα σειρά μεγέθους — βλ. σχόλια στο
+ * sectionRank. `row.packetSize` μηδέν/null δεν αναμένεται στην πράξη (ResultsPingTest
+ * έχει πάντα packet size) — αν συμβεί, πέφτει σε "Ping ? B" (δεν ταιριάζει με κανένα
+ * rename, μένει ορατό ως-έχει αντί να χαθεί σιωπηλά).
+ *
+ * ΣΗΜΕΙΩΣΗ (2026-08-31): το backend δεν φιλτράρει πια σε PacketSize=1000 — το
+ * /api/ping_1000 (A-LEVEL "PING RAW.sql" reference query) γυρνάει packets ΚΑΙ για τα
+ * τρία μεγέθη μαζί, βλ. docstring του get_ping_1000 στο backend/routers/calls.py. Τα
+ * "ICMP Ping 40"/"ICMP Ping 800" του CDRCombined view (/api/data_calls) ΑΝΤΙΚΑΤΑΣΤΑΘΗΚΑΝ
+ * εντελώς από αυτό — βλ. excludeCdrPingDuplicates, καλείται στο Index.tsx πριν μπουν τα
+ * /api/data_calls rows στο summary PS Data pipeline, ώστε το Ping 40 B/800 B να μη
+ * μετρήσει διπλά (μία φορά από το CDRCombined, μία από εδώ).
  */
 export const mapPing1000RowsToDataCallRows = (rows: PingRow[]): DataCallRow[] =>
   rows.map((row) => ({
@@ -1410,7 +1575,7 @@ export const mapPing1000RowsToDataCallRows = (rows: PingRow[]): DataCallRow[] =>
     SessionId: row.sessionId,
     TestId: row.testId,
     callStartTimeStamp: null,
-    testType: "Ping 1000",
+    testType: row.packetSize != null ? `Ping ${row.packetSize}` : "Ping ? B",
     direction: null,
     status: row.success === 1 ? "Completed" : "Failed",
     scoringStatus: row.success === 1 ? "success" : "failed",
@@ -1433,6 +1598,25 @@ export const mapPing1000RowsToDataCallRows = (rows: PingRow[]): DataCallRow[] =>
     latitude: null,
     longitude: null,
   }));
+
+/**
+ * "ICMP Ping 40"/"ICMP Ping 800" TestName values του CDRCombined view (/api/data_calls) —
+ * ΑΝΤΙΚΑΤΑΣΤΑΘΗΚΑΝ εντελώς από το raw /api/ping_1000 endpoint (2026-08-31, βλ.
+ * mapPing1000RowsToDataCallRows) που πλέον καλύπτει PacketSize 40/800/1000 μαζί, όχι μόνο
+ * 1000. Αν κρατούσαμε ΚΑΙ τα δύο sources ενεργά, το Ping 40 B/800 B θα μετρούσε ΔΙΠΛΑ
+ * (λάθος Total Tests/Success Rate/Mean RTT) — βλ. excludeCdrPingDuplicates.
+ */
+const CDR_PING_TEST_TYPES_REPLACED_BY_RAW = new Set(["ICMP Ping 40", "ICMP Ping 800"]);
+
+/**
+ * Βγάζει τα "ICMP Ping 40"/"ICMP Ping 800" rows από ένα batch /api/data_calls rows, πριν
+ * μπουν στο summary PS Data pipeline — βλ. CDR_PING_TEST_TYPES_REPLACED_BY_RAW. Καλείται
+ * στο Index.tsx πάνω στα raw summaryDataCallsRows, ΠΡΙΝ ενωθούν με τα
+ * mapPing1000RowsToDataCallRows(summaryPing1000Rows) — η σειρά έχει σημασία, αλλιώς θα
+ * μετρούσαν διπλά. Ό,τι άλλο test type (Capacity/HTTP Transfer/κ.λπ.) περνάει ανέπαφο.
+ */
+export const excludeCdrPingDuplicates = (rows: DataCallRow[]): DataCallRow[] =>
+  rows.filter((row) => !CDR_PING_TEST_TYPES_REPLACED_BY_RAW.has(row.testType ?? ""));
 
 /**
  * Μετατρέπει τα raw interactivity-test rows του /api/interactivity (FactInteractivity

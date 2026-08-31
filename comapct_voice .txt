@@ -1,0 +1,8 @@
+gsm calls /free calls 
+ total calls 
+ calls success rate/count
+ calls drop rate/count
+  calls fail rate/count
+POLQA avg (Speech quality ITU P.863)  mos avg 
+
+
