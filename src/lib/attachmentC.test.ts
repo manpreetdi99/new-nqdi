@@ -21,6 +21,7 @@ import {
   classifyCustomCallMode,
   collectOperators,
   isoWeek,
+  mapCapacityLinkRowsToDataCallRows,
   mapDnsRowsToDataCallRows,
   mapInteractivityRowsToDataCallRows,
   mapOoklaRowsToDataCallRows,
@@ -30,7 +31,7 @@ import {
   resolveOperator,
   SECTION_GROUP_LABELS,
 } from "@/lib/attachmentC";
-import type { AllCallsRow, DataCallRow, DnsRow, InteractivityRow, OoklaRow, PingRow } from "@/lib/api";
+import type { AllCallsRow, CapacityLinkRow, DataCallRow, DnsRow, InteractivityRow, OoklaRow, PingRow } from "@/lib/api";
 
 const call = (overrides: Partial<AllCallsRow>): AllCallsRow => ({
   Location: "Cosmote Free A",
@@ -465,6 +466,78 @@ describe("PS data KPIs", () => {
 
     it("returns an empty list unchanged", () => {
       expect(excludeCdrPingDuplicates([])).toEqual([]);
+    });
+  });
+
+  const capacityLinkRow = (overrides: Partial<CapacityLinkRow>): CapacityLinkRow => ({
+    location: "Cosmote Data A",
+    sessionId: "1",
+    testId: 1,
+    direction: "DL",
+    link: "grx",
+    throughputKbps: 140500,
+    success: 1,
+    failed: 0,
+    collectionName: null,
+    aSideFileName: null,
+    ...overrides,
+  });
+
+  describe("mapCapacityLinkRowsToDataCallRows", () => {
+    it("turns raw Capacity+link rows into 'Capacity <link>' DataCallRows", () => {
+      const mapped = mapCapacityLinkRowsToDataCallRows([
+        capacityLinkRow({ direction: "DL", link: "grx", throughputKbps: 140500 }),
+        capacityLinkRow({ direction: "UL", link: "akamai", throughputKbps: 22100, sessionId: "2", success: 0, failed: 1 }),
+      ]);
+
+      expect(mapped[0]).toMatchObject({
+        testType: "Capacity grx",
+        direction: "DL",
+        capacityThroughputKbps: 140500,
+        scoringStatus: "success",
+      });
+      expect(mapped[1]).toMatchObject({
+        testType: "Capacity akamai",
+        direction: "UL",
+        capacityThroughputKbps: 22100,
+        scoringStatus: "failed",
+      });
+    });
+
+    it("feeds into buildDataSections as EXTRA 'Capacity DL 10GB (grx)'/'(akamai)' sections next to the main Capacity DL/UL, without touching the main totals — Full mode only (2026-08-31: 'θέλω να μου το σπάσεις Link grx και akamai')", () => {
+      const rows = [
+        dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
+        dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 40000 }),
+        ...mapCapacityLinkRowsToDataCallRows([
+          capacityLinkRow({ direction: "DL", link: "grx", throughputKbps: 140500 }),
+          capacityLinkRow({ direction: "DL", link: "akamai", throughputKbps: 130000, sessionId: "2" }),
+          capacityLinkRow({ direction: "UL", link: "grx", throughputKbps: 22100, sessionId: "3" }),
+          capacityLinkRow({ direction: "UL", link: "akamai", throughputKbps: 21000, sessionId: "4" }),
+        ]),
+      ];
+
+      const sections = buildDataSections(rows);
+
+      // subRank: κύριο section (χωρίς παρένθεση) πρώτο· "(akamai)" πριν "(grx)" σε ισοπαλία
+      // total (1 test έκαστο) -> alphabetical tiebreak.
+      expect(sections.map((s) => s.key)).toEqual([
+        "Capacity DL 10GB",
+        "Capacity DL 10GB (akamai)",
+        "Capacity DL 10GB (grx)",
+        "Capacity UL 1GB",
+        "Capacity UL 1GB (akamai)",
+        "Capacity UL 1GB (grx)",
+      ]);
+      expect(sections.every((s) => s.group === "Ε1 · Bulk throughput")).toBe(true);
+
+      // Το κύριο "Capacity DL 10GB" (CDRCombined) ΔΕΝ επηρεάζεται από το breakdown.
+      const mainDl = sections.find((s) => s.key === "Capacity DL 10GB")!;
+      expect(mainDl.total.total).toBe(1);
+      expect(mainDl.total.metrics[0].value).toBeCloseTo(400, 6);
+
+      const grxDl = sections.find((s) => s.key === "Capacity DL 10GB (grx)")!;
+      expect(grxDl.total.total).toBe(1);
+      expect(grxDl.total.metrics[0].value).toBeCloseTo(140.5, 6);
     });
   });
 

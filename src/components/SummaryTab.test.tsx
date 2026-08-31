@@ -155,12 +155,48 @@ describe("SummaryTab", () => {
 
       fireEvent.click(screen.getByRole("button", { name: "Full" }));
 
-      // Full mode: το merged table σπάει πίσω στα δύο ξεχωριστά sections, και το Ε5
-      // section ξαναφαίνεται.
+      // Full mode: το merged table σπάει πίσω στα δύο ξεχωριστά sections. Χωρίς Capacity
+      // (grx)/(akamai) breakdown data σε αυτό το fixture, το ΓΥΜΝΟ Capacity DL/UL ΜΕΝΕΙ
+      // ορατό — βλ. FULL_BARE_CAPACITY_HIDDEN_WHEN_BROKEN_DOWN (η κατάργηση είναι
+      // conditional στο breakdown να υπάρχει πραγματικά, "εφόσον", όχι unconditional). Το
+      // Ε5 section ξαναφαίνεται κανονικά.
       expect(screen.getByText("Capacity DL 10GB")).toBeInTheDocument();
       expect(screen.getByText("Capacity UL 1GB")).toBeInTheDocument();
       expect(screen.queryByText("Capacity DL 10GB / Capacity UL 1GB")).not.toBeInTheDocument();
       expect(screen.getByText("YouTube Service")).toBeInTheDocument();
+    });
+
+    it("shows the Capacity (grx)/(akamai) link breakdown only in Full mode, next to the main Capacity DL/UL (2026-08-31: 'θέλω να μου το σπάσεις Link grx και akamai')", () => {
+      const linkRows: DataCallRow[] = [
+        dataTest({ testType: "Capacity", direction: "DL", capacityThroughputKbps: 400000 }),
+        dataTest({ testType: "Capacity", direction: "UL", capacityThroughputKbps: 40000 }),
+        dataTest({ testType: "Capacity grx", direction: "DL", capacityThroughputKbps: 140500 }),
+        dataTest({ testType: "Capacity akamai", direction: "DL", capacityThroughputKbps: 130000 }),
+        dataTest({ testType: "Capacity grx", direction: "UL", capacityThroughputKbps: 22100 }),
+        dataTest({ testType: "Capacity akamai", direction: "UL", capacityThroughputKbps: 21000 }),
+      ];
+      render(<SummaryTab allCallsRows={rows} dataCallsRows={linkRows} />);
+
+      // Compact is now the default — no click needed. Το merged directional table
+      // (Capacity DL 10GB / Capacity UL 1GB) φαίνεται όπως πάντα, αλλά ΧΩΡΙΣ το breakdown.
+      expect(screen.getByText("Capacity DL 10GB / Capacity UL 1GB")).toBeInTheDocument();
+      expect(screen.queryByText("Capacity DL 10GB (grx)")).not.toBeInTheDocument();
+      expect(screen.queryByText("Capacity DL 10GB (akamai)")).not.toBeInTheDocument();
+      expect(screen.queryByText("Capacity UL 1GB (grx)")).not.toBeInTheDocument();
+      expect(screen.queryByText("Capacity UL 1GB (akamai)")).not.toBeInTheDocument();
+
+      fireEvent.click(screen.getByRole("button", { name: "Full" }));
+
+      // Full mode: τα 4 breakdown sections ορατά· το ΓΥΜΝΟ Capacity DL/UL κρύβεται εδώ
+      // επειδή αυτή τη φορά το breakdown ΥΠΑΡΧΕΙ πραγματικά στα δεδομένα (2026-08-31:
+      // "εφόσον το έσπασε Capacity DL 10GB το βγάζεις από το full αυτό").
+      expect(screen.queryByText("Capacity DL 10GB")).not.toBeInTheDocument();
+      expect(screen.queryByText("Capacity UL 1GB")).not.toBeInTheDocument();
+      expect(screen.getByText("Capacity DL 10GB (grx)")).toBeInTheDocument();
+      expect(screen.getByText("Capacity DL 10GB (akamai)")).toBeInTheDocument();
+      expect(screen.getByText("Capacity UL 1GB (grx)")).toBeInTheDocument();
+      expect(screen.getByText("Capacity UL 1GB (akamai)")).toBeInTheDocument();
+      expect(screen.getAllByText("140.5").length).toBeGreaterThan(0);
     });
 
     it("shows 'rest' sections (no DL/UL pair) as a compact card — Success Rate/Total Tests/metric only, no Successful/Failed tests", () => {

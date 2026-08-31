@@ -14,6 +14,7 @@
  */
 import type {
   AllCallsRow,
+  CapacityLinkRow,
   CellBandCountRow,
   DataCallRow,
   DnsRow,
@@ -820,6 +821,13 @@ const NO_DL_SUFFIX_TESTS = /https?\s*browser|^youtube service/i;
 const SECTION_LABEL_RENAMES: Record<string, string> = {
   "HTTP Transfer (DL)": "HTTP Transfer (DL) 10MB",
   "HTTP UL": "HTTP Transfer (UL) 5MB",
+  // Capacity ανά Link (grx/akamai) — βλ. mapCapacityLinkRowsToDataCallRows. ΕΠΙΠΛΕΟΝ
+  // sections δίπλα στα κύρια "Capacity DL 10GB"/"Capacity UL 1GB" (CDRCombined), μόνο
+  // στο Full mode (βλ. COMPACT_EXCLUDED_SECTION_LABELS στο SummaryTab.tsx).
+  "Capacity grx DL": "Capacity DL 10GB (grx)",
+  "Capacity grx UL": "Capacity UL 1GB (grx)",
+  "Capacity akamai DL": "Capacity DL 10GB (akamai)",
+  "Capacity akamai UL": "Capacity UL 1GB (akamai)",
   // "ICMP Ping 40"/"ICMP Ping 800": παλιό CDRCombined TestName, ΔΕΝ φτάνει πια στο summary
   // pipeline (βλ. excludeCdrPingDuplicates) — μένει εδώ μόνο για ό,τι άλλο διαβάζει raw
   // /api/data_calls rows χωρίς να περνάει από το dedup. "Ping 40"/"Ping 800": το ΝΕΟ raw
@@ -1149,8 +1157,10 @@ interface SectionGroup {
 }
 
 const SECTION_ORDER: SectionGroup[] = [
-  { match: (l) => /^capacity dl\b/.test(l), group: SECTION_GROUP_LABELS.bulkThroughput },
-  { match: (l) => /^capacity ul\b/.test(l), group: SECTION_GROUP_LABELS.bulkThroughput },
+  // subRank: το κύριο "Capacity DL 10GB" (χωρίς παρένθεση) πριν τα ανά-link breakdowns
+  // "Capacity DL 10GB (grx)"/"(akamai)" — βλ. mapCapacityLinkRowsToDataCallRows.
+  { match: (l) => /^capacity dl\b/.test(l), subRank: (l) => (l.includes("(") ? 1 : 0), group: SECTION_GROUP_LABELS.bulkThroughput },
+  { match: (l) => /^capacity ul\b/.test(l), subRank: (l) => (l.includes("(") ? 1 : 0), group: SECTION_GROUP_LABELS.bulkThroughput },
   { match: (l) => l.includes("http transfer (dl)"), group: SECTION_GROUP_LABELS.bulkThroughput },
   { match: (l) => l.includes("http transfer (ul)"), group: SECTION_GROUP_LABELS.bulkThroughput },
   { match: (l) => l.includes("ookla") && /\bdl\b/.test(l), subRank: () => 0, group: SECTION_GROUP_LABELS.bulkThroughput },
@@ -1548,6 +1558,49 @@ export const mapOoklaRowsToDataCallRows = (rows: OoklaRow[]): DataCallRow[] =>
       latitude: null,
       longitude: null,
     }));
+
+/**
+ * Μετατρέπει τα raw Capacity rows του /api/capacity_link (ResultsCapacityTest ×
+ * ResultsCapacityTestParameters, ένα row ανά test με το Link — grx/akamai/άλλο) σε
+ * DataCallRow σχήμα, testType="Capacity grx"/"Capacity akamai" (ή "Capacity <ό,τι άλλο
+ * URIList>" αν ποτέ εμφανιστεί τρίτος server) ώστε να μπουν στο ίδιο buildDataSections
+ * pipeline με τα υπόλοιπα PS Data tests — βλ. "θέλω να μου το σπάσεις Link grx και
+ * akamai" (2026-08-31). Το SECTION_LABEL_RENAMES μετονομάζει τα sections σε "Capacity DL
+ * 10GB (grx)"/"Capacity DL 10GB (akamai)" κ.λπ., δίπλα στα κύρια "Capacity DL 10GB"/
+ * "Capacity UL 1GB" (που έρχονται ΑΝΕΞΑΡΤΗΤΑ από το CDRCombined, /api/data_calls — ΔΕΝ
+ * αγγίζονται) — ένα ΕΠΙΠΛΕΟΝ breakdown, όχι υποκατάστατο (δεν διπλομετράει τα κύρια
+ * σύνολα, απλά τα σπάει κατά link). Compact δεν τα δείχνει καθόλου — βλ.
+ * COMPACT_EXCLUDED_SECTION_LABELS στο SummaryTab.tsx.
+ */
+export const mapCapacityLinkRowsToDataCallRows = (rows: CapacityLinkRow[]): DataCallRow[] =>
+  rows.map((row) => ({
+    Location: row.location,
+    SessionId: row.sessionId,
+    TestId: row.testId,
+    callStartTimeStamp: null,
+    testType: `Capacity ${row.link ?? "?"}`,
+    direction: row.direction,
+    status: row.success === 1 ? "Completed" : "Failed",
+    scoringStatus: row.success === 1 ? "success" : "failed",
+    host: row.link,
+    pingRttAvg: null,
+    throughputKbps: null,
+    capacityThroughputKbps: row.throughputKbps,
+    youtubeMos: null,
+    youtubeInterruptions: null,
+    interactivityQoeScore: null,
+    interactivityRtt: null,
+    interactivityPacketsLostRate: null,
+    interactivityPacketDelay: null,
+    technology: null,
+    startTechnology: null,
+    CollectionName: row.collectionName,
+    ASideFileName: row.aSideFileName,
+    isValid: 1,
+    comment: null,
+    latitude: null,
+    longitude: null,
+  }));
 
 /**
  * Μετατρέπει τα raw ping-packet rows του /api/ping_1000 (ResultsPingTest — ΟΛΑ τα

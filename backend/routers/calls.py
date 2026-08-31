@@ -1019,6 +1019,95 @@ def get_ookla(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/capacity_link")
+def get_capacity_link(
+    database: str = Query(..., min_length=1),
+    collection: list[str] | None = Query(default=None),
+    location: list[str] | None = Query(default=None),
+):
+    """Ε1 · Bulk throughput — breakdown του "Capacity DL 10GB"/"Capacity UL 1GB" ανά
+    server ("Link": grx/akamai) — βλ. "θέλω να μου το σπάσεις Link grx και akamai"
+    (2026-08-31). ΔΕΝ αντικαθιστά τις υπάρχουσες "Capacity" γραμμές του CDRCombined
+    (/api/data_calls) — αυτές μένουν όπως ήταν, η βάση των Ε1 compact directional
+    tables (βλ. buildDirectionalDataSections). Αυτό εδώ είναι ένα ΕΠΙΠΛΕΟΝ breakdown,
+    ίδιο query με το ήδη υπάρχον "CAPACITY – DL/UL Throughput (grx+akamai+ookla)"
+    saved query του QueryMap (βλ. src/components/QueryMap.tsx — CAPACITY TESTS
+    UNION branch), εδώ χωρίς το APP TESTS union branch και χωρίς Position/lat-long
+    (δεν χρειάζεται χάρτης εδώ, μόνο aggregation ανά operator/link).
+
+    Ο διαχωρισμός σε grx/akamai γίνεται πάνω στο ResultsCapacityTestParameters.URIList
+    (ίδιο CASE με το QueryMap) — ResultsCapacityTest.TestId = ResultsCapacityTestParameters.TestId.
+    Direction 'get%' = DL, 'put%' = UL (ίδιο conventiοn με τα δύο ξεχωριστά QueryMap
+    saved queries, εδώ ενωμένα σε ένα call). ThroughputGet/ThroughputPut είναι σε
+    bytes/sec (ίδιο με το QueryMap's *8.0/1000000.0 -> Mbps) — εδώ *8.0/1000.0 για
+    kbps, ίδια μονάδα με το CDRCombined "Capacity_Sustainable Throughput (kbps)".
+
+    Το frontend μετατρέπει αυτά τα rows σε DataCallRow σχήμα (testType="Capacity
+    grx"/"Capacity akamai") ώστε να μπουν στο ίδιο buildDataSections pipeline, σαν
+    ΕΠΙΠΛΕΟΝ sections δίπλα στα κύρια Capacity DL/UL — μόνο στο Full mode (βλ.
+    mapCapacityLinkRowsToDataCallRows στο attachmentC.ts, COMPACT_EXCLUDED_SECTION_LABELS
+    στο SummaryTab.tsx).
+    """
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        query = """
+            SELECT
+                fl.ASideFileName AS aSideFileName,
+                fl.CollectionName AS collectionName,
+                fl.ASideLocation AS location,
+                s.SessionId AS sessionId,
+                rct.TestId AS testId,
+                CASE
+                    WHEN rctp.Direction LIKE 'get%' THEN 'DL'
+                    WHEN rctp.Direction LIKE 'put%' THEN 'UL'
+                    ELSE rctp.Direction
+                END AS direction,
+                CASE
+                    WHEN rctp.URIList LIKE '%akamai-bench.commsquare.com%' THEN 'akamai'
+                    WHEN rctp.URIList LIKE '%grx-bench.commsquare.com%' THEN 'grx'
+                    ELSE LEFT(rctp.URIList, CHARINDEX(';', rctp.URIList + ';') - 1)
+                END AS link,
+                CASE WHEN rctp.Direction LIKE 'get%' THEN rct.ThroughputGet ELSE rct.ThroughputPut END * 8.0 / 1000.0 AS throughputKbps,
+                CASE WHEN rct.ErrorCode = 0 THEN 1 ELSE 0 END AS success,
+                CASE WHEN rct.ErrorCode = 0 THEN 0 ELSE 1 END AS failed
+            FROM Sessions s
+            INNER JOIN FileList fl                    ON fl.FileId = s.FileId
+            INNER JOIN ResultsCapacityTest rct         ON rct.SessionId = s.SessionId
+            INNER JOIN ResultsCapacityTestParameters rctp ON rctp.TestId = rct.TestId
+            WHERE s.Valid = 1
+              AND rct.LastBlock = 1
+              AND (rctp.Direction LIKE 'get%' OR rctp.Direction LIKE 'put%')
+        """
+
+        params: list[object] = []
+        selected_collections = [col for col in (collection or []) if col and col.strip()]
+        if selected_collections:
+            placeholders = ", ".join(["?"] * len(selected_collections))
+            query += f" AND fl.CollectionName IN ({placeholders})"
+            params.extend(selected_collections)
+
+        selected_locations = [loc for loc in (location or []) if loc and loc.strip()]
+        if selected_locations:
+            placeholders = ", ".join(["?"] * len(selected_locations))
+            query += f" AND fl.ASideLocation IN ({placeholders})"
+            params.extend(selected_locations)
+
+        cursor.execute(query, tuple(params))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+
+        data = [{columns[idx]: row[idx] for idx in range(len(columns))} for row in rows]
+
+        conn.close()
+
+        return {"rows": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/ping_1000")
 def get_ping_1000(
     database: str = Query(..., min_length=1),

@@ -345,6 +345,46 @@ export async function fetchOokla(
 }
 
 /**
+ * Ένα raw Capacity test row, με το "Link" (grx/akamai/άλλο) που το εξυπηρέτησε — βλ.
+ * /api/capacity_link. Ίδιο query με το ήδη υπάρχον "CAPACITY – DL/UL Throughput
+ * (grx+akamai+ookla)" saved query του QueryMap (src/components/QueryMap.tsx), χωρίς το
+ * APP TESTS union branch. `direction` ήδη "DL"/"UL" (από ResultsCapacityTestParameters.
+ * Direction 'get%'/'put%'), `throughputKbps` ήδη σε kbps (ίδια μονάδα με
+ * DataCallRow.capacityThroughputKbps). ΔΕΝ αντικαθιστά τις "Capacity" γραμμές του
+ * CDRCombined (/api/data_calls) — είναι ΕΠΙΠΛΕΟΝ breakdown ανά link, μόνο για το Full
+ * mode. Το frontend το μετατρέπει σε DataCallRow σχήμα (testType="Capacity grx"/
+ * "Capacity akamai") — βλ. mapCapacityLinkRowsToDataCallRows στο attachmentC.ts.
+ */
+export interface CapacityLinkRow {
+  location: string | null;
+  sessionId: string;
+  testId: number | null;
+  direction: "DL" | "UL" | string;
+  link: string | null;
+  throughputKbps: number | null;
+  success: number;
+  failed: number;
+  collectionName: string | null;
+  aSideFileName: string | null;
+}
+
+export async function fetchCapacityLink(
+  database: string,
+  collections: string[] = [],
+  locations: string[] = [],
+): Promise<CapacityLinkRow[]> {
+  const params = new URLSearchParams({ database });
+  for (const collection of collections) {
+    if (collection) params.append("collection", collection);
+  }
+  for (const location of locations) {
+    params.append("location", location);
+  }
+  const json = await requestJson<{ rows: CapacityLinkRow[] }>(`/api/capacity_link?${params.toString()}`);
+  return json.rows;
+}
+
+/**
  * Ένα raw ping-packet row — PacketSize 40, 800, Ή 1000 (βλ. `packetSize`, το πεδίο που τα
  * ξεχωρίζει) — για τα "Ping 40 B"/"Ping 800 B"/"Ping 1000 B" sections του PS Data Stats
  * table, βλ. /api/ping_1000. Ίδιο query με το A-LEVEL "PING RAW.sql" reference query / το
@@ -706,6 +746,31 @@ export async function fetchCellInfoBSide(
 ): Promise<{ eNBId: number | null; EARFCN: number | null; PCI: number | null }> {
   const params = new URLSearchParams({ database, session_id });
   return requestJson(`/api/cell_info_b_side?${params.toString()}`);
+}
+
+export interface CellInfoAllRow {
+  eNBId: number | null;
+  EARFCN: number | null;
+  PhyCellId: number | null;
+  FirstSeen: string | null;
+}
+
+// Every distinct serving cell the call passed through (not just the first one) — used to plot
+// every station the call handed over to on the map, instead of a single antenna marker.
+export async function fetchCellInfoAll(
+  database: string,
+  session_id: string
+): Promise<{ cells: CellInfoAllRow[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/cell_info_all?${params.toString()}`);
+}
+
+export async function fetchCellInfoAllBSide(
+  database: string,
+  session_id: string
+): Promise<{ cells: CellInfoAllRow[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/cell_info_all_b_side?${params.toString()}`);
 }
 
 export async function fetchTracelogValues(

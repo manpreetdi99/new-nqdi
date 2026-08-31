@@ -20,6 +20,7 @@ import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθη�
 import type { CallRecord } from "@/lib/callData";
 import {
   excludeCdrPingDuplicates,
+  mapCapacityLinkRowsToDataCallRows,
   mapDnsRowsToDataCallRows,
   mapInteractivityRowsToDataCallRows,
   mapOoklaRowsToDataCallRows,
@@ -30,6 +31,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   ApiClientError,
   fetchAllCalls,
+  fetchCapacityLink,
   fetchCellBandCount,
   fetchDataCalls,
   fetchDns,
@@ -44,6 +46,7 @@ import {
   fetchLocations,
   runBenchmarkApi,
   type AllCallsRow,
+  type CapacityLinkRow,
   type CellBandCountRow,
   type DataCallRow,
   type DnsRow,
@@ -68,6 +71,17 @@ const EMPTY_OOKLA_ROWS: OoklaRow[] = [];
 const EMPTY_PING_ROWS: PingRow[] = [];
 const EMPTY_INTERACTIVITY_ROWS: InteractivityRow[] = [];
 const EMPTY_DNS_ROWS: DnsRow[] = [];
+const EMPTY_CAPACITY_LINK_ROWS: CapacityLinkRow[] = [];
+
+/**
+ * True μόνο αν το query πραγματικά περιμένει δεδομένα (queued/fetching). Ένα
+ * enabled:false query (π.χ. technology_mix/dns/interactivity/capacity_link όταν
+ * summaryCompact=true) μένει isPending=true ΓΙΑ ΠΑΝΤΑ χωρίς το fetchStatus check — ποτέ
+ * δεν ξεκινάει fetch, οπότε δεν "τελειώνει" ποτέ — και θα κολλούσε το "Loaded n/N" chip
+ * και τα loading skeletons σε μόνιμο loading (2026-08-31, βλ. summaryCompact state).
+ */
+const isQueryLoading = (query: { isPending: boolean; fetchStatus: string }) =>
+  query.isPending && query.fetchStatus !== "idle";
 
 const formatApiError = (error: unknown, fallbackTitle: string) => {
   if (error instanceof ApiClientError) {
@@ -270,6 +284,16 @@ const Index = () => {
   // επιλογή στο ένα tab να μην αλλάζει καθόλου το άλλο.
   const [summaryDatabase, setSummaryDatabase] = useLocalStorage<string>("perf-insights-summary-db", "");
   const [summaryCollections, setSummaryCollections] = useLocalStorage<string[]>("perf-insights-summary-collections", []);
+  /**
+   * Ίδιο localStorage key με το εσωτερικό `compact` state του SummaryTab (βλ. εκεί) —
+   * χρειάζεται ΚΑΙ εδώ (2026-08-31) ώστε το summaryQueries useQueries παρακάτω να ξέρει αν
+   * είναι Compact και να ΜΗΝ κάνει fetch technology_mix/dns/interactivity/capacity_link, που
+   * σε compact πετιούνται εντελώς (δεν εμφανίζονται πουθενά — βλ. COMPACT_VOICE_ROW_ORDER/
+   * COMPACT_EXCLUDED_SECTION_LABELS στο SummaryTab.tsx). Περνιέται controlled στο SummaryTab
+   * (compact/onCompactChange props) ώστε να μείνει ΕΝΑ source of truth αντί δύο ασύγχρονα
+   * useLocalStorage instances πάνω στο ίδιο key.
+   */
+  const [summaryCompact, setSummaryCompact] = useLocalStorage<boolean>("perf-insights-summary-compact", true);
   const [summaryCollectionNames, setSummaryCollectionNames] = useState<string[]>([]);
   const [summaryCollectionsLoading, setSummaryCollectionsLoading] = useState(false);
   const [dataCallsLoading, setDataCallsLoading] = useState(false);
@@ -624,9 +648,11 @@ const Index = () => {
         enabled: summaryEnabled,
       },
       {
+        // "Technology mix" row δεν είναι στο COMPACT_VOICE_ROW_ORDER — άχρηστο σε compact
+        // (βλ. σχόλιο στο summaryCompact state).
         queryKey: ["summary", "technologyMix", summaryDatabase, summaryCollectionsKey],
         queryFn: () => fetchTechnologyMix(summaryDatabase, summaryCollections, []),
-        enabled: summaryEnabled,
+        enabled: summaryEnabled && !summaryCompact,
       },
       {
         queryKey: ["summary", "servingBandTech", summaryDatabase, summaryCollectionsKey],
@@ -654,14 +680,24 @@ const Index = () => {
         enabled: summaryEnabled,
       },
       {
+        // "Interactivity (eGaming)" section καταργείται εντελώς σε compact (βλ.
+        // COMPACT_EXCLUDED_SECTION_LABELS στο SummaryTab.tsx) — άχρηστο fetch.
         queryKey: ["summary", "interactivity", summaryDatabase, summaryCollectionsKey],
         queryFn: () => fetchInteractivity(summaryDatabase, summaryCollections, []),
-        enabled: summaryEnabled,
+        enabled: summaryEnabled && !summaryCompact,
       },
       {
+        // "DNS Resolution" section, ίδιο σκεπτικό.
         queryKey: ["summary", "dns", summaryDatabase, summaryCollectionsKey],
         queryFn: () => fetchDns(summaryDatabase, summaryCollections, []),
-        enabled: summaryEnabled,
+        enabled: summaryEnabled && !summaryCompact,
+      },
+      {
+        // Capacity (grx)/(akamai) breakdown: ρητά Full-only (βλ. σχόλιο στο
+        // COMPACT_EXCLUDED_SECTION_LABELS), άχρηστο fetch σε compact.
+        queryKey: ["summary", "capacityLink", summaryDatabase, summaryCollectionsKey],
+        queryFn: () => fetchCapacityLink(summaryDatabase, summaryCollections, []),
+        enabled: summaryEnabled && !summaryCompact,
       },
     ],
   });
@@ -677,6 +713,7 @@ const Index = () => {
     summaryPing1000Query,
     summaryInteractivityQuery,
     summaryDnsQuery,
+    summaryCapacityLinkQuery,
   ] = summaryQueries;
 
   // Καμία αποτυχία δεν βγάζει toast — ίδιο σκεπτικό με πριν: το SummaryTab υποβαθμίζεται
@@ -694,23 +731,29 @@ const Index = () => {
   const summaryPing1000Rows = summaryPing1000Query.data ?? EMPTY_PING_ROWS;
   const summaryInteractivityRows = summaryInteractivityQuery.data ?? EMPTY_INTERACTIVITY_ROWS;
   const summaryDnsRows = summaryDnsQuery.data ?? EMPTY_DNS_ROWS;
+  const summaryCapacityLinkRows = summaryCapacityLinkQuery.data ?? EMPTY_CAPACITY_LINK_ROWS;
 
   /**
    * Ποιο κομμάτι του SummaryTab περιμένει ακόμα τα δικά του δεδομένα. Τα PS Data sections
-   * χτίζονται από 5 πηγές μαζί (data_calls + ookla + ping_1000 + interactivity + dns),
-   * οπότε το `data` είναι pending όσο έστω μία από αυτές τρέχει — αλλιώς ο πίνακας θα
-   * εμφανιζόταν μισός σαν να ήταν πλήρης.
+   * χτίζονται από 6 πηγές μαζί (data_calls + ookla + ping_1000 + interactivity + dns +
+   * capacity_link), οπότε το `data` είναι pending όσο έστω μία από αυτές τρέχει — αλλιώς
+   * ο πίνακας θα εμφανιζόταν μισός σαν να ήταν πλήρης.
    */
   const voicePending = summaryEnabled && summaryVoiceQuery.isPending;
   const dataPending =
     summaryEnabled &&
-    [summaryDataQuery, summaryOoklaQuery, summaryPing1000Query, summaryInteractivityQuery, summaryDnsQuery].some(
-      (query) => query.isPending,
-    );
-  const technologyMixPending = summaryEnabled && summaryTechnologyMixQuery.isPending;
+    [
+      summaryDataQuery,
+      summaryOoklaQuery,
+      summaryPing1000Query,
+      summaryInteractivityQuery,
+      summaryDnsQuery,
+      summaryCapacityLinkQuery,
+    ].some((query) => isQueryLoading(query));
+  const technologyMixPending = summaryEnabled && isQueryLoading(summaryTechnologyMixQuery);
   const servingBandTechPending = summaryEnabled && summaryServingBandTechQuery.isPending;
   const summarySourcesDone = summaryEnabled
-    ? summaryQueries.filter((query) => !query.isPending).length
+    ? summaryQueries.filter((query) => !isQueryLoading(query)).length
     : summaryQueries.length;
 
   // Memo σε primitives (όχι στο summaryQueries array, που αλλάζει ταυτότητα κάθε render)
@@ -728,11 +771,13 @@ const Index = () => {
   );
 
   // "Ookla DL"/"Ookla UL" (mapOoklaRowsToDataCallRows), "Ping 40"/"Ping 800"/"Ping 1000"
-  // (mapPing1000RowsToDataCallRows), "Interactivity" (mapInteractivityRowsToDataCallRows)
-  // και "DNS" (mapDnsRowsToDataCallRows) μπαίνουν στο ίδιο DataCallRow[] που τροφοδοτεί
-  // το SummaryTab's buildDataSections — έτσι εμφανίζονται σαν ακόμα PS Data sections
-  // χωρίς να αγγίξουμε καθόλου το SummaryTab. excludeCdrPingDuplicates βγάζει τα παλιά
-  // "ICMP Ping 40"/"ICMP Ping 800" (CDRCombined) από το summaryDataCallsRows πρώτα — το
+  // (mapPing1000RowsToDataCallRows), "Interactivity" (mapInteractivityRowsToDataCallRows),
+  // "DNS" (mapDnsRowsToDataCallRows) και "Capacity grx"/"Capacity akamai"
+  // (mapCapacityLinkRowsToDataCallRows — ΕΠΙΠΛΕΟΝ breakdown δίπλα στο κύριο "Capacity",
+  // όχι υποκατάστατο, βλ. σχόλιο εκεί) μπαίνουν στο ίδιο DataCallRow[] που τροφοδοτεί το
+  // SummaryTab's buildDataSections — έτσι εμφανίζονται σαν ακόμα PS Data sections χωρίς
+  // να αγγίξουμε καθόλου το SummaryTab. excludeCdrPingDuplicates βγάζει τα παλιά "ICMP
+  // Ping 40"/"ICMP Ping 800" (CDRCombined) από το summaryDataCallsRows πρώτα — το
   // /api/ping_1000 είναι πλέον η ΜΟΝΗ πηγή και για τα δύο (βλ. mapPing1000RowsToDataCallRows),
   // αλλιώς θα μετρούσαν διπλά.
   const summaryDataCallsWithOokla = useMemo(
@@ -742,8 +787,16 @@ const Index = () => {
       ...mapPing1000RowsToDataCallRows(summaryPing1000Rows),
       ...mapInteractivityRowsToDataCallRows(summaryInteractivityRows),
       ...mapDnsRowsToDataCallRows(summaryDnsRows),
+      ...mapCapacityLinkRowsToDataCallRows(summaryCapacityLinkRows),
     ],
-    [summaryDataCallsRows, summaryOoklaRows, summaryPing1000Rows, summaryInteractivityRows, summaryDnsRows],
+    [
+      summaryDataCallsRows,
+      summaryOoklaRows,
+      summaryPing1000Rows,
+      summaryInteractivityRows,
+      summaryDnsRows,
+      summaryCapacityLinkRows,
+    ],
   );
 
   const handleRunQueries = async (queries: string[]) => {
@@ -1379,6 +1432,8 @@ const Index = () => {
               cellBandCountRows={summaryCellBandCountRows}
               srvccRows={summarySrvccRows}
               loading={summaryLoading}
+              compact={summaryCompact}
+              onCompactChange={setSummaryCompact}
               database={summaryDatabase}
               collections={summaryCollections}
               databases={databases}

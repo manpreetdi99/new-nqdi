@@ -85,6 +85,15 @@ interface SummaryTabProps {
   srvccRows?: SrvccRow[];
   /** Progressive load: ποιο κομμάτι δείχνει skeleton. Χωρίς αυτό, τίποτα δεν "φορτώνει". */
   loading?: SummaryLoading;
+  /**
+   * Controlled Compact/Full toggle (2026-08-31) — όταν δίνονται ΚΑΙ τα δύο μαζί, το γονικό
+   * component γίνεται το source of truth (π.χ. το Index.tsx, που χρειάζεται να ξέρει αν
+   * είναι compact ΠΡΙΝ κάνει fetch technology_mix/dns/interactivity/capacity_link, άχρηστα
+   * σε compact — βλ. summaryCompact state εκεί). Χωρίς αυτά (π.χ. στα tests), το SummaryTab
+   * κρατάει το δικό του localStorage state όπως πριν — βλ. compact/setCompact παρακάτω.
+   */
+  compact?: boolean;
+  onCompactChange?: (value: boolean) => void;
   database?: string;
   collections?: string[];
   /** Για το dropdown επιλογής database μέσα στο banner· χωρίς αυτά, το banner δείχνει απλό κείμενο. */
@@ -1178,16 +1187,40 @@ const COMPACT_EXCLUDED_GROUPS = new Set<string>([SECTION_GROUP_LABELS.browserEng
 /**
  * Μεμονωμένα sections που καταργούνται εντελώς στο compact (2026-08-31) — by label, όχι
  * by group, γιατί μοιράζονται group με κάτι που ΠΡΕΠΕΙ να μείνει: HTTP Transfer DL/UL
- * είναι Ε1 · Bulk throughput (ίδιο group με Capacity/Ookla, ήδη merged directional
- * tables), DNS Resolution/Interactivity (eGaming) είναι Ε2 · Latency (ίδιο group με το
- * merged Ping total) — filter by group θα έσβηνε και τα merges αυτά κατά λάθος.
+ * και τα Capacity ανά-link breakdowns είναι Ε1 · Bulk throughput (ίδιο group με
+ * Capacity/Ookla, ήδη merged directional tables), DNS Resolution/Interactivity
+ * (eGaming) είναι Ε2 · Latency (ίδιο group με το merged Ping total) — filter by group θα
+ * έσβηνε και τα merges αυτά κατά λάθος. Capacity (grx)/(akamai): "στο full ... θέλω να
+ * μου το σπάσεις Link grx και akamai" (2026-08-31) — ρητά Full-only, βλ.
+ * mapCapacityLinkRowsToDataCallRows.
  */
 const COMPACT_EXCLUDED_SECTION_LABELS = new Set([
   "HTTP Transfer (DL) 10MB",
   "HTTP Transfer (UL) 5MB",
   "DNS Resolution",
   "Interactivity (eGaming)",
+  "Capacity DL 10GB (grx)",
+  "Capacity DL 10GB (akamai)",
+  "Capacity UL 1GB (grx)",
+  "Capacity UL 1GB (akamai)",
 ]);
+
+/**
+ * Το γυμνό (χωρίς link) "Capacity DL 10GB"/"Capacity UL 1GB" καταργείται σαν ΞΕΧΩΡΙΣΤΟ
+ * section στο Full mode ΜΟΝΟ όταν το breakdown του υπάρχει πραγματικά στα δεδομένα
+ * (2026-08-31: "εφόσον το έσπασε Capacity DL 10GB το βγάζεις από το full αυτό" — «εφόσον»
+ * = conditional, όχι unconditional· αν ποτέ αποτύχει/λείπει το /api/capacity_link endpoint,
+ * το γυμνό ΜΕΝΕΙ ορατό αντί να εξαφανιστεί το Capacity εντελώς από το Full mode). Οι
+ * υποκείμενες γραμμές (testType="Capacity") ΔΕΝ αγγίζονται — μένουν στο
+ * fullDataSections/underlying data, τροφοδοτούν κανονικά το compact directional merge
+ * (buildDirectionalDataSections), που ΔΕΝ έχει καν δει τα (grx)/(akamai) sections
+ * (COMPACT_EXCLUDED_SECTION_LABELS τα κόβει πριν φτάσουν εκεί) — αυτό εδώ κόβει μόνο την
+ * ΕΜΦΑΝΙΣΗ στο Full mode.
+ */
+const FULL_BARE_CAPACITY_HIDDEN_WHEN_BROKEN_DOWN: { bare: string; breakdowns: string[] }[] = [
+  { bare: "Capacity DL 10GB", breakdowns: ["Capacity DL 10GB (grx)", "Capacity DL 10GB (akamai)"] },
+  { bare: "Capacity UL 1GB", breakdowns: ["Capacity UL 1GB (grx)", "Capacity UL 1GB (akamai)"] },
+];
 
 /* ────────────────────────── Το tab ────────────────────────── */
 
@@ -1199,6 +1232,8 @@ const SummaryTab = ({
   cellBandCountRows = [],
   srvccRows = [],
   loading = NOT_LOADING,
+  compact: compactProp,
+  onCompactChange,
   database,
   collections = [],
   databases = [],
@@ -1227,8 +1262,17 @@ const SummaryTab = ({
    * Drop/Fail rate (με το count σαν "sum=..." μέσα στο ίδιο cell), και POLQA avg MOS (βλ.
    * COMPACT_VOICE_ROW_ORDER). Default true — "by default επιλογή Compact" (2026-08-31).
    * Σε localStorage γιατί είναι προτίμηση προβολής, όχι κάτι που θέλεις να ξαναδιαλέγεις.
+   *
+   * Controlled/uncontrolled fallback (2026-08-31, βλ. compact/onCompactChange στο
+   * SummaryTabProps): όταν το Index.tsx περνάει και τα δύο props, αυτά κερδίζουν —
+   * ΧΡΕΙΑΖΕΤΑΙ το Index.tsx να ξέρει αν είμαστε compact ΠΡΙΝ αποφασίσει ποια summary
+   * queries να τρέξει (technology_mix/dns/interactivity/capacity_link είναι άχρηστα σε
+   * compact). Χωρίς αυτά τα props (π.χ. στα tests, που κάνουν render `<SummaryTab />`
+   * χωρίς γονέα) πέφτει στο δικό του localStorage state, ίδιο key — ΙΔΙΟ behavior με πριν.
    */
-  const [compact, setCompact] = useLocalStorage<boolean>("perf-insights-summary-compact", true);
+  const [internalCompact, setInternalCompact] = useLocalStorage<boolean>("perf-insights-summary-compact", true);
+  const compact = compactProp ?? internalCompact;
+  const setCompact = onCompactChange ?? setInternalCompact;
   const [collectionsMenuOpen, setCollectionsMenuOpen] = useState(false);
 
   const validAllCallsRows = useMemo(
@@ -1338,7 +1382,17 @@ const SummaryTab = ({
    * (2026-08-31) — μένουν μόνο στο Full mode.
    */
   const dataSections = useMemo<DisplaySection[]>(() => {
-    if (!compact) return fullDataSections.map((section) => ({ kind: "normal", section }) as const);
+    if (!compact) {
+      const labels = new Set(fullDataSections.map((section) => section.label));
+      const hiddenBare = new Set(
+        FULL_BARE_CAPACITY_HIDDEN_WHEN_BROKEN_DOWN.filter(({ breakdowns }) => breakdowns.some((l) => labels.has(l))).map(
+          ({ bare }) => bare,
+        ),
+      );
+      return fullDataSections
+        .filter((section) => !hiddenBare.has(section.label))
+        .map((section) => ({ kind: "normal", section }) as const);
+    }
     return [
       ...directionalDataSections.merged.map((section) => ({ kind: "directional", section }) as const),
       ...compactRestSections
