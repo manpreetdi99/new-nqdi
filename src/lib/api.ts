@@ -1207,6 +1207,82 @@ export async function fetchMarkers(
   return requestJson(`/api/markers?${params.toString()}`);
 }
 
+/**
+ * Historic tab: read-only snapshot από το BI data warehouse (BI_VOICE/BI_DATA), ΕΝΑ
+ * campaign (CollectionName) τη φορά — βλ. backend/routers/historic.py +
+ * src/components/BI_DW_SYSTEM_PROMPT.md. Ξεχωριστό dataset από τα fetchAllCalls/
+ * fetchDataCalls παραπάνω: εκεί ο χρήστης διαλέγει `database` (swissqual-srvsa, live
+ * per-campaign DB)· εδώ η πηγή είναι πάντα το warehouse, οπότε τα endpoints παίρνουν
+ * μόνο `collection`.
+ */
+export async function fetchHistoricCollections(): Promise<string[]> {
+  const json = await requestJson<{ collections: string[] }>("/api/historic/collections");
+  return json.collections;
+}
+
+export interface HistoricScoreRow {
+  operator: string;
+  totalVoice: number | null;
+  totalData: number | null;
+  totalScore: number | null;
+  voiceScoreGsm: number | null;
+  voiceScoreFree: number | null;
+  scoreBrowsing: number | null;
+  scoreHttp: number | null;
+  scoreCap: number | null;
+  scorePing: number | null;
+  scoreYt: number | null;
+}
+
+export interface HistoricBestOperator {
+  category: string;
+  operator: string;
+  score: number | null;
+}
+
+export interface HistoricScorecard {
+  scores: HistoricScoreRow[];
+  winners: HistoricBestOperator[];
+}
+
+export async function fetchHistoricScorecard(collection: string): Promise<HistoricScorecard> {
+  const params = new URLSearchParams({ collection });
+  return requestJson(`/api/historic/scorecard?${params.toString()}`);
+}
+
+export interface HistoricVoiceRow {
+  operator: string;
+  attempts: number;
+  cssr: number | null;
+  dcr: number | null;
+  completionRate: number | null;
+  mos: number | null;
+  voltePct: number | null;
+}
+
+export async function fetchHistoricVoice(collection: string): Promise<HistoricVoiceRow[]> {
+  const params = new URLSearchParams({ collection });
+  const json = await requestJson<{ rows: HistoricVoiceRow[] }>(`/api/historic/voice?${params.toString()}`);
+  return json.rows;
+}
+
+export interface HistoricDataRow {
+  operator: string;
+  avgThrpDlMbps: number | null;
+  avgThrpUlMbps: number | null;
+  taskSuccessRate: number | null;
+  totalTests: number | null;
+  avgRttMs: number | null;
+  totalPingAttempts: number | null;
+  successPingTests: number | null;
+}
+
+export async function fetchHistoricData(collection: string): Promise<HistoricDataRow[]> {
+  const params = new URLSearchParams({ collection });
+  const json = await requestJson<{ rows: HistoricDataRow[] }>(`/api/historic/data?${params.toString()}`);
+  return json.rows;
+}
+
 export interface RunMapResponse {
   output_path: string | null;
   logs: string[];

@@ -16,6 +16,7 @@ import AntennasMap from "@/components/AntennasMap";
 import QueryMap from "@/components/QueryMap";
 import ValidationTab from "@/components/ValidationTab";
 import SummaryTab from "@/components/SummaryTab";
+import HistoricTab from "@/components/HistoricTab";
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import type { CallRecord } from "@/lib/callData";
 import {
@@ -2248,13 +2249,7 @@ const Index = () => {
           </TabsContent>
 
           <TabsContent value="historic">
-            <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card py-24 text-center">
-              <History className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm font-medium text-foreground">Historic</p>
-              <p className="max-w-sm text-xs text-muted-foreground">
-                This section is coming soon.
-              </p>
-            </div>
+            <HistoricTab />
           </TabsContent>
         </Tabs>
       </main>

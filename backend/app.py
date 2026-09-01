@@ -17,6 +17,7 @@
   antennas         -> σελίδα Antennas Map (geo4g.xlsx)
   benchmark        -> σελίδα Query Builder / Benchmark
   validation       -> σελίδα Validation (run_map)
+  historic         -> σελίδα Historic: BI_VOICE/BI_DATA warehouse snapshot ανά campaign
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -36,6 +37,7 @@ from routers import (
     calls,
     data_calls,
     filters,
+    historic,
     validation,
 )
 
@@ -70,5 +72,6 @@ for _module in (
     antennas,
     benchmark,
     validation,
+    historic,
 ):
     app.include_router(_module.router)
