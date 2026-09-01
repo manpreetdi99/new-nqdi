@@ -12,6 +12,11 @@ class RunMapRequest(BaseModel):
     collection: str
     gpx_path: str = ""
     max_workers: int = 6
+    # {"free": [None, "Location A"], "data": [None], ...} — None = the test's default
+    # panel(s), a string = a custom A-side location. Mirrors main_mt.run_for_collection's
+    # test_locations param (see validation_maps/gg2.py's A-side/test matrix for the desktop
+    # equivalent). Omitted/None keeps the old "all default panels" behaviour.
+    test_locations: dict[str, list[str | None]] | None = None
 
 
 @router.post("/api/run_map")
@@ -49,6 +54,7 @@ def run_map(req: RunMapRequest):
                 req.database,
                 input_gpx=req.gpx_path if req.gpx_path.strip() else None,
                 max_workers=req.max_workers,
+                test_locations=req.test_locations,
             )
     except Exception as e:
         raw_logs = [l for l in log_buffer.getvalue().splitlines() if l.strip()]

@@ -1,5 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { Play, CheckCircle2, Loader2, Terminal, Map, ArrowLeft } from "lucide-react";
+import { fetchLocations } from "@/lib/api";
 
 interface LogEntry {
   time: string;
@@ -22,6 +23,15 @@ function now() {
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}:${String(d.getSeconds()).padStart(2, "0")}`;
 }
 
+// Test types a user can pin to a specific A-side location. SCANNER has no per-location
+// variant (mirrors gg2.py's matrix, which shows "—" in that column) — it always runs as
+// part of the DEFAULT setup.
+const TEST_KEYS = ["free", "data", "gsm"] as const;
+type TestKey = (typeof TEST_KEYS)[number];
+type TestLocations = Record<string, (string | null)[]>;
+
+const locationCheckKey = (test: TestKey, location: string) => `${test}::${location}`;
+
 export default function ValidationTab({
   databases,
   defaultDatabase,
@@ -31,6 +41,15 @@ export default function ValidationTab({
 }: ValidationTabProps) {
   const [selectedDb, setSelectedDb] = useState(defaultDatabase);
   const [selectedCollection, setSelectedCollection] = useState("");
+  const [aSideLocations, setASideLocations] = useState<string[]>([]);
+  const [locationsLoading, setLocationsLoading] = useState(false);
+  // true = "RUN DEFAULT SETUP (ALL TESTS)"; unchecked automatically as soon as any
+  // specific A-side/test cell below is checked (same behavior as gg2.py's matrix).
+  const [defaultAll, setDefaultAll] = useState(true);
+  const [locationChecks, setLocationChecks] = useState<Record<string, boolean>>({});
+  // SCANNER isn't per A-side location (single collection-wide RSRP scan), so it gets its
+  // own standalone toggle instead of a matrix column — mirrors gg2.py's SCANNER_ROW.
+  const [scannerChecked, setScannerChecked] = useState(false);
   const [gpxPath, setGpxPath] = useState("");
   const [bypassGpx, setBypassGpx] = useState(false);
   const [maxWorkers, setMaxWorkers] = useState(6);
@@ -86,15 +105,103 @@ export default function ValidationTab({
     onDatabaseChange(db);
   };
 
+  // Load A-side locations for the selected collection (mirrors gg2.py's
+  // load_a_side_locations) and reset the matrix — a fresh collection means the previous
+  // location checkboxes no longer apply.
+  useEffect(() => {
+    setDefaultAll(true);
+    setLocationChecks({});
+    setScannerChecked(false);
+
+    if (!selectedDb || !selectedCollection) {
+      setASideLocations([]);
+      return;
+    }
+
+    let cancelled = false;
+    setLocationsLoading(true);
+
+    fetchLocations(selectedDb, [selectedCollection])
+      .then((names) => {
+        if (cancelled) return;
+        setASideLocations(names);
+      })
+      .catch((err) => {
+        if (cancelled) return;
+        setASideLocations([]);
+        addLog(`Could not load A-side locations: ${err?.message ?? err}`, "error");
+      })
+      .finally(() => {
+        if (!cancelled) setLocationsLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedDb, selectedCollection]);
+
+  const toggleLocationCheck = (test: TestKey, location: string) => {
+    const key = locationCheckKey(test, location);
+    const nextChecked = !locationChecks[key];
+    setLocationChecks((prev) => ({ ...prev, [key]: nextChecked }));
+    // Uncheck DEFAULT as soon as any specific A-side cell is checked.
+    if (nextChecked) setDefaultAll(false);
+  };
+
+  const toggleScannerCheck = (checked: boolean) => {
+    setScannerChecked(checked);
+    // Uncheck DEFAULT as soon as the standalone SCANNER toggle is checked.
+    if (checked) setDefaultAll(false);
+  };
+
+  // Same shape as main_mt.run_for_collection's test_locations param: null = the test's
+  // default panel(s), a string = one custom A-side location.
+  const buildTestLocations = (): TestLocations => {
+    const plan: TestLocations = {};
+
+    if (defaultAll) {
+      for (const test of [...TEST_KEYS, "scanner"]) {
+        plan[test] = [null];
+      }
+    }
+
+    // SCANNER is collection-wide, not tied to DEFAULT — checking it runs SCANNER even
+    // when DEFAULT (and thus the rest of the default panels) is unchecked.
+    if (scannerChecked) {
+      const scannerLocations = (plan["scanner"] ??= []);
+      if (!scannerLocations.includes(null)) scannerLocations.push(null);
+    }
+
+    for (const test of TEST_KEYS) {
+      for (const location of aSideLocations) {
+        if (locationChecks[locationCheckKey(test, location)]) {
+          (plan[test] ??= []).push(location);
+        }
+      }
+    }
+
+    return plan;
+  };
+
   const handleRun = async () => {
     if (!selectedDb) { addLog("Aborted: Select a database first.", "error"); return; }
     if (!selectedCollection) { addLog("Aborted: Select a collection first.", "error"); return; }
+
+    const testLocations = buildTestLocations();
+    if (Object.keys(testLocations).length === 0) {
+      addLog("Aborted: Select at least one test/location checkbox.", "error");
+      return;
+    }
 
     setRunning(true);
     setOutputPath(null);
     setMapHtml(null);
     addLog(`Starting map generation for collection: ${selectedCollection}`, "info");
     addLog(`Database: ${selectedDb} | Workers: ${maxWorkers}`, "info");
+    const selectionCount = Object.values(testLocations).reduce((sum, locs) => sum + locs.length, 0);
+    const selectedTestsLabel = Object.keys(testLocations).map((t) => t.toUpperCase()).join(", ");
+    addLog(`Tests: ${selectedTestsLabel} | Checked combinations: ${selectionCount}`, "info");
     if (!bypassGpx && gpxPath) {
       addLog(`GPX: ${gpxPath}`, "info");
     } else if (bypassGpx) {
@@ -112,6 +219,7 @@ export default function ValidationTab({
           collection: selectedCollection,
           gpx_path: bypassGpx ? "" : gpxPath,
           max_workers: maxWorkers,
+          test_locations: testLocations,
         }),
       });
 
@@ -238,7 +346,91 @@ export default function ValidationTab({
           </div>
 
           <div className="md:col-span-2">
-            <label className="text-xs font-medium text-muted-foreground block mb-1">3. GPX File Path (optional)</label>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">3. A-Side Locations × Tests</label>
+            <div className="border border-border rounded-md overflow-hidden">
+              <div className="max-h-56 overflow-y-auto">
+                <table className="w-full text-xs">
+                  <thead className="bg-muted/40 sticky top-0">
+                    <tr>
+                      <th className="text-left px-3 py-2 font-medium text-muted-foreground">A-Side Location</th>
+                      <th className="px-3 py-2 font-medium text-muted-foreground w-16">FREE</th>
+                      <th className="px-3 py-2 font-medium text-muted-foreground w-16">DATA</th>
+                      <th className="px-3 py-2 font-medium text-muted-foreground w-16">GSM</th>
+                      <th className="px-3 py-2 font-medium text-muted-foreground w-16">SCANNER</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    <tr className="border-t border-border bg-muted/10">
+                      <td className="px-3 py-2 font-medium text-foreground">DEFAULT</td>
+                      <td colSpan={4} className="px-3 py-2">
+                        <label className="flex items-center gap-2 cursor-pointer select-none">
+                          <input
+                            type="checkbox"
+                            checked={defaultAll}
+                            onChange={(e) => setDefaultAll(e.target.checked)}
+                            disabled={running}
+                            className="h-3.5 w-3.5"
+                          />
+                          RUN DEFAULT SETUP (ALL TESTS)
+                        </label>
+                      </td>
+                    </tr>
+                    <tr className="border-t border-border">
+                      <td className="px-3 py-1.5 text-foreground">SCANNER (independent)</td>
+                      <td className="px-3 py-1.5 text-center text-muted-foreground">—</td>
+                      <td className="px-3 py-1.5 text-center text-muted-foreground">—</td>
+                      <td className="px-3 py-1.5 text-center text-muted-foreground">—</td>
+                      <td className="px-3 py-1.5 text-center">
+                        <input
+                          type="checkbox"
+                          checked={scannerChecked}
+                          onChange={(e) => toggleScannerCheck(e.target.checked)}
+                          disabled={running}
+                          className="h-3.5 w-3.5"
+                        />
+                      </td>
+                    </tr>
+                    {locationsLoading && (
+                      <tr>
+                        <td colSpan={5} className="px-3 py-3 text-center text-muted-foreground">Loading locations…</td>
+                      </tr>
+                    )}
+                    {!locationsLoading && selectedCollection && aSideLocations.length === 0 && (
+                      <tr>
+                        <td colSpan={5} className="px-3 py-3 text-center text-muted-foreground">No A-side locations found for this collection.</td>
+                      </tr>
+                    )}
+                    {!locationsLoading && !selectedCollection && (
+                      <tr>
+                        <td colSpan={5} className="px-3 py-3 text-center text-muted-foreground">Select a collection to load locations.</td>
+                      </tr>
+                    )}
+                    {aSideLocations.map((location) => (
+                      <tr key={location} className="border-t border-border">
+                        <td className="px-3 py-1.5 truncate max-w-[220px] text-foreground" title={location}>{location}</td>
+                        {TEST_KEYS.map((test) => (
+                          <td key={test} className="px-3 py-1.5 text-center">
+                            <input
+                              type="checkbox"
+                              checked={!!locationChecks[locationCheckKey(test, location)]}
+                              onChange={() => toggleLocationCheck(test, location)}
+                              disabled={running}
+                              className="h-3.5 w-3.5"
+                            />
+                          </td>
+                        ))}
+                        <td className="px-3 py-1.5 text-center text-muted-foreground">—</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1">Uncheck DEFAULT to run only the specific A-side/test combinations you tick. SCANNER is collection-wide, so it runs whenever ticked, independent of DEFAULT.</p>
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="text-xs font-medium text-muted-foreground block mb-1">4. GPX File Path (optional)</label>
             <div className="flex gap-2 items-center">
               <input
                 type="text"
@@ -262,7 +454,7 @@ export default function ValidationTab({
           </div>
 
           <div>
-            <label className="text-xs font-medium text-muted-foreground block mb-1">4. Threads (max_workers)</label>
+            <label className="text-xs font-medium text-muted-foreground block mb-1">5. Threads (max_workers)</label>
             <div className="flex items-center gap-3">
               <input
                 type="range"
