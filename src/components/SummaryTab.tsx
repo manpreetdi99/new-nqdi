@@ -1,5 +1,5 @@
 import { Fragment, useMemo, useState, type ReactNode } from "react";
-import { ChevronDown, Database, MapPin, Phone, Radio, Wifi } from "lucide-react";
+import { ChevronDown, Database, Phone, Radio, Wifi } from "lucide-react";
 import { Cell as PieCell, Legend as PieLegend, Pie, PieChart, ResponsiveContainer, Tooltip as PieRTooltip } from "recharts";
 
 import { Skeleton } from "@/components/ui/skeleton";
@@ -1446,18 +1446,6 @@ const SummaryTab = ({
     [validAllCallsRows, validDataCallsRows],
   );
 
-  const locations = useMemo(
-    () =>
-      Array.from(
-        new Set(
-          [...validAllCallsRows.map((row) => row.Location), ...validDataCallsRows.map((row) => row.Location)].filter(
-            Boolean,
-          ),
-        ),
-      ) as string[],
-    [validAllCallsRows, validDataCallsRows],
-  );
-
   const hasData = validAllCallsRows.length > 0 || validDataCallsRows.length > 0;
   /** Όσο τρέχει έστω μία πηγή, το "δεν υπάρχουν δεδομένα" θα ήταν πρόωρο ψέμα. */
   const anyLoading = loading.voice || loading.data || loading.technologyMix || loading.servingBandTech;
@@ -1490,13 +1478,12 @@ const SummaryTab = ({
         <div className="flex flex-wrap items-start gap-6 rounded-t-xl bg-gradient-to-r from-primary/[0.07] via-accent/[0.04] to-transparent px-5 py-5">
           <div className="min-w-[260px] flex-1">
             <div className="text-[10px] font-semibold uppercase tracking-[0.18em] text-primary">A-Level Analysis</div>
-            <h1 className="mt-1 text-3xl font-extrabold tracking-tight text-foreground">Attachment C — Call Statistics Tables</h1>
+            <h1 className="mt-1 text-3xl font-extrabold tracking-tight text-foreground">Statistics Tables</h1>
             <p className="mt-1 text-xs text-muted-foreground">
               Παράγεται live από την τρέχουσα επιλογή database / collections / φίλτρων.
             </p>
 
             <div className="mt-4 flex flex-wrap gap-2">
-              <MetaChip icon={MapPin} label="Subroutes" value={locations.length > 0 ? `${locations.length}` : "—"} />
               <MetaChip label="Week" value={period.week != null ? String(period.week) : "—"} />
               <MetaChip label="Period" value={`${formatDate(period.from)} – ${formatDate(period.to)}`} />
               {/* Ρητή πρόοδος όσο οι 10 πηγές γυρίζουν μία-μία — αλλιώς η σταδιακή εμφάνιση
