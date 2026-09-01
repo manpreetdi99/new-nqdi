@@ -565,9 +565,9 @@ const CallsMap = ({ calls, onSelectCall, dataSessions = [] }: CallsMapProps) => 
 
         {/* ── Real Map ─────────────────────────────────────────────────── */}
         {splitView ? (
-          <div className="flex-1 h-[520px] min-h-[520px] overflow-y-auto pr-0.5">
+          <div className="flex-1 pr-0.5">
             {splitLocations.length > 0 ? (
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid grid-cols-3 gap-3">
                 {splitLocations.map(loc => (
                   <LocationMiniMap
                     key={loc}
@@ -579,7 +579,7 @@ const CallsMap = ({ calls, onSelectCall, dataSessions = [] }: CallsMapProps) => 
                 ))}
               </div>
             ) : (
-              <div className="h-full flex items-center justify-center text-xs text-muted-foreground italic border border-border rounded-lg">
+              <div className="h-[240px] flex items-center justify-center text-xs text-muted-foreground italic border border-border rounded-lg">
                 Δεν υπάρχουν δεδομένα για διαχωρισμό.
               </div>
             )}

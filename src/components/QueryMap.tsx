@@ -495,95 +495,174 @@ interface QueryTemplate {
 
 const TEMPLATES: QueryTemplate[] = [
 
+  // ── 1) CALLS ─────────────────────────────────────────────────────────
   {
-    label: "R24 Voice - MOS/SQ",
-    category: "SmartAnalytics R24",
+    label: "ALL CALLS",
+    category: "Calls",
+    mode: "points",
+    valueCol: "callStatus",
+    colorScheme: "call_status",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  CA.SessionId,
+  CA.technology,
+  CA.callMode,
+  CA.callType,
+  CA.callDir,
+  CA.callStatus,
+  ROUND(CA.setupTime, 2) AS setupTime,
+  (CA.callDuration / 1000) AS callDuration_s,
+  FL.CollectionName,
+  FL.ASideLocation AS Location,
+  CAST(P.Latitude  AS FLOAT) AS latitude,
+  CAST(P.Longitude AS FLOAT) AS longitude
+FROM CallAnalysis CA
+LEFT JOIN FileList FL ON CA.FileId = FL.FileId
+LEFT JOIN Sessions S  ON S.SessionId = CA.SessionId
+LEFT JOIN Position P  ON P.PosId = CA.PosId
+WHERE S.Valid IN (0, 1)
+  AND FL.CollectionName = '{collection}'
+  AND FL.ASideLocation  = '{location}'
+ORDER BY CA.SessionId DESC`,
+  },
+
+  {
+    label: "MOS FREE/GSM",
+    category: "Calls",
     mode: "points",
     valueCol: "LQ",
     colorScheme: "mos_lq",
     labelCol: "Location",
     requiresFilters: true,
     sql: `SELECT
-  CAST(FCV.LatitudeA AS FLOAT) AS latitude,
-  CAST(FCV.LongitudeA AS FLOAT) AS longitude,
-  FCV.AvgSQ AS LQ,
-  FCV.CallStatus,
-  FCV.CallSetupTime_s,
-  FCV.CallDuration_s,
-  FCV.CallTechnologyA,
-  DF.Location,
-  DF.CollectionName
-FROM FactCDRVoice FCV
-LEFT JOIN DmnFile DF ON DF.DmnId = FCV.DmnIdFile
-WHERE FCV.LatitudeA IS NOT NULL
-  AND FCV.LongitudeA IS NOT NULL
-  AND FCV.AvgSQ IS NOT NULL
-  AND DF.CollectionName = '{collection}'
-  AND DF.Location = '{location}'
-ORDER BY FCV.CallSessionStartTS`,
+  fs.LQ                          AS LQ,
+  fl.ASideLocation               AS Location,
+  fl.CollectionName,
+  CAST(dp.Latitude  AS FLOAT)    AS latitude,
+  CAST(dp.Longitude AS FLOAT)    AS longitude,
+  fs.TestId,
+  fs.SessionId
+FROM dbo.FactSpeech fs
+LEFT JOIN FileList fl ON fl.FileId  = fs.FileId
+LEFT JOIN TestInfo TI ON TI.TestId  = fs.TestId
+LEFT JOIN Position dp ON dp.PosId   = TI.PosId
+WHERE fl.CollectionName  = '{collection}'
+  AND fl.ASideLocation   = '{location}'
+  AND fs.LQ IS NOT NULL
+  AND dp.Latitude  IS NOT NULL
+  AND dp.Longitude IS NOT NULL
+ORDER BY fs.TestId`,
   },
+
+//   {
+//     label: "R24 Voice - MOS/SQ",
+//     category: "SmartAnalytics R24",
+//     mode: "points",
+//     valueCol: "LQ",
+//     colorScheme: "mos_lq",
+//     labelCol: "Location",
+//     requiresFilters: true,
+//     sql: `SELECT
+//   CAST(FCV.LatitudeA AS FLOAT) AS latitude,
+//   CAST(FCV.LongitudeA AS FLOAT) AS longitude,
+//   FCV.AvgSQ AS LQ,
+//   FCV.CallStatus,
+//   FCV.CallSetupTime_s,
+//   FCV.CallDuration_s,
+//   FCV.CallTechnologyA,
+//   DF.Location,
+//   DF.CollectionName
+// FROM FactCDRVoice FCV
+// LEFT JOIN DmnFile DF ON DF.DmnId = FCV.DmnIdFile
+// WHERE FCV.LatitudeA IS NOT NULL
+//   AND FCV.LongitudeA IS NOT NULL
+//   AND FCV.AvgSQ IS NOT NULL
+//   AND DF.CollectionName = '{collection}'
+//   AND DF.Location = '{location}'
+// ORDER BY FCV.CallSessionStartTS`,
+//   },
+
+  // ── 2) GSM ───────────────────────────────────────────────────────────
   {
-    label: "R24 LTE Scanner - top RSRP",
-    category: "SmartAnalytics R24",
+    label: "RxLevSub σημεία (GSM)",
+    category: "GSM",
     mode: "points",
-    valueCol: "RSRP",
-    colorScheme: "rsrp_data",
+    valueCol: "RxLevSub",
+    colorScheme: "rxlevsub_gsm",
+    labelCol: "Location",
+    sql: `SELECT
+  COALESCE(l1.RxLevSub, -200) AS RxLevSub,
+  p.Latitude  AS latitude,
+  p.Longitude AS longitude,
+  f.ASideLocation AS Location
+FROM msgGSMLayer1 AS l1
+JOIN Sessions  AS s ON s.SessionId = l1.SessionId AND s.Valid = 1
+JOIN FileList  AS f ON f.FileId    = s.FileId
+JOIN Position  AS p ON p.PosId     = l1.PosId
+WHERE l1.formatid <> 'IDLE'
+  AND f.CollectionName = '{collection}'
+  AND f.ASideLocation  = '{location}'
+ORDER BY l1.msgTime`,
+  },
+
+  {
+    label: "RxQualSub σημεία (GSM)",
+    category: "GSM",
+    mode: "points",
+    valueCol: "RxQualSub",
+    colorScheme: "rxqualsub_gsm",
     labelCol: "Location",
     requiresFilters: true,
     sql: `SELECT
   CAST(POS.Latitude  AS FLOAT) AS latitude,
   CAST(POS.Longitude AS FLOAT) AS longitude,
-  LS.RSRP,
-  LS.RSRQ,
-  LS.SINR,
-  LS.EARFCN,
-  LS.PCI,
-  LS.CGI,
+  GR.RxLevSub,
+  GR.RxQualSub,
+  GR.BCCH,
+  GR.BSIC,
   DF.Location,
   DF.CollectionName
-FROM FactLTEScanner LS
-LEFT JOIN DmnPosition POS ON POS.DmnId = LS.DmnIdPosition
-LEFT JOIN DmnFile DF ON DF.DmnId = LS.DmnIdFile
-WHERE LS.DmnIdTopN_RSRP = 1
-  AND POS.Latitude IS NOT NULL
-  AND POS.Longitude IS NOT NULL
-  AND DF.CollectionName = '{collection}'
-  AND DF.Location = '{location}'
-ORDER BY LS.FullDate`,
-  },
-  {
-    label: "R24 5G Phone - SS-RSRP",
-    category: "SmartAnalytics R24",
-    mode: "points",
-    valueCol: "SS-RSRP",
-    colorScheme: "nr5g_ssrsrp",
-    labelCol: "Location",
-    requiresFilters: true,
-    nrarfcnCol: "NRARFCN",
-    sql: `SELECT
-  CAST(POS.Latitude  AS FLOAT) AS latitude,
-  CAST(POS.Longitude AS FLOAT) AS longitude,
-  NR.RSRP AS [SS-RSRP],
-  NR.RSRQ AS [SS-RSRQ],
-  NR.SINR AS [SS-SINR],
-  NR.NRARFCN,
-  NR.PCI,
-  DF.Location,
-  DF.CollectionName
-FROM FactNR5GRadio NR
-LEFT JOIN DmnPosition POS ON POS.DmnId = NR.DmnIdPosition
-LEFT JOIN DmnFile DF ON DF.DmnId = NR.DmnIdFile
+FROM FactGSMRadio GR
+LEFT JOIN DmnPosition POS ON POS.DmnId = GR.DmnIdPosition
+LEFT JOIN DmnFile DF ON DF.DmnId = GR.DmnIdFile
 WHERE POS.Latitude IS NOT NULL
   AND POS.Longitude IS NOT NULL
-  AND NR.RSRP IS NOT NULL
+  AND GR.RxLevSub IS NOT NULL
   AND DF.CollectionName = '{collection}'
   AND DF.Location = '{location}'
-ORDER BY NR.FullDate`,
+ORDER BY GR.FullDate`,
   },
-  // ── Individual GPS Points ───────────────────────────────────────────────
+
   {
-    label: "RSRP σημεία μέτρησης (FREE panel)",
-    category: "RSRP",
+    label: "GSM Radio – RxQual",
+    category: "GSM",
+    mode: "points",
+    valueCol: "RxQual",
+    colorScheme: "rxqualsub_gsm",
+    labelCol: "Location",
+    sql: `SELECT
+  gr.RxQual,
+  gr.RxLev,
+  gr.BCCH,
+  gr.BSIC,
+  fl.ASideLocation    AS Location,
+  fl.CollectionName,
+  CAST(pos.Latitude  AS FLOAT) AS latitude,
+  CAST(pos.Longitude AS FLOAT) AS longitude
+FROM [dbo].[FactGSMRadio] gr
+LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = gr.[FileId]
+LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = gr.[PosId]
+WHERE gr.RxQual IS NOT NULL
+  AND fl.CollectionName = '{collection}'
+  AND fl.ASideLocation  = '{location}'
+ORDER BY gr.FullDate`,
+  },
+
+  // ── 3) LTE ───────────────────────────────────────────────────────────
+  {
+    label: "RSRP VALUES ",
+    category: "LTE",
     mode: "points",
     valueCol: "rsrp",
     colorScheme: "rsrp_free",
@@ -605,6 +684,198 @@ WHERE DP.Latitude  IS NOT NULL
   AND DF.ASideLocation  = '{location}'
 ORDER BY flr.MsgTime`,
   },
+
+//   {
+//     label: "RSRP σημεία – FREE LTE",
+//     category: "LTE",
+//     mode: "points",
+//     valueCol: "rsrp",
+//     colorScheme: "rsrp_data",
+//     labelCol: "ASideLocation",
+//     requiresFilters: true,
+//     sql: `SELECT
+//     DF.CollectionName,
+//     DF.ASideLocation,
+//     CAST(DP.Latitude  AS FLOAT) AS latitude,
+//     CAST(DP.Longitude AS FLOAT) AS longitude,
+//     flr.MsgTime,
+//     flr.rsrp
+// FROM LTEMeasurementReport AS flr
+// LEFT JOIN Sessions  AS fs ON flr.SessionId = fs.SessionId
+// LEFT JOIN FileList  AS DF ON fs.FileId     = DF.FileId
+// LEFT JOIN Position  AS DP ON flr.PosId     = DP.PosId
+// WHERE DF.CollectionName = '{collection}'
+//   AND DF.ASideLocation  = '{location}'
+//   AND DP.Latitude  IS NOT NULL
+//   AND DP.Longitude IS NOT NULL
+//   AND flr.rsrp     IS NOT NULL
+// ORDER BY flr.MsgTime`,
+//   },
+
+  // ── 4) 5G ────────────────────────────────────────────────────────────
+  {
+    label: "5G Phone – SS-RSRP",
+    category: "5G",
+    mode: "points",
+    valueCol: "SS-RSRP",
+    colorScheme: "nr5g_ssrsrp",
+    labelCol: "Location",
+    requiresFilters: true,
+    nrarfcnCol: "NRARFCN",
+    sql: `SELECT
+  nr.PosId,
+  nr.NRARFCN,
+  AVG(nr.RSRP)  AS [SS-RSRP],
+  AVG(nr.RSRQ)  AS [SS-RSRQ],
+  AVG(nr.SINR)  AS [SS-SINR],
+  CAST(pos.latitude  AS FLOAT) AS latitude,
+  CAST(pos.longitude AS FLOAT) AS longitude,
+  fl.CollectionName,
+  fl.ASideLocation              AS Location,
+  NRcarrier.CarrierIndexName
+FROM [dbo].[FactNR5GRadio] nr
+LEFT JOIN Position           pos       ON pos.PosId   = nr.PosId
+LEFT JOIN FileList           fl        ON fl.FileId   = nr.FileId
+LEFT JOIN DmnNR5GCarrierInfo NRcarrier ON NRcarrier.DmnId = nr.DmnIdNR5GCarrierInfo
+WHERE fl.Valid = 1
+  AND fl.CollectionName = '{collection}'
+  AND fl.ASideLocation  = '{location}'
+GROUP BY nr.SessionId, nr.PosId, nr.NRARFCN,
+         pos.latitude, pos.longitude,
+         fl.CollectionName, fl.ASideLocation, NRcarrier.CarrierIndexName
+ORDER BY nr.PosId`,
+  },
+
+  {
+    label: "5G Phone – SS-SINR",
+    category: "5G",
+    mode: "points",
+    valueCol: "SS-SINR",
+    colorScheme: "nr5g_sssinr",
+    labelCol: "Location",
+    requiresFilters: true,
+    nrarfcnCol: "NRARFCN",
+    sql: `SELECT
+  nr.PosId,
+  nr.NRARFCN,
+  AVG(nr.RSRP)  AS [SS-RSRP],
+  AVG(nr.RSRQ)  AS [SS-RSRQ],
+  AVG(nr.SINR)  AS [SS-SINR],
+  CAST(pos.latitude  AS FLOAT) AS latitude,
+  CAST(pos.longitude AS FLOAT) AS longitude,
+  fl.CollectionName,
+  fl.ASideLocation              AS Location,
+  NRcarrier.CarrierIndexName
+FROM [dbo].[FactNR5GRadio] nr
+LEFT JOIN Position           pos       ON pos.PosId   = nr.PosId
+LEFT JOIN FileList           fl        ON fl.FileId   = nr.FileId
+LEFT JOIN DmnNR5GCarrierInfo NRcarrier ON NRcarrier.DmnId = nr.DmnIdNR5GCarrierInfo
+WHERE fl.Valid = 1
+  AND fl.CollectionName = '{collection}'
+  AND fl.ASideLocation  = '{location}'
+GROUP BY nr.SessionId, nr.PosId, nr.NRARFCN,
+         pos.latitude, pos.longitude,
+         fl.CollectionName, fl.ASideLocation, NRcarrier.CarrierIndexName
+ORDER BY nr.PosId`,
+  },
+
+//   {
+//     label: "R24 5G Phone - SS-RSRP",
+//     category: "SmartAnalytics R24",
+//     mode: "points",
+//     valueCol: "SS-RSRP",
+//     colorScheme: "nr5g_ssrsrp",
+//     labelCol: "Location",
+//     requiresFilters: true,
+//     nrarfcnCol: "NRARFCN",
+//     sql: `SELECT
+//   CAST(POS.Latitude  AS FLOAT) AS latitude,
+//   CAST(POS.Longitude AS FLOAT) AS longitude,
+//   NR.RSRP AS [SS-RSRP],
+//   NR.RSRQ AS [SS-RSRQ],
+//   NR.SINR AS [SS-SINR],
+//   NR.NRARFCN,
+//   NR.PCI,
+//   DF.Location,
+//   DF.CollectionName
+// FROM FactNR5GRadio NR
+// LEFT JOIN DmnPosition POS ON POS.DmnId = NR.DmnIdPosition
+// LEFT JOIN DmnFile DF ON DF.DmnId = NR.DmnIdFile
+// WHERE POS.Latitude IS NOT NULL
+//   AND POS.Longitude IS NOT NULL
+//   AND NR.RSRP IS NOT NULL
+//   AND DF.CollectionName = '{collection}'
+//   AND DF.Location = '{location}'
+// ORDER BY NR.FullDate`,
+//   },
+
+  // ── 5) TECHNOLOGY ────────────────────────────────────────────────────
+  {
+    label: "Radio Technology",
+    category: "Technology",
+    mode: "points",
+    valueCol: "technology",
+    colorScheme: "technology_free",
+    labelCol: "Location",
+    sql: `SELECT
+  p.Latitude  AS latitude,
+  p.Longitude AS longitude,
+  ni.technology,
+  f.ASideLocation AS Location,
+  f.CollectionName
+FROM Sessions AS s
+JOIN Position  AS p  ON s.SessionId = p.SessionId
+OUTER APPLY (
+  SELECT TOP (1) n.*
+  FROM NetworkInfo AS n
+  WHERE n.FileId = p.FileId
+    AND n.MsgTime < p.msgTime
+  ORDER BY n.MsgTime DESC
+) AS ni
+LEFT JOIN dbo.Filelist AS f ON s.FileId = f.FileId
+WHERE s.Valid = 1
+  AND ni.technology IS NOT NULL
+  AND ni.technology <> 'Unknown'
+  AND f.CollectionName = '{collection}'
+  AND f.ASideLocation  = '{location}'
+ORDER BY ni.MsgTime`,
+  },
+
+  {
+    label: "Data Technology",
+    category: "Technology",
+    mode: "points",
+    valueCol: "technology_data",
+    colorScheme: "technology_data",
+    labelCol: "Location",
+    sql: `SELECT
+  p.Latitude   AS latitude,
+  p.Longitude  AS longitude,
+  t.CurrTechnology AS technology_data,
+  fl.ASideLocation AS Location,
+  p.MsgTime
+FROM Sessions AS s
+JOIN FileList AS fl ON fl.FileId    = s.FileId
+JOIN TestInfo AS ti ON ti.SessionId = s.SessionId
+JOIN Position AS p  ON p.TestId     = ti.TestId
+OUTER APPLY (
+    SELECT TOP 1 t2.CurrTechnology
+    FROM Technology AS t2
+    WHERE t2.TestId  = p.TestId
+      AND t2.MsgTime < p.MsgTime
+      AND t2.CurrTechnology IS NOT NULL
+    ORDER BY t2.MsgTime DESC
+) AS t
+WHERE s.Valid = 1 AND ti.Valid = 1
+  AND fl.CollectionName = '{collection}'
+  AND fl.ASideLocation  = '{location}'
+  AND ti.TestName IN ('Capacity DL','FTP DL','HTTP TRANSFER (DL)')   -- <<< Test Data Server DL
+  AND p.Latitude  IS NOT NULL AND p.Latitude  <> 0
+  AND p.Longitude IS NOT NULL AND p.Longitude <> 0
+ORDER BY p.MsgTime`,
+  },
+
+  // ── 6) THROUGHPUT ────────────────────────────────────────────────────
   {
     label: "DL Throughput σημεία (kbps)",
     category: "Throughput",
@@ -630,6 +901,7 @@ WHERE Sessions.Valid = 1
   AND FileList.ASideLocation  = '{location}'
 ORDER BY ResultsCapacityTest.MsgTime`,
   },
+
   {
     label: "UL Throughput σημεία (kbps)",
     category: "Throughput",
@@ -655,6 +927,7 @@ WHERE Sessions.Valid = 1
   AND FileList.ASideLocation  = '{location}'
 ORDER BY ResultsCapacityTest.MsgTime`,
   },
+
   {
     label: "HTTP Transfer 10MB σημεία (kbps)",
     category: "Throughput",
@@ -678,6 +951,7 @@ WHERE Sessions.Valid = 1
   AND FileList.CollectionName = '{collection}'
   AND FileList.ASideLocation  = '{location}'`,
   },
+
   {
     label: "OOKLA DL Throughput (Mbps)",
     category: "Throughput",
@@ -734,6 +1008,7 @@ WHERE pos.Latitude    IS NOT NULL
   AND fl.ASideLocation  = '{location}'
 ORDER BY ti.TestId, aaf.ActionId`,
   },
+
   {
     label: "OOKLA UL Throughput (Mbps)",
     category: "Throughput",
@@ -790,6 +1065,7 @@ WHERE pos.Latitude    IS NOT NULL
   AND fl.ASideLocation  = '{location}'
 ORDER BY ti.TestId, aaf.ActionId`,
   },
+
   {
     label: "CAPACITY – DL Throughput (grx+akamai+ookla)",
     category: "Throughput",
@@ -861,6 +1137,7 @@ WHERE s.Valid = 1
 
 ORDER BY dl_mbps;   -- ή: Location, CollectionName, MsgTime`,
   },
+
   {
     label: "CAPACITY – UL Throughput (grx+akamai+ookla)",
     category: "Throughput",
@@ -930,334 +1207,53 @@ WHERE s.Valid = 1
 
 ORDER BY ul_mbps;   -- ή: Location, CollectionName, MsgTime`,
   },
-  {
-    label: "RxLevSub σημεία (GSM)",
-    category: "GSM",
-    mode: "points",
-    valueCol: "RxLevSub",
-    colorScheme: "rxlevsub_gsm",
-    labelCol: "Location",
-    sql: `SELECT
-  COALESCE(l1.RxLevSub, -200) AS RxLevSub,
-  p.Latitude  AS latitude,
-  p.Longitude AS longitude,
-  f.ASideLocation AS Location
-FROM msgGSMLayer1 AS l1
-JOIN Sessions  AS s ON s.SessionId = l1.SessionId AND s.Valid = 1
-JOIN FileList  AS f ON f.FileId    = s.FileId
-JOIN Position  AS p ON p.PosId     = l1.PosId
-WHERE l1.formatid <> 'IDLE'
-  AND f.CollectionName = '{collection}'
-  AND f.ASideLocation  = '{location}'
-ORDER BY l1.msgTime`,
-  },
-  {
-    label: "RxQualSub σημεία (GSM)",
-    category: "GSM",
-    mode: "points",
-    valueCol: "RxQualSub",
-    colorScheme: "rxqualsub_gsm",
-    labelCol: "Location",
-    requiresFilters: true,
-    sql: `SELECT
-  CAST(POS.Latitude  AS FLOAT) AS latitude,
-  CAST(POS.Longitude AS FLOAT) AS longitude,
-  GR.RxLevSub,
-  GR.RxQualSub,
-  GR.BCCH,
-  GR.BSIC,
-  DF.Location,
-  DF.CollectionName
-FROM FactGSMRadio GR
-LEFT JOIN DmnPosition POS ON POS.DmnId = GR.DmnIdPosition
-LEFT JOIN DmnFile DF ON DF.DmnId = GR.DmnIdFile
-WHERE POS.Latitude IS NOT NULL
-  AND POS.Longitude IS NOT NULL
-  AND GR.RxLevSub IS NOT NULL
-  AND DF.CollectionName = '{collection}'
-  AND DF.Location = '{location}'
-ORDER BY GR.FullDate`,
-  },
 
-  {
-    label: "GSM Radio – RxQual",
-    category: "GSM",
-    mode: "points",
-    valueCol: "RxQual",
-    colorScheme: "rxqualsub_gsm",
-    labelCol: "Location",
-    sql: `SELECT
-  gr.RxQual,
-  gr.RxLev,
-  gr.BCCH,
-  gr.BSIC,
-  fl.ASideLocation    AS Location,
-  fl.CollectionName,
-  CAST(pos.Latitude  AS FLOAT) AS latitude,
-  CAST(pos.Longitude AS FLOAT) AS longitude
-FROM [dbo].[FactGSMRadio] gr
-LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = gr.[FileId]
-LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = gr.[PosId]
-WHERE gr.RxQual IS NOT NULL
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-ORDER BY gr.FullDate`,
-  },
-  {
-    label: "MOS FREE/GSM",
-    category: "MOS",
-    mode: "points",
-    valueCol: "LQ",
-    colorScheme: "mos_lq",
-    labelCol: "Location",
-    requiresFilters: true,
-    sql: `SELECT
-  fs.LQ                          AS LQ,
-  fl.ASideLocation               AS Location,
-  fl.CollectionName,
-  CAST(dp.Latitude  AS FLOAT)    AS latitude,
-  CAST(dp.Longitude AS FLOAT)    AS longitude,
-  fs.TestId,
-  fs.SessionId
-FROM dbo.FactSpeech fs
-LEFT JOIN FileList fl ON fl.FileId  = fs.FileId
-LEFT JOIN TestInfo TI ON TI.TestId  = fs.TestId
-LEFT JOIN Position dp ON dp.PosId   = TI.PosId
-WHERE fl.CollectionName  = '{collection}'
-  AND fl.ASideLocation   = '{location}'
-  AND fs.LQ IS NOT NULL
-  AND dp.Latitude  IS NOT NULL
-  AND dp.Longitude IS NOT NULL
-ORDER BY fs.TestId`,
-  },
-  {
-    label: "ALL CALLS",
-    category: "Calls",
-    mode: "points",
-    valueCol: "callStatus",
-    colorScheme: "call_status",
-    labelCol: "Location",
-    requiresFilters: true,
-    sql: `SELECT
-  CA.SessionId,
-  CA.technology,
-  CA.callMode,
-  CA.callType,
-  CA.callDir,
-  CA.callStatus,
-  ROUND(CA.setupTime, 2) AS setupTime,
-  (CA.callDuration / 1000) AS callDuration_s,
-  FL.CollectionName,
-  FL.ASideLocation AS Location,
-  CAST(P.Latitude  AS FLOAT) AS latitude,
-  CAST(P.Longitude AS FLOAT) AS longitude
-FROM CallAnalysis CA
-LEFT JOIN FileList FL ON CA.FileId = FL.FileId
-LEFT JOIN Sessions S  ON S.SessionId = CA.SessionId
-LEFT JOIN Position P  ON P.PosId = CA.PosId
-WHERE S.Valid IN (0, 1)
-  AND FL.CollectionName = '{collection}'
-  AND FL.ASideLocation  = '{location}'
-ORDER BY CA.SessionId DESC`,
-  },
-  {
-    label: "Radio Technology",
-    category: "Technology",
-    mode: "points",
-    valueCol: "technology",
-    colorScheme: "technology_free",
-    labelCol: "Location",
-    sql: `SELECT
-  p.Latitude  AS latitude,
-  p.Longitude AS longitude,
-  ni.technology,
-  f.ASideLocation AS Location,
-  f.CollectionName
-FROM Sessions AS s
-JOIN Position  AS p  ON s.SessionId = p.SessionId
-OUTER APPLY (
-  SELECT TOP (1) n.*
-  FROM NetworkInfo AS n
-  WHERE n.FileId = p.FileId
-    AND n.MsgTime < p.msgTime
-  ORDER BY n.MsgTime DESC
-) AS ni
-LEFT JOIN dbo.Filelist AS f ON s.FileId = f.FileId
-WHERE s.Valid = 1
-  AND ni.technology IS NOT NULL
-  AND ni.technology <> 'Unknown'
-  AND f.CollectionName = '{collection}'
-  AND f.ASideLocation  = '{location}'
-ORDER BY ni.MsgTime`,
-  },
-  {
-    label: "Data Technology",
-    category: "Technology",
-    mode: "points",
-    valueCol: "technology_data",
-    colorScheme: "technology_data",
-    labelCol: "Location",
-    sql: `SELECT
-  p.Latitude   AS latitude,
-  p.Longitude  AS longitude,
-  t.CurrTechnology AS technology_data,
-  fl.ASideLocation AS Location,
-  p.MsgTime
-FROM Sessions AS s
-JOIN FileList AS fl ON fl.FileId    = s.FileId
-JOIN TestInfo AS ti ON ti.SessionId = s.SessionId
-JOIN Position AS p  ON p.TestId     = ti.TestId
-OUTER APPLY (
-    SELECT TOP 1 t2.CurrTechnology
-    FROM Technology AS t2
-    WHERE t2.TestId  = p.TestId
-      AND t2.MsgTime < p.MsgTime
-      AND t2.CurrTechnology IS NOT NULL
-    ORDER BY t2.MsgTime DESC
-) AS t
-WHERE s.Valid = 1 AND ti.Valid = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-  AND ti.TestName IN ('Capacity DL','FTP DL','HTTP TRANSFER (DL)')   -- <<< Test Data Server DL
-  AND p.Latitude  IS NOT NULL AND p.Latitude  <> 0
-  AND p.Longitude IS NOT NULL AND p.Longitude <> 0
-ORDER BY p.MsgTime`,
-  },
-  {
-    label: "RSRP σημεία – FREE LTE",
-    category: "RSRP",
-    mode: "points",
-    valueCol: "rsrp",
-    colorScheme: "rsrp_data",
-    labelCol: "ASideLocation",
-    requiresFilters: true,
-    sql: `SELECT
-    DF.CollectionName,
-    DF.ASideLocation,
-    CAST(DP.Latitude  AS FLOAT) AS latitude,
-    CAST(DP.Longitude AS FLOAT) AS longitude,
-    flr.MsgTime,
-    flr.rsrp
-FROM LTEMeasurementReport AS flr
-LEFT JOIN Sessions  AS fs ON flr.SessionId = fs.SessionId
-LEFT JOIN FileList  AS DF ON fs.FileId     = DF.FileId
-LEFT JOIN Position  AS DP ON flr.PosId     = DP.PosId
-WHERE DF.CollectionName = '{collection}'
-  AND DF.ASideLocation  = '{location}'
-  AND DP.Latitude  IS NOT NULL
-  AND DP.Longitude IS NOT NULL
-  AND flr.rsrp     IS NOT NULL
-ORDER BY flr.MsgTime`,
-  },
-  
-  {
-    label: "OOKLA Latency (ms)",
-    category: "OOKLA",
-    mode: "points",
-    valueCol: "ookla_latency",
-    colorScheme: "ookla_latency",
-    labelCol: "Location",
-    sql: `WITH SessionsCTE AS (
-  SELECT SessionId, FileId, info FROM Sessions WHERE valid = 1
-  GROUP BY SessionId, FileId, info
-)
-SELECT
-  CAST(pos.Latitude  AS FLOAT) AS latitude,
-  CAST(pos.Longitude AS FLOAT) AS longitude,
-  ISNULL(raap.Ping, raap.Latency)                AS ookla_latency,
-  fl.ASideLocation                               AS Location,
-  fl.CollectionName,
-  ni.Technology,
-  t.PrevTechnology                               AS Data_Technology,
-  atp.ServiceProvider                            AS App,
-  raap.PacketLossPercent                         AS PacketLoss_pct
-FROM SessionsCTE s
-INNER JOIN FileList                 fl  ON fl.FileId   = s.FileId
-INNER JOIN TestInfo                 ti  ON s.SessionId = ti.SessionId AND ti.Valid = 1
-INNER JOIN ResultsAppTestParameters atp ON ti.TestId   = atp.TestId
-INNER JOIN ResultsAppActionPerformance raap ON ti.TestId = raap.TestId
-INNER JOIN NetworkInfo ni ON ni.NetworkId = raap.NetworkId
-LEFT  JOIN Technology  t  ON t.PrevTechnology IS NOT NULL AND
-    t.TestId = raap.TestId AND
-    raap.MsgTime BETWEEN DATEADD(ms,-1*t.Duration,t.MsgTime) AND t.MsgTime
-OUTER APPLY (
-    SELECT TOP (1) p.Latitude, p.Longitude
-    FROM Position p
-    WHERE p.TestId  = ti.TestId
-      AND p.MsgTime <= raap.MsgTime
-    ORDER BY p.MsgTime DESC
-) pos
-WHERE pos.Latitude  IS NOT NULL
-  AND pos.Longitude IS NOT NULL
-  AND ISNULL(raap.Ping, raap.Latency) IS NOT NULL
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-ORDER BY ti.TestId, raap.ActionId`,
-  },
-  {
-    label: "5G Phone – SS-RSRP",
-    category: "5G",
-    mode: "points",
-    valueCol: "SS-RSRP",
-    colorScheme: "nr5g_ssrsrp",
-    labelCol: "Location",
-    requiresFilters: true,
-    nrarfcnCol: "NRARFCN",
-    sql: `SELECT
-  nr.PosId,
-  nr.NRARFCN,
-  AVG(nr.RSRP)  AS [SS-RSRP],
-  AVG(nr.RSRQ)  AS [SS-RSRQ],
-  AVG(nr.SINR)  AS [SS-SINR],
-  CAST(pos.latitude  AS FLOAT) AS latitude,
-  CAST(pos.longitude AS FLOAT) AS longitude,
-  fl.CollectionName,
-  fl.ASideLocation              AS Location,
-  NRcarrier.CarrierIndexName
-FROM [dbo].[FactNR5GRadio] nr
-LEFT JOIN Position           pos       ON pos.PosId   = nr.PosId
-LEFT JOIN FileList           fl        ON fl.FileId   = nr.FileId
-LEFT JOIN DmnNR5GCarrierInfo NRcarrier ON NRcarrier.DmnId = nr.DmnIdNR5GCarrierInfo
-WHERE fl.Valid = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-GROUP BY nr.SessionId, nr.PosId, nr.NRARFCN,
-         pos.latitude, pos.longitude,
-         fl.CollectionName, fl.ASideLocation, NRcarrier.CarrierIndexName
-ORDER BY nr.PosId`,
-  },
-  {
-    label: "5G Phone – SS-SINR",
-    category: "5G",
-    mode: "points",
-    valueCol: "SS-SINR",
-    colorScheme: "nr5g_sssinr",
-    labelCol: "Location",
-    requiresFilters: true,
-    nrarfcnCol: "NRARFCN",
-    sql: `SELECT
-  nr.PosId,
-  nr.NRARFCN,
-  AVG(nr.RSRP)  AS [SS-RSRP],
-  AVG(nr.RSRQ)  AS [SS-RSRQ],
-  AVG(nr.SINR)  AS [SS-SINR],
-  CAST(pos.latitude  AS FLOAT) AS latitude,
-  CAST(pos.longitude AS FLOAT) AS longitude,
-  fl.CollectionName,
-  fl.ASideLocation              AS Location,
-  NRcarrier.CarrierIndexName
-FROM [dbo].[FactNR5GRadio] nr
-LEFT JOIN Position           pos       ON pos.PosId   = nr.PosId
-LEFT JOIN FileList           fl        ON fl.FileId   = nr.FileId
-LEFT JOIN DmnNR5GCarrierInfo NRcarrier ON NRcarrier.DmnId = nr.DmnIdNR5GCarrierInfo
-WHERE fl.Valid = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-GROUP BY nr.SessionId, nr.PosId, nr.NRARFCN,
-         pos.latitude, pos.longitude,
-         fl.CollectionName, fl.ASideLocation, NRcarrier.CarrierIndexName
-ORDER BY nr.PosId`,
-  },
+//   {
+//     label: "OOKLA Latency (ms)",
+//     category: "OOKLA",
+//     mode: "points",
+//     valueCol: "ookla_latency",
+//     colorScheme: "ookla_latency",
+//     labelCol: "Location",
+//     sql: `WITH SessionsCTE AS (
+//   SELECT SessionId, FileId, info FROM Sessions WHERE valid = 1
+//   GROUP BY SessionId, FileId, info
+// )
+// SELECT
+//   CAST(pos.Latitude  AS FLOAT) AS latitude,
+//   CAST(pos.Longitude AS FLOAT) AS longitude,
+//   ISNULL(raap.Ping, raap.Latency)                AS ookla_latency,
+//   fl.ASideLocation                               AS Location,
+//   fl.CollectionName,
+//   ni.Technology,
+//   t.PrevTechnology                               AS Data_Technology,
+//   atp.ServiceProvider                            AS App,
+//   raap.PacketLossPercent                         AS PacketLoss_pct
+// FROM SessionsCTE s
+// INNER JOIN FileList                 fl  ON fl.FileId   = s.FileId
+// INNER JOIN TestInfo                 ti  ON s.SessionId = ti.SessionId AND ti.Valid = 1
+// INNER JOIN ResultsAppTestParameters atp ON ti.TestId   = atp.TestId
+// INNER JOIN ResultsAppActionPerformance raap ON ti.TestId = raap.TestId
+// INNER JOIN NetworkInfo ni ON ni.NetworkId = raap.NetworkId
+// LEFT  JOIN Technology  t  ON t.PrevTechnology IS NOT NULL AND
+//     t.TestId = raap.TestId AND
+//     raap.MsgTime BETWEEN DATEADD(ms,-1*t.Duration,t.MsgTime) AND t.MsgTime
+// OUTER APPLY (
+//     SELECT TOP (1) p.Latitude, p.Longitude
+//     FROM Position p
+//     WHERE p.TestId  = ti.TestId
+//       AND p.MsgTime <= raap.MsgTime
+//     ORDER BY p.MsgTime DESC
+// ) pos
+// WHERE pos.Latitude  IS NOT NULL
+//   AND pos.Longitude IS NOT NULL
+//   AND ISNULL(raap.Ping, raap.Latency) IS NOT NULL
+//   AND fl.CollectionName = '{collection}'
+//   AND fl.ASideLocation  = '{location}'
+// ORDER BY ti.TestId, raap.ActionId`,
+//   },
+
+  // ── 7) SCANNER ───────────────────────────────────────────────────────
   {
     label: "5G Scanner – SS-RSRP",
     category: "Scanner",
@@ -1284,6 +1280,7 @@ WHERE nr.[DmnIdTopN_SS_RSRP] = 1
   AND fl.ASideLocation  = '{location}'
 ORDER BY latitude, longitude`,
   },
+
   {
     label: "5G Scanner – SS-SINR",
     category: "Scanner",
@@ -1310,6 +1307,7 @@ WHERE nr.[DmnIdTopN_SS_RSRP] = 1
   AND fl.ASideLocation  = '{location}'
 ORDER BY latitude, longitude`,
   },
+
   {
     label: "LTE Scanner – RSRP",
     category: "Scanner",
@@ -1338,6 +1336,7 @@ WHERE ls.[DmnIdTopN_RSRP] = 1
   AND fl.ASideLocation  = '{location}'
 ORDER BY latitude, longitude`,
   },
+
   {
     label: "LTE Scanner – SINR",
     category: "Scanner",
@@ -1366,6 +1365,7 @@ WHERE ls.[DmnIdTopN_SINR] = 1
   AND fl.ASideLocation  = '{location}'
 ORDER BY latitude, longitude`,
   },
+
   {
     label: "LTE Scanner – RSRQ",
     category: "Scanner",
@@ -1394,6 +1394,7 @@ WHERE ls.[DmnIdTopN_RSRQ] = 1
   AND fl.ASideLocation  = '{location}'
 ORDER BY latitude, longitude`,
   },
+
   {
     label: "GSM Scanner – RxLev",
     category: "Scanner",
@@ -1421,6 +1422,38 @@ WHERE gs.[DmnIdTopN_RxLev] = 1
   AND fl.ASideLocation  = '{location}'
 ORDER BY latitude, longitude`,
   },
+
+//   {
+//     label: "R24 LTE Scanner - top RSRP",
+//     category: "SmartAnalytics R24",
+//     mode: "points",
+//     valueCol: "RSRP",
+//     colorScheme: "rsrp_data",
+//     labelCol: "Location",
+//     requiresFilters: true,
+//     sql: `SELECT
+//   CAST(POS.Latitude  AS FLOAT) AS latitude,
+//   CAST(POS.Longitude AS FLOAT) AS longitude,
+//   LS.RSRP,
+//   LS.RSRQ,
+//   LS.SINR,
+//   LS.EARFCN,
+//   LS.PCI,
+//   LS.CGI,
+//   DF.Location,
+//   DF.CollectionName
+// FROM FactLTEScanner LS
+// LEFT JOIN DmnPosition POS ON POS.DmnId = LS.DmnIdPosition
+// LEFT JOIN DmnFile DF ON DF.DmnId = LS.DmnIdFile
+// WHERE LS.DmnIdTopN_RSRP = 1
+//   AND POS.Latitude IS NOT NULL
+//   AND POS.Longitude IS NOT NULL
+//   AND DF.CollectionName = '{collection}'
+//   AND DF.Location = '{location}'
+// ORDER BY LS.FullDate`,
+//   },
+
+  // ── Custom ───────────────────────────────────────────────────────────
   {
     label: "— Custom SQL —",
     category: "Custom",
