@@ -103,6 +103,11 @@ describe("operator & mode resolution", () => {
     expect(resolveMode(null)).toBe("OTHER");
   });
 
+  it("treats a 'Voice' location as an alias for the FREE table", () => {
+    expect(resolveMode("Vodafone_Voice_A")).toBe("FREE");
+    expect(resolveMode("Cosmote Voice B")).toBe("FREE");
+  });
+
   it("keeps a fixed operator order regardless of the order they appear in", () => {
     const operators = collectOperators(["Nova Free A", "Acme Free A", "Vodafone Free A", "Cosmote Free A"]);
     expect(operators.map((operator) => operator.key)).toEqual(["COSMOTE", "VODAFONE", "NOVA", "ACME"]);

@@ -55,7 +55,8 @@ export type CallMode = "GSM" | "FREE" | "DATA" | "OTHER";
 export const resolveMode = (location: string | null | undefined): CallMode => {
   const loc = (location ?? "").toLowerCase();
   if (loc.includes("gsm")) return "GSM";
-  if (loc.includes("free")) return "FREE";
+  // "voice" is an alternate naming for the FREE (2G-3G-LTE) table — π.χ. "Vodafone_Voice_A".
+  if (loc.includes("free") || loc.includes("voice")) return "FREE";
   if (loc.includes("data")) return "DATA";
   return "OTHER";
 };
