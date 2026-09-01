@@ -33,6 +33,19 @@ export function technologyColor(name: string | null | undefined): string {
   return "#64748b";
 }
 
+/** Fixed colors for well-known call-status labels, so a status keeps the same
+ *  color in the chart legend regardless of how often it occurs in the result set. */
+const CALL_STATUS_COLORS: Record<string, string> = {
+  "completed": "hsl(162, 72%, 46%)", // green
+  "failed": "#f97316",               // orange
+  "system release": "#a855f7",       // purple
+  "dropped": "#ef4444",              // red
+};
+
+export function callStatusColor(status: string | null | undefined): string | null {
+  return CALL_STATUS_COLORS[(status ?? "").trim().toLowerCase()] ?? null;
+}
+
 export const DEFAULTS = {
   areaFillOpacity: 0.1,
   radarFillOpacity: 0.15,

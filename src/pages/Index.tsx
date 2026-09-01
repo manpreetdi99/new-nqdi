@@ -1474,6 +1474,8 @@ const Index = () => {
                 collectionsLoading={collectionsLoading}
                 results={results.map(r => ({ ...r, label: r.queryLabel }))}
                 totalTime={totalTime}
+                database={selectedDatabase}
+                databases={databases}
               />
             </section>
 

@@ -31,14 +31,13 @@ import {
   BarChart,
   Layers2,
   SlidersHorizontal,
-  TrendingUp,
-  TrendingDown,
+  Filter,
   Minus,
 } from "lucide-react";
 import { motion, AnimatePresence } from "framer-motion";
 
 // ─── Module-level constants ───────────────────────────────────────────────────
-import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, DEFAULTS } from "@/lib/chartStyles";
+import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, DEFAULTS, callStatusColor } from "@/lib/chartStyles";
 
 const MAX_POINTS = Infinity;
 const GROUPING_THRESHOLD = 200; // auto-bin when slice has more rows than this
@@ -72,6 +71,7 @@ interface ResultChartsProps {
   defaultAggFn?: AggFn;
   defaultAggEnabled?: boolean;
   defaultGroupCol?: string;
+  defaultFilterCol?: string | string[];
 }
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -349,7 +349,7 @@ function ChartEmpty({ message }: { message: string }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ResultCharts({ columns, data, defaultChartType, defaultXCol, defaultYCols, defaultRightCols, defaultAxisOverrides, defaultAggFn, defaultAggEnabled, defaultGroupCol }: ResultChartsProps) {
+export default function ResultCharts({ columns, data, defaultChartType, defaultXCol, defaultYCols, defaultRightCols, defaultAxisOverrides, defaultAggFn, defaultAggEnabled, defaultGroupCol, defaultFilterCol }: ResultChartsProps) {
   // ── Derived from props ──────────────────────────────────────────────────
 
   const slice  = useMemo(
@@ -376,7 +376,17 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
 
   // ── State ───────────────────────────────────────────────────────────────
 
-  const [filters,   setFilters]   = useState<Array<{ col: string; vals: string[] }>>([]);
+  // Ένα column ή λίστα columns — normalize σε array μία φορά, ξαναχρησιμοποιείται
+  // παρακάτω και για το αρχικό showFilters.
+  const defaultFilterCols = useMemo(
+    () => (Array.isArray(defaultFilterCol) ? defaultFilterCol : defaultFilterCol ? [defaultFilterCol] : [])
+      .filter((col) => columns.includes(col)),
+    [defaultFilterCol, columns],
+  );
+
+  const [filters,   setFilters]   = useState<Array<{ col: string; vals: string[] }>>(
+    () => defaultFilterCols.map((col) => ({ col, vals: [] })),
+  );
 
   const filteredSlice = useMemo(() => {
     if (filters.length === 0) return slice;
@@ -417,6 +427,7 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
   const [aggEnabled,  setAggEnabled]  = useState(defaultAggEnabled ?? true);
   const [showRowLimitWarn, setShowRowLimitWarn] = useState(false);
   const [showConfig,  setShowConfig]  = useState(false);
+  const [showFilters, setShowFilters] = useState(() => defaultFilterCols.length > 0);
   const warnTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const tooManyRows = data.length > 1000;
@@ -640,7 +651,7 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
           result.push({
             key: multiCol ? `${s.col}: ${v}` : v,
             col: s.col,
-            color: CHART_PALETTE[result.length % CHART_PALETTE.length],
+            color: callStatusColor(v) ?? CHART_PALETTE[result.length % CHART_PALETTE.length],
           });
         });
     }
@@ -1033,6 +1044,18 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
             </span>
           )}
           <button
+            onClick={() => setShowFilters((v) => !v)}
+            className={[
+              "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-[10px] font-medium transition-all",
+              showFilters
+                ? "bg-primary/15 border-primary/40 text-primary"
+                : "bg-muted/40 border-border text-muted-foreground hover:text-foreground hover:bg-muted/60",
+            ].join(" ")}
+          >
+            <Filter className="h-3 w-3" />
+            Φίλτρα
+          </button>
+          <button
             onClick={() => setShowConfig((v) => !v)}
             className={[
               "flex items-center gap-1.5 px-2.5 py-1.5 rounded-md border text-[10px] font-medium transition-all",
@@ -1047,7 +1070,7 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
         </div>
       </div>
 
-      {/* ── Collapsible config + filters ── */}
+      {/* ── Collapsible axis config ── */}
       <AnimatePresence initial={false}>
         {showConfig && (
           <motion.div
@@ -1058,7 +1081,7 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
             className="overflow-hidden border-b border-border/60"
           >
             {/* Axis config */}
-            <div className="px-4 py-3 border-b border-border/40 bg-muted/10 space-y-3">
+            <div className="px-4 py-3 bg-muted/10 space-y-3">
               <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/60">Άξονες</p>
 
               {isXY && (
@@ -1195,8 +1218,20 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
                 </div>
               )}
             </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-            {/* Filters */}
+      {/* ── Collapsible filters ── */}
+      <AnimatePresence initial={false}>
+        {showFilters && (
+          <motion.div
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.2, ease: "easeInOut" }}
+            className="overflow-hidden border-b border-border/60"
+          >
             <div className="px-4 py-2.5 bg-muted/5 space-y-2">
               <div className="flex items-center gap-2">
                 <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground/60">Φίλτρα</p>
@@ -1258,9 +1293,6 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
       {!isPie && !isScatter && stats.length > 0 && (
         <div className="px-4 py-2.5 border-b border-border/40 bg-muted/5 flex flex-wrap gap-2.5">
           {stats.map((s) => {
-            const trend = s.avg > (s.min + s.max) / 2
-              ? <TrendingUp className="h-3 w-3 text-emerald-400" />
-              : <TrendingDown className="h-3 w-3 text-red-400" />;
             return (
               <div
                 key={s.col}
@@ -1274,7 +1306,6 @@ export default function ResultCharts({ columns, data, defaultChartType, defaultX
                   <span className="text-[10px] font-mono font-semibold truncate max-w-[90px]" style={{ color: s.color }}>
                     {s.col}
                   </span>
-                  {trend}
                 </div>
                 {/* stat cells */}
                 {[

@@ -28,13 +28,18 @@ import ResultCharts, { type ChartType } from "@/components/ResultCharts";
 // ──────────────────────────────────────────────
 interface DefaultChart {
   type: ChartType;
-  xCol: string;
-  yCols: string[];
+  // Προαιρετικά: το "pie" chart type δεν τα χρησιμοποιεί καθόλου (δικό του
+  // pieLabel/pieValue state στο ResultCharts, auto-picked από τα columns/data).
+  xCol?: string;
+  yCols?: string[];
   rightCols?: string[];
   axisOverrides?: Record<string, { domain: [number, number]; reversed?: boolean }>;
   aggFn?: "count" | "sum" | "avg" | "min" | "max";
   aggEnabled?: boolean;
   groupCol?: string;
+  // Ένα column ή λίστα columns — καθένα ανοίγει με δικό του pre-added φίλτρο
+  // (κενά vals, ready to click) στο panel Φίλτρα.
+  filterCol?: string | string[];
 }
 
 interface QueryTab {
@@ -61,6 +66,8 @@ interface QueryEditorProps {
   collectionsLoading: boolean;
   results?: QueryResult[];
   totalTime?: number;
+  database?: string;
+  databases?: string[];
 }
 
 // ──────────────────────────────────────────────
@@ -75,9 +82,9 @@ const TEMPLATE_CATEGORY_ORDER = [
 
 const TEMPLATES: { label: string; category: string; sql: string; defaultChart?: DefaultChart }[] = [
   {
-    label: "R24 Voice calls",
+    label: "Voice calls summary",
     category: "SmartAnalytics R24",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["CallStatus"], aggFn: "sum", aggEnabled: false },
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["CallStatus"], aggFn: "sum", aggEnabled: true, filterCol: "CollectionName" },
     sql: `SELECT
   FCV.SessionIdA,
   FCV.SessionIdB,
@@ -99,157 +106,162 @@ FROM FactCDRVoice FCV
 LEFT JOIN DmnFile DF ON DF.DmnId = FCV.DmnIdFile
 ORDER BY FCV.CallSessionStartTS DESC`,
   },
+//   {
+//     label: "R24 Voice KPI by location",
+//     category: "SmartAnalytics R24",
+//     defaultChart: { type: "bar", xCol: "Location", yCols: ["total_calls", "bad_calls"], aggFn: "sum", aggEnabled: false },
+//     sql: `SELECT
+//   DF.CollectionName,
+//   DF.Location,
+//   COUNT(*) AS total_calls,
+//   SUM(CASE
+//         WHEN FCV.CallStatus LIKE '%Drop%'
+//           OR FCV.CallStatus LIKE '%Fail%'
+//           OR FCV.CallStatus LIKE '%System Release%'
+//         THEN 1 ELSE 0
+//       END) AS bad_calls,
+//   ROUND(100.0 * SUM(CASE
+//         WHEN FCV.CallStatus LIKE '%Drop%'
+//           OR FCV.CallStatus LIKE '%Fail%'
+//           OR FCV.CallStatus LIKE '%System Release%'
+//         THEN 1 ELSE 0
+//       END) / NULLIF(COUNT(*), 0), 2) AS bad_call_pct,
+//   ROUND(AVG(FCV.CallSetupTime_s), 3) AS avg_setup_s,
+//   ROUND(AVG(FCV.CallDuration_s), 3) AS avg_duration_s,
+//   ROUND(AVG(FCV.AvgSQ), 3) AS avg_mos
+// FROM FactCDRVoice FCV
+// LEFT JOIN DmnFile DF ON DF.DmnId = FCV.DmnIdFile
+// GROUP BY DF.CollectionName, DF.Location
+// ORDER BY bad_call_pct DESC, total_calls DESC`,
+//   },
+//   {
+//     label: "R24 Data sessions",
+//     category: "SmartAnalytics R24",
+//     defaultChart: { type: "bar", xCol: "Location", yCols: ["TransferThroughputKbps"], aggFn: "avg", aggEnabled: true },
+//     sql: `SELECT
+//   C.SessionId,
+//   C.TestId,
+//   DF.CollectionName,
+//   DF.Location,
+//   C.[Test Start TS],
+//   C.[Test Name],
+//   C.Technology,
+//   C.[Start Technology],
+//   C.[Transfer Status],
+//   C.[Scoring Status],
+//   C.TestDirection,
+//   C.Host,
+//   ROUND(CAST(C.[Transfer Throughput (kbps)] AS FLOAT), 2) AS TransferThroughputKbps,
+//   ROUND(CAST(C.[Capacity_Sustainable Throughput (kbps)] AS FLOAT), 2) AS CapacityThroughputKbps,
+//   ROUND(CAST(C.[Ping_RTT Avg (ms)] AS FLOAT), 2) AS PingRttAvgMs,
+//   ROUND(CAST(C.[YouTube_Avg. Video MOS] AS FLOAT), 3) AS YoutubeMos,
+//   C.LAT,
+//   C.LON,
+//   C.valid,
+//   C.InvalidReason
+// FROM FactCDRCombined C
+// LEFT JOIN DmnFile DF ON DF.DmnId = C.DmnIdFile
+// ORDER BY C.[Test Start TS] DESC`,
+//   },
+//   {
+//     label: "R24 Data KPI by test",
+//     category: "SmartAnalytics R24",
+//     defaultChart: { type: "bar", xCol: "TestName", yCols: ["avg_transfer_kbps", "avg_capacity_kbps"], aggFn: "avg", aggEnabled: false },
+//     sql: `SELECT
+//   DF.CollectionName,
+//   DF.Location,
+//   C.[Test Name] AS TestName,
+//   COUNT(*) AS tests,
+//   SUM(CASE WHEN C.[Scoring Status] LIKE '%Fail%' OR C.[Transfer Status] LIKE '%Fail%' THEN 1 ELSE 0 END) AS failed_tests,
+//   ROUND(AVG(CAST(C.[Transfer Throughput (kbps)] AS FLOAT)), 2) AS avg_transfer_kbps,
+//   ROUND(AVG(CAST(C.[Capacity_Sustainable Throughput (kbps)] AS FLOAT)), 2) AS avg_capacity_kbps,
+//   ROUND(AVG(CAST(C.[Ping_RTT Avg (ms)] AS FLOAT)), 2) AS avg_ping_ms,
+//   ROUND(AVG(CAST(C.[YouTube_Avg. Video MOS] AS FLOAT)), 3) AS avg_youtube_mos
+// FROM FactCDRCombined C
+// LEFT JOIN DmnFile DF ON DF.DmnId = C.DmnIdFile
+// GROUP BY DF.CollectionName, DF.Location, C.[Test Name]
+// ORDER BY DF.CollectionName, DF.Location, TestName`,
+//   },
+//   {
+//     label: "R24 LTE radio quality",
+//     category: "SmartAnalytics R24",
+//     defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_rsrp", "avg_sinr"], aggFn: "avg", aggEnabled: false },
+//     sql: `SELECT
+//   DF.CollectionName,
+//   DF.Location,
+//   LR.EARFCN,
+//   LR.PhyCellId AS PCI,
+//   COUNT(*) AS samples,
+//   ROUND(AVG(CAST(LR.RSRP AS FLOAT)), 2) AS avg_rsrp,
+//   ROUND(AVG(CAST(LR.RSRQ AS FLOAT)), 2) AS avg_rsrq,
+//   ROUND(AVG(CAST(LR.SINR AS FLOAT)), 2) AS avg_sinr,
+//   ROUND(MIN(CAST(LR.RSRP AS FLOAT)), 2) AS min_rsrp
+// FROM FactLTERadio LR
+// LEFT JOIN DmnFile DF ON DF.DmnId = LR.DmnIdFile
+// WHERE LR.RSRP IS NOT NULL
+// GROUP BY DF.CollectionName, DF.Location, LR.EARFCN, LR.PhyCellId
+// ORDER BY avg_rsrp ASC`,
+//   },
+//   {
+//     label: "R24 GSM radio quality",
+//     category: "SmartAnalytics R24",
+//     defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_rxlev", "avg_rxqual"], aggFn: "avg", aggEnabled: false },
+//     sql: `SELECT
+//   DF.CollectionName,
+//   DF.Location,
+//   GR.BCCH,
+//   GR.BSIC,
+//   COUNT(*) AS samples,
+//   ROUND(AVG(CAST(GR.RxLevSub AS FLOAT)), 2) AS avg_rxlev,
+//   ROUND(AVG(CAST(GR.RxQualSub AS FLOAT)), 2) AS avg_rxqual,
+//   ROUND(MIN(CAST(GR.RxLevSub AS FLOAT)), 2) AS min_rxlev,
+//   ROUND(MAX(CAST(GR.RxQualSub AS FLOAT)), 2) AS max_rxqual
+// FROM FactGSMRadio GR
+// LEFT JOIN DmnFile DF ON DF.DmnId = GR.DmnIdFile
+// WHERE GR.RxLevSub IS NOT NULL
+// GROUP BY DF.CollectionName, DF.Location, GR.BCCH, GR.BSIC
+// ORDER BY avg_rxlev ASC`,
+//   },
+//   {
+//     label: "R24 LTE scanner top RSRP",
+//     category: "SmartAnalytics R24",
+//     defaultChart: { type: "bar", xCol: "CollectionName", yCols: ["avg_rsrp", "avg_sinr"], aggFn: "avg", aggEnabled: false },
+//     sql: `SELECT
+//   DF.CollectionName,
+//   DF.Location,
+//   LS.EARFCN,
+//   LS.PCI,
+//   COUNT(*) AS samples,
+//   ROUND(AVG(CAST(LS.RSRP AS FLOAT)), 2) AS avg_rsrp,
+//   ROUND(AVG(CAST(LS.RSRQ AS FLOAT)), 2) AS avg_rsrq,
+//   ROUND(AVG(CAST(LS.SINR AS FLOAT)), 2) AS avg_sinr
+// FROM FactLTEScanner LS
+// LEFT JOIN DmnFile DF ON DF.DmnId = LS.DmnIdFile
+// WHERE LS.DmnIdTopN_RSRP = 1
+// GROUP BY DF.CollectionName, DF.Location, LS.EARFCN, LS.PCI
+// ORDER BY avg_rsrp ASC`,
+//   },
   {
-    label: "R24 Voice KPI by location",
+    label: "Capacity summary",
     category: "SmartAnalytics R24",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["total_calls", "bad_calls"], aggFn: "sum", aggEnabled: false },
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["DLThrpt"], aggFn: "avg", aggEnabled: true, filterCol: "CollectionName" },
     sql: `SELECT
-  DF.CollectionName,
-  DF.Location,
-  COUNT(*) AS total_calls,
-  SUM(CASE
-        WHEN FCV.CallStatus LIKE '%Drop%'
-          OR FCV.CallStatus LIKE '%Fail%'
-          OR FCV.CallStatus LIKE '%System Release%'
-        THEN 1 ELSE 0
-      END) AS bad_calls,
-  ROUND(100.0 * SUM(CASE
-        WHEN FCV.CallStatus LIKE '%Drop%'
-          OR FCV.CallStatus LIKE '%Fail%'
-          OR FCV.CallStatus LIKE '%System Release%'
-        THEN 1 ELSE 0
-      END) / NULLIF(COUNT(*), 0), 2) AS bad_call_pct,
-  ROUND(AVG(FCV.CallSetupTime_s), 3) AS avg_setup_s,
-  ROUND(AVG(FCV.CallDuration_s), 3) AS avg_duration_s,
-  ROUND(AVG(FCV.AvgSQ), 3) AS avg_mos
-FROM FactCDRVoice FCV
-LEFT JOIN DmnFile DF ON DF.DmnId = FCV.DmnIdFile
-GROUP BY DF.CollectionName, DF.Location
-ORDER BY bad_call_pct DESC, total_calls DESC`,
-  },
-  {
-    label: "R24 Data sessions",
-    category: "SmartAnalytics R24",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["TransferThroughputKbps"], aggFn: "avg", aggEnabled: true },
-    sql: `SELECT
-  C.SessionId,
-  C.TestId,
-  DF.CollectionName,
-  DF.Location,
-  C.[Test Start TS],
-  C.[Test Name],
-  C.Technology,
-  C.[Start Technology],
-  C.[Transfer Status],
-  C.[Scoring Status],
-  C.TestDirection,
-  C.Host,
-  ROUND(CAST(C.[Transfer Throughput (kbps)] AS FLOAT), 2) AS TransferThroughputKbps,
-  ROUND(CAST(C.[Capacity_Sustainable Throughput (kbps)] AS FLOAT), 2) AS CapacityThroughputKbps,
-  ROUND(CAST(C.[Ping_RTT Avg (ms)] AS FLOAT), 2) AS PingRttAvgMs,
-  ROUND(CAST(C.[YouTube_Avg. Video MOS] AS FLOAT), 3) AS YoutubeMos,
-  C.LAT,
-  C.LON,
-  C.valid,
-  C.InvalidReason
-FROM FactCDRCombined C
-LEFT JOIN DmnFile DF ON DF.DmnId = C.DmnIdFile
-ORDER BY C.[Test Start TS] DESC`,
-  },
-  {
-    label: "R24 Data KPI by test",
-    category: "SmartAnalytics R24",
-    defaultChart: { type: "bar", xCol: "TestName", yCols: ["avg_transfer_kbps", "avg_capacity_kbps"], aggFn: "avg", aggEnabled: false },
-    sql: `SELECT
-  DF.CollectionName,
-  DF.Location,
-  C.[Test Name] AS TestName,
-  COUNT(*) AS tests,
-  SUM(CASE WHEN C.[Scoring Status] LIKE '%Fail%' OR C.[Transfer Status] LIKE '%Fail%' THEN 1 ELSE 0 END) AS failed_tests,
-  ROUND(AVG(CAST(C.[Transfer Throughput (kbps)] AS FLOAT)), 2) AS avg_transfer_kbps,
-  ROUND(AVG(CAST(C.[Capacity_Sustainable Throughput (kbps)] AS FLOAT)), 2) AS avg_capacity_kbps,
-  ROUND(AVG(CAST(C.[Ping_RTT Avg (ms)] AS FLOAT)), 2) AS avg_ping_ms,
-  ROUND(AVG(CAST(C.[YouTube_Avg. Video MOS] AS FLOAT)), 3) AS avg_youtube_mos
-FROM FactCDRCombined C
-LEFT JOIN DmnFile DF ON DF.DmnId = C.DmnIdFile
-GROUP BY DF.CollectionName, DF.Location, C.[Test Name]
-ORDER BY DF.CollectionName, DF.Location, TestName`,
-  },
-  {
-    label: "R24 LTE radio quality",
-    category: "SmartAnalytics R24",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_rsrp", "avg_sinr"], aggFn: "avg", aggEnabled: false },
-    sql: `SELECT
-  DF.CollectionName,
-  DF.Location,
-  LR.EARFCN,
-  LR.PhyCellId AS PCI,
-  COUNT(*) AS samples,
-  ROUND(AVG(CAST(LR.RSRP AS FLOAT)), 2) AS avg_rsrp,
-  ROUND(AVG(CAST(LR.RSRQ AS FLOAT)), 2) AS avg_rsrq,
-  ROUND(AVG(CAST(LR.SINR AS FLOAT)), 2) AS avg_sinr,
-  ROUND(MIN(CAST(LR.RSRP AS FLOAT)), 2) AS min_rsrp
-FROM FactLTERadio LR
-LEFT JOIN DmnFile DF ON DF.DmnId = LR.DmnIdFile
-WHERE LR.RSRP IS NOT NULL
-GROUP BY DF.CollectionName, DF.Location, LR.EARFCN, LR.PhyCellId
-ORDER BY avg_rsrp ASC`,
-  },
-  {
-    label: "R24 GSM radio quality",
-    category: "SmartAnalytics R24",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_rxlev", "avg_rxqual"], aggFn: "avg", aggEnabled: false },
-    sql: `SELECT
-  DF.CollectionName,
-  DF.Location,
-  GR.BCCH,
-  GR.BSIC,
-  COUNT(*) AS samples,
-  ROUND(AVG(CAST(GR.RxLevSub AS FLOAT)), 2) AS avg_rxlev,
-  ROUND(AVG(CAST(GR.RxQualSub AS FLOAT)), 2) AS avg_rxqual,
-  ROUND(MIN(CAST(GR.RxLevSub AS FLOAT)), 2) AS min_rxlev,
-  ROUND(MAX(CAST(GR.RxQualSub AS FLOAT)), 2) AS max_rxqual
-FROM FactGSMRadio GR
-LEFT JOIN DmnFile DF ON DF.DmnId = GR.DmnIdFile
-WHERE GR.RxLevSub IS NOT NULL
-GROUP BY DF.CollectionName, DF.Location, GR.BCCH, GR.BSIC
-ORDER BY avg_rxlev ASC`,
-  },
-  {
-    label: "R24 LTE scanner top RSRP",
-    category: "SmartAnalytics R24",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_rsrp", "avg_sinr"], aggFn: "avg", aggEnabled: false },
-    sql: `SELECT
-  DF.CollectionName,
-  DF.Location,
-  LS.EARFCN,
-  LS.PCI,
-  COUNT(*) AS samples,
-  ROUND(AVG(CAST(LS.RSRP AS FLOAT)), 2) AS avg_rsrp,
-  ROUND(AVG(CAST(LS.RSRQ AS FLOAT)), 2) AS avg_rsrq,
-  ROUND(AVG(CAST(LS.SINR AS FLOAT)), 2) AS avg_sinr
-FROM FactLTEScanner LS
-LEFT JOIN DmnFile DF ON DF.DmnId = LS.DmnIdFile
-WHERE LS.DmnIdTopN_RSRP = 1
-GROUP BY DF.CollectionName, DF.Location, LS.EARFCN, LS.PCI
-ORDER BY avg_rsrp ASC`,
-  },
-  {
-    label: "R24 Capacity summary",
-    category: "SmartAnalytics R24",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_sustainable_kbps"], aggFn: "avg", aggEnabled: false },
-    sql: `SELECT
-  DF.CollectionName,
-  DF.Location,
-  COUNT(*) AS tests,
-  ROUND(AVG(CAST(CAP.SustainableThroughput AS FLOAT)), 2) AS avg_sustainable_kbps,
-  ROUND(MAX(CAST(CAP.SustainableThroughput AS FLOAT)), 2) AS max_sustainable_kbps,
-  ROUND(AVG(CAST(CAP.RoundTripTime AS FLOAT)), 2) AS avg_rtt_ms,
-  SUM(CASE WHEN CAP.CountSuccessful = 1 THEN 1 ELSE 0 END) AS successful_tests
-FROM FactCapacity CAP
-LEFT JOIN DmnFile DF ON DF.DmnId = CAP.DmnIdFile
-GROUP BY DF.CollectionName, DF.Location
-ORDER BY avg_sustainable_kbps DESC`,
+  FileList.CollectionName,
+  FileList.ASideLocation AS Location, 
+  ROUND(CONVERT(float, ResultsCapacityTest.ThroughputGet) * 0.000008, 1) AS DLThrpt
+FROM Sessions
+JOIN FileList
+  ON Sessions.FileId = FileList.FileId
+JOIN ResultsCapacityTest
+  ON Sessions.sessionId = ResultsCapacityTest.sessionId
+JOIN ResultsCapacityTestParameters
+  ON ResultsCapacityTest.TestId = ResultsCapacityTestParameters.TestId
+WHERE Sessions.Valid = 1
+  AND ResultsCapacityTest.lastBlock = 1
+  AND ResultsCapacityTestParameters.Direction LIKE 'get%'
+  AND ResultsCapacityTest.ThroughputGet IS NOT NULL
+  AND FileList.ASideLocation IS NOT NULL
+ORDER BY FileList.CollectionName;`,
   },
   {
     label: "R24 Scanner vs Radio RSRP (time bins)",
@@ -349,7 +361,7 @@ ORDER BY a.TimeBin`,
   {
     label: "All calls",
     category: "General",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["callStatus"], aggFn: "sum", aggEnabled: false },
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["callStatus"], aggFn: "sum", aggEnabled: false, filterCol: "CollectionName" },
     sql: `SELECT
   CA.SessionId,
   CA.technology,
@@ -417,7 +429,7 @@ ORDER BY CA.callStartTimeStamp`,
   {
     label: "Avg setup time per technology",
     category: "KPI",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_setup_ms"], aggFn: "avg", aggEnabled: false },
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_setup_ms"], aggFn: "avg", aggEnabled: false, filterCol: "CollectionName" },
     sql: `SELECT
   FL.ASideLocation AS Location,
   CA.technology,
@@ -480,7 +492,7 @@ ORDER BY CA.callType, avg_setup_ms`,
   {
     label: "MOS ανά operator & collection",
     category: "MOS",
-    defaultChart: { type: "bar", xCol: "CollectionName", yCols: ["avg_mos"], groupCol: "Location", aggFn: "avg", aggEnabled: false },
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_mos"], filterCol: "CollectionName", aggFn: "avg", aggEnabled: false },
     sql: `SELECT
   FL.CollectionName,
   FL.ASideLocation  AS Location,
@@ -498,7 +510,7 @@ ORDER BY FL.CollectionName, avg_mos DESC`,
   {
     label: "MOS raw ανά call (για γράφημα)",
     category: "MOS",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["MOS"], aggFn: "avg", aggEnabled: true },
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["MOS"], aggFn: "avg", aggEnabled: true, filterCol: "CollectionName" },
     sql: `SELECT
   FL.ASideLocation                AS Location,
   FL.CollectionName,
@@ -580,7 +592,7 @@ ORDER BY avg_RSRP DESC`,
   {
     label: "RSRP + MOS ανά operator & collection",
     category: "Signal",
-    defaultChart: { type: "bar", xCol: "CollectionName", yCols: ["avg_rsrp"], groupCol: "Location", aggFn: "avg", aggEnabled: false },
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_rsrp"], filterCol: "CollectionName", aggFn: "avg", aggEnabled: false },
     sql: `WITH RSRP_CTE AS (
   SELECT
     FL.CollectionName,
@@ -722,6 +734,39 @@ ORDER BY
   GC.SessionId, RB.BucketTs`,
   },
   {
+    label: "Technology Mix (per Band) — pie",
+    category: "Signal",
+    // Ίδιο query/μεθοδολογία με το backend /api/technology_mix (βλ.
+    // backend/routers/calls.py) που τροφοδοτεί το "Technology mix" block του SummaryTab
+    // (GSM 900 / GSM 1800 / κάθε LTE E-UTRA band ξεχωριστά, ίδιο με bi queries/
+    // RadioTech_Voice_newDB.sql). Ένα "sample" = μία Position σε valid Session, technology
+    // = NetworkInfo.Technology της πιο πρόσφατης εγγραφής πριν από αυτή τη θέση. Σκόπιμα
+    // ΔΕΝ περιορίζεται σε ενεργή κλήση ούτε φιλτράρει Data locations — ίδιο με το backend.
+    // Άνοιξε το φίλτρο και διάλεξε ένα Location για ένα pie ανά operator.
+    defaultChart: { type: "pie", filterCol: ["Location", "CollectionName"] },
+    sql: `SELECT
+  ni.technology AS Technology,
+  FileList.ASideLocation AS Location,
+  FileList.CollectionName,
+  COUNT(*) AS samples
+FROM Sessions
+INNER JOIN FileList ON Sessions.FileId = FileList.FileId
+INNER JOIN Position ON Sessions.SessionId = Position.SessionId
+OUTER APPLY (
+  SELECT TOP (1) n.*
+  FROM NetworkInfo AS n
+  WHERE n.FileId = Position.FileId
+    AND n.MsgTime < Position.MsgTime
+  ORDER BY n.MsgTime DESC
+) AS ni
+WHERE Sessions.Valid = 1
+  AND ni.technology IS NOT NULL
+  AND ni.technology <> 'Unknown'
+  AND FileList.CollectionName LIKE '%%'
+GROUP BY ni.technology, FileList.ASideLocation, FileList.CollectionName
+ORDER BY FileList.ASideLocation, samples DESC`,
+  },
+  {
     label: "NR 5G Bands",
     category: "Signal",
     sql: `SELECT
@@ -745,7 +790,7 @@ WHERE CollectionName LIKE '%%' AND FileList.ASideLocation LIKE '%Data%'`,
   {
     label: "Data sessions throughput ανά collection",
     category: "Data",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_DL_Mbps", "avg_UL_Mbps"], aggFn: "avg", aggEnabled: false },
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_DL_Mbps", "avg_UL_Mbps"], aggFn: "avg", aggEnabled: false, filterCol: "CollectionName" },
     sql: `SELECT
   FL.CollectionName,
   FL.ASideLocation  AS Location,
@@ -1470,65 +1515,35 @@ WHERE CollectionName like '%%' AND Sessions.Valid = 1`,
   {
     label: "OOKLA Speed Test DL",
     category: "Data Tests",
-    sql: `WITH SessionsCTE AS (
-  SELECT SessionId, FileId, info FROM Sessions WHERE valid = 1
-  GROUP BY SessionId, FileId, info
-)
+    sql: `
 SELECT
-  ti.SessionId,
-  ti.TestId,
+	S.SessionId,
+  CAST(p.Latitude  AS FLOAT) AS latitude,
+  CAST(p.Longitude AS FLOAT) AS longitude,
+   NULLIF(CAST(raap.DLThroughput AS FLOAT) * 8.0 / 1000000.0, 0) AS ookla_dl_mbps,
+  fl.ASideLocation                                AS Location,
   fl.CollectionName,
-  fl.ASideDevice,
-  fl.ASideFileName,
-  fl.ASideNumber,
-  s.info AS Session_Info,
-  ti.TestName,
-  ti.TypeOfTest,
-  fl.ASideLocation,
-  ni.HomeOperator,
-  ni.Technology,
-  t.PrevTechnology as 'Data_Technology',
-  aaf.dir AS Direction,
-  CONVERT(VARCHAR, COALESCE(aa.MsgTime, aaf.MsgTime), 121) AS EndTime,
-  atp.ServiceProvider AS App,
-  atp.ServiceProfileName AS ProfileName,
-  COALESCE(aa.ActionId, aaf.ActionId) AS ActionId,
-  COALESCE(aa.Duration, aaf.Duration) AS 'Duration[ms]',
-  CASE aaf.thp WHEN 0 THEN NULL ELSE aaf.thp END AS 'Throughput[Mbps]',
-  CASE COALESCE(aa.ErrorCode, aaf.ErrorCode) WHEN 0 THEN 'Success' ELSE 'Failed' END AS ActionStatus,
-  aaf.Latency AS 'Latency[ms]',
-  aaf.PacketLossPercent AS 'PacketLoss[%]',
-  ni.CGI,
-  DATEADD(MS, -1 * COALESCE(aa.Duration, aaf.Duration),
-    COALESCE(aa.MsgTime, aaf.MsgTime)) AS StartTime
-FROM SessionsCTE s
-  INNER JOIN FileList fl ON fl.FileId = s.FileId
-  INNER JOIN TestInfo ti ON s.SessionId = ti.SessionId AND ti.Valid = 1
-  INNER JOIN ResultsAppTestParameters atp ON ti.TestId = atp.TestId
-  LEFT JOIN ResultsAppAction aa ON ti.TestId = aa.TestId AND aa.LastBlock = 1
-  LEFT JOIN (
-    SELECT 'DL' AS dir, raap.TestId, raap.ActionId, raap.MsgTime, raap.ErrorCode, raap.NetworkId,
-           CAST(raap.DLThroughput AS FLOAT) * 8.0 / 1000000.0              AS thp,
-           CAST(ISNULL(raap.Ping, raap.Latency) AS FLOAT) / 1000.0         AS ping_s,
-           1000 * CAST(raap.DLSize AS REAL) / NULLIF(raap.DLThroughput, 0) AS Duration,
-           ISNULL(raap.Ping, raap.Latency)                                  AS Latency,
-           raap.PacketLossPercent
-    FROM ResultsAppActionPerformance raap
-    UNION ALL
-    SELECT 'UL', raap.TestId, raap.ActionId, raap.MsgTime, raap.ErrorCode, raap.NetworkId,
-           CAST(raap.ULThroughput AS FLOAT) * 8.0 / 1000000.0,
-           CAST(ISNULL(raap.Ping, raap.Latency) AS FLOAT) / 1000.0,
-           1000 * CAST(raap.ULSize AS REAL) / NULLIF(raap.ULThroughput, 0),
-           ISNULL(raap.Ping, raap.Latency),
-           raap.PacketLossPercent
-    FROM ResultsAppActionPerformance raap
-  ) aaf ON ti.TestId = aaf.TestId
-  INNER JOIN NetworkInfo ni ON ni.NetworkId = ISNULL(ISNULL(aa.NetworkId, aaf.NetworkId), ti.NetworkId)
-  LEFT JOIN Technology t ON t.PrevTechnology IS NOT NULL AND (
-    (t.TestId = aaf.TestId AND aaf.MsgTime BETWEEN DATEADD(ms, -1 * t.Duration, t.MsgTime) AND t.MsgTime) OR
-    (t.TestId = aa.TestId  AND aa.MsgTime  BETWEEN DATEADD(ms, -1 * t.Duration, t.MsgTime) AND t.MsgTime))
-WHERE CollectionName like '%%' AND s.SessionId IS NOT NULL AND aaf.dir = 'DL'
-ORDER BY ti.TestId, ISNULL(aa.ActionId, aaf.ActionId)`,
+  atp.ServiceProvider                             AS App,
+  CASE COALESCE(aa.ErrorCode, raap.ErrorCode)
+    WHEN 0 THEN 'Success' ELSE 'Failed'
+  END                                             AS ActionStatus
+FROM Sessions s
+INNER JOIN FileList                 fl  ON fl.FileId   = s.FileId
+INNER JOIN TestInfo                 ti  ON s.SessionId = ti.SessionId AND ti.Valid = 1
+INNER JOIN ResultsAppTestParameters atp ON ti.TestId   = atp.TestId
+LEFT  JOIN ResultsAppAction         aa  ON ti.TestId   = aa.TestId   AND aa.LastBlock = 1
+LEFT JOIN Position					P	ON ti.PosId	   = p.PosId
+
+left join ResultsAppActionPerformance raap ON ti.TestId=raap.TestId
+
+WHERE s.valid = 1 and
+p.Latitude    IS NOT NULL
+  AND p.Longitude   IS NOT NULL
+  AND s.SessionId     IS NOT NULL
+  --AND raap.DLThroughput         IS NOT NULL
+  --AND fl.CollectionName = '{collection}'
+  --AND fl.ASideLocation  = '{location}'
+ORDER BY ti.TestId, raap.ActionId`,
   },
   {
     label: "OOKLA Speed Test UL",
@@ -1783,7 +1798,7 @@ WHERE CollectionName like '%%' AND
   // ── 5G ──
   {
     label: "5G Phone – SS-RSRP / RSRQ / SINR (avg ανά θέση)",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["SS-RSRP", "SS-RSRQ", "SS-SINR"], aggFn: "avg", aggEnabled: true },
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["SS-RSRP", "SS-RSRQ", "SS-SINR"], aggFn: "avg", aggEnabled: true, filterCol: "CollectionName" },
     category: "5G",
     sql: `SELECT
   nr.NRARFCN,
@@ -1866,6 +1881,65 @@ WHERE nr.[DmnIdTopN_SS_RSRP] = 1
   AND fl.CollectionName LIKE '%%'
 GROUP BY nr.AbsFreqSSB, fl.CollectionName, fl.ASideLocation
 ORDER BY fl.ASideLocation, nr.AbsFreqSSB`,
+  },
+  {
+    label: "Serving Technology (per Time) — pie",
+    category: "5G",
+    // Ίδιο query/μεθοδολογία με το backend /api/serving_band_tech (kind="TECH", βλ.
+    // backend/routers/calls.py) που τροφοδοτεί το "PS Data Stats" block του SummaryTab.
+    // Ένα "sample" = μία Position πάνω σε valid PS Data DL test (Capacity DL / FTP DL /
+    // HTTP TRANSFER (DL)) με NetworkInfo + προηγούμενο Technology row. Άνοιξε το φίλτρο
+    // και διάλεξε ένα Location (Cosmote/Vodafone/Nova Data) για ένα pie ανά operator,
+    // όπως στο SummaryTab.
+    defaultChart: { type: "pie", filterCol: ["Location", "CollectionName"] },
+    sql: `SELECT
+  REPLACE(Technology.CurrTechnology, 'LTE-5G NR', 'LTE-5GNR') AS ServingTechnology,
+  FileList.ASideLocation AS Location,
+  FileList.CollectionName,
+  COUNT(*) AS samples
+FROM Sessions
+JOIN FileList ON FileList.FileId = Sessions.FileId
+JOIN TestInfo ON TestInfo.SessionId = Sessions.SessionId
+JOIN Position ON Position.TestId = TestInfo.TestId
+JOIN NetworkInfo ON NetworkInfo.NetworkId = TestInfo.NetworkId
+JOIN Technology ON Technology.SessionId = Sessions.SessionId
+  AND Technology.MsgTime = (
+    SELECT MAX(tech_2.MsgTime)
+    FROM Technology tech_2
+    WHERE tech_2.TestId = Position.TestId
+      AND tech_2.MsgTime < Position.MsgTime
+      AND tech_2.CurrTechnology IS NOT NULL
+  )
+WHERE Sessions.Valid = 1
+  AND TestInfo.Valid = 1
+  AND TestInfo.TestName IN ('Capacity DL', 'FTP DL', 'HTTP TRANSFER (DL)')
+  AND FileList.CollectionName LIKE '%%'
+GROUP BY REPLACE(Technology.CurrTechnology, 'LTE-5G NR', 'LTE-5GNR'), FileList.ASideLocation, FileList.CollectionName
+ORDER BY FileList.ASideLocation, samples DESC`,
+  },
+  {
+    label: "Serving Band (5G, per Time) — pie",
+    category: "5G",
+    // Ίδιο query/μεθοδολογία με το backend /api/serving_band_tech (kind="BAND") — ΚΑΘΕ
+    // FactNR5GRadio εγγραφή (όχι μόνο πάνω σε DL-test δείγματα, βλ. σχόλιο στο backend),
+    // κανονικοποιημένο σε "NR28"/"NR1"/"NR78" κ.λπ. Άνοιξε το φίλτρο και διάλεξε ένα
+    // Location για ένα pie ανά operator, όπως στο SummaryTab.
+    defaultChart: { type: "pie", filterCol: ["Location", "CollectionName"] },
+    sql: `SELECT
+  'NR' + REPLACE(REPLACE(UPPER(LTRIM(RTRIM(FactNR5GCellInfo.Band))), 'NR', ''), 'N', '') AS ServingBand,
+  FileList.ASideLocation AS Location,
+  FileList.CollectionName,
+  COUNT(*) AS samples
+FROM FactNR5GRadio
+JOIN Sessions ON FactNR5GRadio.SessionId = Sessions.SessionId
+JOIN FileList ON FactNR5GRadio.FileId = FileList.FileId
+JOIN FactNR5GCellInfo ON FactNR5GCellInfo.NR5GCACellInfoId = FactNR5GRadio.FactIdFactNR5GCellInfo
+WHERE Sessions.Valid = 1
+  AND FileList.ASideLocation LIKE '%Data%'
+  AND FactNR5GCellInfo.Band IS NOT NULL
+  AND FileList.CollectionName LIKE '%%'
+GROUP BY 'NR' + REPLACE(REPLACE(UPPER(LTRIM(RTRIM(FactNR5GCellInfo.Band))), 'NR', ''), 'N', ''), FileList.ASideLocation, FileList.CollectionName
+ORDER BY FileList.ASideLocation, samples DESC`,
   },
 ];
 
@@ -1973,6 +2047,7 @@ function ResultGrid({ result, defaultChart }: { result: QueryResult; defaultChar
             defaultAggFn={defaultChart?.aggFn}
             defaultAggEnabled={defaultChart?.aggEnabled}
             defaultGroupCol={defaultChart?.groupCol}
+            defaultFilterCol={defaultChart?.filterCol}
           />
         ) : (
           <div className="space-y-1.5">
@@ -2043,6 +2118,8 @@ const QueryEditor = ({
   isRunning,
   results = [],
   totalTime = 0,
+  database,
+  databases,
 }: QueryEditorProps) => {
   const [tabs, setTabs] = useState<QueryTab[]>([
     { id: uid(), label: "Query 1", sql: TEMPLATES[0].sql },
@@ -2255,6 +2332,8 @@ const QueryEditor = ({
         <QueryBuilder
           key={builderKey}
           initialSql={activeTab.sql}
+          defaultDatabase={database}
+          databases={databases}
           onApply={(sql) => { updateSql(activeTabId, sql); setShowBuilder(false); }}
         />
       </motion.div>
