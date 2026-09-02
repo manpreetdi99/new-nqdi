@@ -258,9 +258,128 @@ const dataKpiRows: Row<HistoricDataRow>[] = [
 const winnerFor = (winners: HistoricBestOperator[], category: string): HistoricBestOperator | null =>
   winners.find((w) => w.category === category) ?? null;
 
-/* ────────────────────────── Collection picker (single-select, searchable) ────────────────────────── */
+/* ────────────────────────── Collection picker (3 cascading selects: Area / Collection Name / Scope) ────────────────────────── */
 
-const CollectionPicker = ({
+/** CollectionName naming convention: `<AREA>_..._<SCOPE>` (π.χ. "ATH_MOTORWAYS_2025H2_NATIONAL").
+ * Σπάει το όνομα σε area (πριν το πρώτο underscore) / middle / scope (μετά το τελευταίο
+ * underscore) για πιο ευανάγνωστο badge display. null όταν δεν υπάρχει underscore καν. */
+interface ParsedCollectionName {
+  area: string;
+  middle: string;
+  scope: string;
+}
+
+const splitCollectionName = (name: string): ParsedCollectionName | null => {
+  const first = name.indexOf("_");
+  const last = name.lastIndexOf("_");
+  if (first === -1) return null;
+  return { area: name.slice(0, first), middle: name.slice(first + 1, last), scope: name.slice(last + 1) };
+};
+
+/** Ένα από τα 3 dropdown κουμπιά (Area / Collection Name / Scope) — ίδιο searchable-list
+ * idiom με το παλιό ενιαίο picker, αλλά πιο στενό και με δικό του label/placeholder. */
+const PartSelect = ({
+  label,
+  placeholder,
+  options,
+  value,
+  onChange,
+  disabled,
+  widthClass = "w-48",
+}: {
+  label: string;
+  placeholder: string;
+  options: string[];
+  value: string;
+  onChange: (next: string) => void;
+  disabled?: boolean;
+  widthClass?: string;
+}) => {
+  const [open, setOpen] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const filtered = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const source = q ? options.filter((o) => o.toLowerCase().includes(q)) : options;
+    return source.slice(0, 300);
+  }, [options, search]);
+
+  const isOpen = open && !disabled;
+
+  return (
+    <div className="relative">
+      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</div>
+      <div
+        role="button"
+        tabIndex={disabled ? -1 : 0}
+        aria-disabled={disabled}
+        onClick={() => !disabled && setOpen((o) => !o)}
+        onKeyDown={(e) => {
+          if (disabled) return;
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            setOpen((o) => !o);
+          }
+        }}
+        className={`mt-1 flex ${widthClass} items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40 ${
+          disabled ? "cursor-not-allowed opacity-50" : "cursor-pointer"
+        }`}
+      >
+        <span className="truncate">{value || placeholder}</span>
+        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+      </div>
+
+      {isOpen && (
+        <>
+          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
+          <div className="absolute left-0 top-full z-30 mt-1.5 w-72 rounded-lg border border-border bg-popover p-3 text-left shadow-lg">
+            <input
+              autoFocus
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              placeholder="Search…"
+              className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+            />
+            <div className="mt-2 max-h-72 space-y-0.5 overflow-y-auto">
+              {filtered.length === 0 && <p className="px-1 py-1 text-xs text-muted-foreground">No matches.</p>}
+              {filtered.map((opt) => (
+                <button
+                  type="button"
+                  key={opt}
+                  onClick={() => {
+                    onChange(opt);
+                    setOpen(false);
+                    setSearch("");
+                  }}
+                  className={`block w-full truncate rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50 ${
+                    opt === value ? "bg-primary/10 font-semibold text-primary" : "text-foreground"
+                  }`}
+                >
+                  {opt || "(none)"}
+                </button>
+              ))}
+              {options.length > filtered.length && filtered.length === 300 && (
+                <p className="px-1 pt-1 text-[10px] text-muted-foreground">
+                  Showing first 300 of {options.length.toLocaleString("en-US")} — refine your search.
+                </p>
+              )}
+            </div>
+          </div>
+        </>
+      )}
+    </div>
+  );
+};
+
+/** 3 cascading κουμπιά (Area → Collection Name → Scope) αντί για ένα ενιαίο combobox με
+ * ολόκληρο το CollectionName — βλ. splitCollectionName. Κάθε επόμενο φιλτράρεται από τα
+ * προηγούμενα· μόλις διαλεχτούν και τα 3, βρίσκει το ακριβές CollectionName στο `collections`
+ * και το προωθεί με onChange. Αλλαγή σε Area/Collection Name καθαρίζει ό,τι είναι μετά από
+ * αυτό και ξανακαλεί onChange("") μέχρι να ξανακλείσει το triplet.
+ * Το state (area/middle/scope) μένει τοπικό εδώ και ΔΕΝ συγχρονίζεται πίσω από το `value` —
+ * το `value` χρησιμοποιείται μόνο για το confirmation label στο τέλος, γιατί ο μόνος
+ * "writer" του `selectedCollection` στο HistoricTab είναι ακριβώς αυτό το component. */
+const CollectionPickerGroup = ({
   collections,
   loading,
   value,
@@ -271,73 +390,90 @@ const CollectionPicker = ({
   value: string;
   onChange: (name: string) => void;
 }) => {
-  const [open, setOpen] = useState(false);
-  const [search, setSearch] = useState("");
+  const parsed = useMemo(
+    () =>
+      collections
+        .map((name) => ({ name, parts: splitCollectionName(name) }))
+        .filter((c): c is { name: string; parts: ParsedCollectionName } => c.parts !== null),
+    [collections]
+  );
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    const source = q ? collections.filter((c) => c.toLowerCase().includes(q)) : collections;
-    return source.slice(0, 300);
-  }, [collections, search]);
+  const [area, setArea] = useState("");
+  const [middle, setMiddle] = useState("");
+  const [scope, setScope] = useState("");
+
+  const areas = useMemo(() => Array.from(new Set(parsed.map((c) => c.parts.area))).sort(), [parsed]);
+
+  const middles = useMemo(
+    () =>
+      area ? Array.from(new Set(parsed.filter((c) => c.parts.area === area).map((c) => c.parts.middle))).sort() : [],
+    [parsed, area]
+  );
+
+  const scopes = useMemo(
+    () =>
+      area && middle
+        ? Array.from(
+            new Set(parsed.filter((c) => c.parts.area === area && c.parts.middle === middle).map((c) => c.parts.scope)),
+          ).sort()
+        : [],
+    [parsed, area, middle],
+  );
+
+  const handleArea = (next: string) => {
+    setArea(next);
+    setMiddle("");
+    setScope("");
+    onChange("");
+  };
+
+  const handleMiddle = (next: string) => {
+    setMiddle(next);
+    setScope("");
+    onChange("");
+  };
+
+  const handleScope = (next: string) => {
+    setScope(next);
+    const match = parsed.find((c) => c.parts.area === area && c.parts.middle === middle && c.parts.scope === next);
+    onChange(match?.name ?? "");
+  };
 
   return (
-    <div className="relative">
-      <div className="text-[10px] uppercase tracking-wider text-muted-foreground">Campaign (CollectionName)</div>
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => setOpen((o) => !o)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            setOpen((o) => !o);
-          }
-        }}
-        className="mt-1 flex w-96 cursor-pointer items-center justify-between gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-      >
-        <span className="truncate">
-          {loading ? "Loading campaigns…" : value || "Select a campaign"}
-        </span>
-        <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+    <div>
+      <div className="flex flex-wrap items-start gap-3">
+        <PartSelect
+          label="Area"
+          placeholder={loading ? "Loading…" : "Select area"}
+          options={areas}
+          value={area}
+          onChange={handleArea}
+          disabled={loading || areas.length === 0}
+          widthClass="w-40"
+        />
+        <PartSelect
+          label="Collection Name"
+          placeholder="Select collection"
+          options={middles}
+          value={middle}
+          onChange={handleMiddle}
+          disabled={!area}
+          widthClass="w-56"
+        />
+        <PartSelect
+          label="Scope"
+          placeholder="Select scope"
+          options={scopes}
+          value={scope}
+          onChange={handleScope}
+          disabled={!middle}
+          widthClass="w-40"
+        />
       </div>
-
-      {open && (
-        <>
-          <div className="fixed inset-0 z-20" onClick={() => setOpen(false)} />
-          <div className="absolute left-1/2 top-full z-30 mt-1.5 w-[28rem] -translate-x-1/2 rounded-lg border border-border bg-popover p-3 text-left shadow-lg">
-            <input
-              autoFocus
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search e.g. ATH, MOTORWAYS, 2025H2…"
-              className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-sm text-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
-            />
-            <div className="mt-2 max-h-80 space-y-0.5 overflow-y-auto">
-              {filtered.length === 0 && <p className="px-1 py-1 text-xs text-muted-foreground">No matching campaigns.</p>}
-              {filtered.map((name) => (
-                <button
-                  type="button"
-                  key={name}
-                  onClick={() => {
-                    onChange(name);
-                    setOpen(false);
-                    setSearch("");
-                  }}
-                  className={`block w-full truncate rounded-md px-2 py-1.5 text-left text-sm hover:bg-muted/50 ${
-                    name === value ? "bg-primary/10 font-semibold text-primary" : "text-foreground"
-                  }`}
-                >
-                  {name}
-                </button>
-              ))}
-              {collections.length > filtered.length && filtered.length === 300 && (
-                <p className="px-1 pt-1 text-[10px] text-muted-foreground">
-                  Showing first 300 of {collections.length.toLocaleString("en-US")} — refine your search.
-                </p>
-              )}
-            </div>
-          </div>
-        </>
+      {value && (
+        <p className="mt-2 text-[11px] text-muted-foreground">
+          Selected: <span className="font-mono text-foreground/80">{value}</span>
+        </p>
       )}
     </div>
   );
@@ -454,7 +590,7 @@ const HistoricTab = () => {
           </div>
 
           <div className="flex min-w-[320px] flex-1 items-center justify-center">
-            <CollectionPicker
+            <CollectionPickerGroup
               collections={collections}
               loading={collectionsLoading}
               value={selectedCollection}
