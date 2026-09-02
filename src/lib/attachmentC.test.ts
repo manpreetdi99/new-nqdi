@@ -1358,11 +1358,18 @@ describe("report period", () => {
 
     const period = buildReportPeriod(["2026-07-15T10:00:00", "2026-07-13T08:00:00", null, "not-a-date"]);
     expect(period.week).toBe(29);
+    expect(period.weekTo).toBe(29);
     expect(period.from?.getDate()).toBe(13);
     expect(period.to?.getDate()).toBe(15);
   });
 
+  it("exposes a separate weekTo when the selection spans more than one ISO week (e.g. multiple collections from different weeks)", () => {
+    const period = buildReportPeriod(["2026-07-13T08:00:00", "2026-07-27T08:00:00"]);
+    expect(period.week).toBe(29);
+    expect(period.weekTo).toBe(31);
+  });
+
   it("survives an empty dataset", () => {
-    expect(buildReportPeriod([])).toEqual({ from: null, to: null, week: null });
+    expect(buildReportPeriod([])).toEqual({ from: null, to: null, week: null, weekTo: null });
   });
 });

@@ -2026,6 +2026,13 @@ export interface ReportPeriod {
   to: Date | null;
   /** ISO week number της πρώτης μέρας — το "Week:" του Attachment C. */
   week: number | null;
+  /**
+   * ISO week number της τελευταίας μέρας. Ίδιο με το `week` όταν όλα τα timestamps πέφτουν
+   * μέσα στην ίδια εβδομάδα· διαφορετικό όταν η επιλογή (π.χ. παραπάνω από ένα collection,
+   * το καθένα από άλλη εβδομάδα) καλύπτει περισσότερες — βλ. Week chip στο SummaryTab, που
+   * δείχνει εύρος "από–έως" αντί για ένα (παραπλανητικό) νούμερο σε αυτή την περίπτωση.
+   */
+  weekTo: number | null;
 }
 
 /** ISO-8601 week number (Δευτέρα = 1η μέρα). */
@@ -2042,10 +2049,11 @@ export const buildReportPeriod = (timestamps: (string | null | undefined)[]): Re
     .map((value) => (value ? new Date(value).getTime() : Number.NaN))
     .filter((value) => !Number.isNaN(value));
 
-  if (times.length === 0) return { from: null, to: null, week: null };
+  if (times.length === 0) return { from: null, to: null, week: null, weekTo: null };
 
   const from = new Date(Math.min(...times));
-  return { from, to: new Date(Math.max(...times)), week: isoWeek(from) };
+  const to = new Date(Math.max(...times));
+  return { from, to, week: isoWeek(from), weekTo: isoWeek(to) };
 };
 
 /* ────────────────────────── Formatting ────────────────────────── */

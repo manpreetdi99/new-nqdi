@@ -1484,7 +1484,19 @@ const SummaryTab = ({
             </p>
 
             <div className="mt-4 flex flex-wrap gap-2">
-              <MetaChip label="Week" value={period.week != null ? String(period.week) : "—"} />
+              {/* Εύρος "35–37" αντί για ένα (παραπλανητικό) νούμερο όταν η επιλογή — π.χ.
+                  παραπάνω από ένα collection, το καθένα από άλλη εβδομάδα — καλύπτει
+                  περισσότερες από μία ISO εβδομάδες. Βλ. period.weekTo/buildReportPeriod. */}
+              <MetaChip
+                label="Week"
+                value={
+                  period.week == null
+                    ? "—"
+                    : period.weekTo != null && period.weekTo !== period.week
+                      ? `${period.week}–${period.weekTo}`
+                      : String(period.week)
+                }
+              />
               <MetaChip label="Period" value={`${formatDate(period.from)} – ${formatDate(period.to)}`} />
               {/* Ρητή πρόοδος όσο οι 10 πηγές γυρίζουν μία-μία — αλλιώς η σταδιακή εμφάνιση
                   των καρτών μοιάζει με "τελείωσε, λείπουν κομμάτια". */}
