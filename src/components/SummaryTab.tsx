@@ -704,7 +704,7 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
   {
     label: "Fake Event(s)",
     emphasis: true,
-    hint: "Sessions με isValid=0 (Sessions.valid='0') — μετράει ανεξάρτητα από το 'Valid calls only' toggle, GSM ΚΑΙ FREE table — βλ. FAKE EVENT LIST reference query.",
+    hint: "Sessions με isValid=0 ΚΑΙ σχόλιο που αρχίζει από \"fake\" (valid='0', comment LIKE 'fake%') — μετράει ανεξάρτητα από το 'Valid calls only' toggle, GSM ΚΑΙ FREE table — βλ. FAKE EVENT LIST reference query.",
     cell: (s) => ({ kind: "value", value: s.fakeEvents, decimals: 0 }),
   },
 ];

@@ -78,9 +78,12 @@ def list_calls(
         conn = get_connection(database)
         cursor = conn.cursor()
 
-        # Not every database has DwAnalysisCommentToSessionMapping, so only
-        # join it when it exists. AnalysisComment/AnalysisCommentSessionsBridge
-        # are deprecated and no longer read from.
+        # Writes (see update_call_comment above) go only to the newer
+        # DwAnalysisCommentToSessionMapping table. Reads still fall back to the
+        # legacy AnalysisComment/AnalysisCommentSessionsBridge tables so older
+        # comments that were never migrated stay visible; DW wins when both exist.
+        # Not every database has DwAnalysisCommentToSessionMapping, so only join
+        # it when it's present.
         cursor.execute(
             "SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'DwAnalysisCommentToSessionMapping'"
         )
@@ -92,9 +95,9 @@ def list_calls(
             else ""
         )
         comment_expr = (
-            "COALESCE(DWC.Comment, S.InvalidReason)"
+            "COALESCE(DWC.Comment, AC.Comment, S.InvalidReason)"
             if has_dw_comments
-            else "S.InvalidReason"
+            else "COALESCE(AC.Comment, S.InvalidReason)"
         )
 
         query = f"""
@@ -184,6 +187,8 @@ def list_calls(
             LEFT JOIN Position POS ON CA.PosId = POS.PosId
             LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
             LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+            LEFT JOIN AnalysisCommentSessionsBridge ACSB ON ACSB.sessionID = CA.SessionId
+            LEFT JOIN AnalysisComment AC ON ACSB.commentId = AC.commentID
             {dw_comment_join}
             -- Raw ResultsLQ08Avg samples (ίδιο κριτήριο με το A-LEVEL Attachment C query:
             -- OptionalWB BETWEEN 1 AND 5, TestInfo.Valid = 1), σπασμένα σε UL (A->B) / DL (B->A)

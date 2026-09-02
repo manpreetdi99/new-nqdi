@@ -1,0 +1,982 @@
+<title>Οδηγός Summary</title>
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Spectral:wght@500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap">
+<style>
+  /* ─────────────────────── Tokens ─────────────────────── */
+  :root {
+    --ink: #182029;
+    --paper: #f2f5f4;
+    --surface: #ffffff;
+    --surface-2: #eaf0ef;
+    --line: #dbe3e1;
+    --muted: #576664;
+    --accent: #146b73;
+    --accent-strong: #0e4d53;
+    --accent-tint: #e2f0f0;
+    --shadow: 0 1px 2px rgba(20, 40, 40, 0.06), 0 8px 24px -12px rgba(20, 40, 40, 0.18);
+
+    --good: #0ca30c;
+    --warn: #d99a12;
+    --serious: #d9743f;
+    --critical: #c23434;
+
+    --cosmote: #3ab54a;
+    --vodafone: #e60000;
+    --nova: #111318;
+
+    --font-display: "Spectral", "Noto Serif", Georgia, "Times New Roman", serif;
+    --font-body: "IBM Plex Sans", "Noto Sans", Arial, sans-serif;
+    --font-mono: "JetBrains Mono", "SFMono-Regular", Consolas, monospace;
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #e7edec;
+      --paper: #10171a;
+      --surface: #182225;
+      --surface-2: #1e2a2d;
+      --line: #2b3739;
+      --muted: #93a6a3;
+      --accent: #5ad3da;
+      --accent-strong: #a6e9ec;
+      --accent-tint: rgba(90, 211, 218, 0.12);
+      --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 28px -14px rgba(0, 0, 0, 0.6);
+
+      --warn: #f0b23f;
+      --serious: #ef8f63;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ink: #e7edec;
+    --paper: #10171a;
+    --surface: #182225;
+    --surface-2: #1e2a2d;
+    --line: #2b3739;
+    --muted: #93a6a3;
+    --accent: #5ad3da;
+    --accent-strong: #a6e9ec;
+    --accent-tint: rgba(90, 211, 218, 0.12);
+    --shadow: 0 1px 2px rgba(0, 0, 0, 0.35), 0 10px 28px -14px rgba(0, 0, 0, 0.6);
+
+    --warn: #f0b23f;
+    --serious: #ef8f63;
+  }
+
+  /* ─────────────────────── Base ─────────────────────── */
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--font-body);
+    font-size: 15.5px;
+    line-height: 1.6;
+    -webkit-font-smoothing: antialiased;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    html { scroll-behavior: smooth; }
+  }
+  h1, h2, h3 { font-family: var(--font-display); font-weight: 600; text-wrap: balance; color: var(--ink); }
+  a { color: var(--accent-strong); }
+  a:focus-visible, button:focus-visible, [tabindex]:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+    border-radius: 3px;
+  }
+  ::selection { background: var(--accent-tint); }
+  code, .mono { font-family: var(--font-mono); }
+  .tabular { font-variant-numeric: tabular-nums; }
+
+  /* ─────────────────────── Masthead ─────────────────────── */
+  .page-head {
+    padding: 40px 24px 30px;
+    border-bottom: 1px solid var(--line);
+    background:
+      radial-gradient(120% 180% at 0% 0%, var(--accent-tint), transparent 55%),
+      var(--surface);
+  }
+  .page-head-inner { max-width: 1180px; margin: 0 auto; }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: var(--accent-strong);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .eyebrow::before {
+    content: "";
+    width: 7px; height: 7px; border-radius: 50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-tint);
+  }
+  .page-head h1 {
+    margin: 10px 0 8px;
+    font-size: clamp(2rem, 4vw, 2.75rem);
+    letter-spacing: -0.01em;
+  }
+  .dek { max-width: 60ch; color: var(--muted); font-size: 1.02rem; margin: 0; }
+
+  /* ─────────────────────── Layout ─────────────────────── */
+  .layout {
+    max-width: 1180px;
+    margin: 0 auto;
+    padding: 32px 24px 80px;
+    display: grid;
+    grid-template-columns: 216px minmax(0, 1fr);
+    gap: 44px;
+    align-items: start;
+  }
+  @media (max-width: 900px) {
+    .layout { grid-template-columns: 1fr; }
+  }
+
+  nav.toc {
+    position: sticky;
+    top: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  nav.toc .toc-label {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.1em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin: 0 0 8px 10px;
+  }
+  nav.toc a {
+    text-decoration: none;
+    color: var(--ink);
+    font-size: 13.5px;
+    padding: 7px 10px;
+    border-radius: 7px;
+    border-left: 2px solid transparent;
+  }
+  nav.toc a:hover { background: var(--surface-2); }
+  nav.toc a b { font-family: var(--font-mono); color: var(--muted); font-weight: 500; margin-right: 6px; }
+
+  .legend-card {
+    margin-top: 22px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface);
+    padding: 13px 14px;
+  }
+  .legend-card h4 {
+    margin: 0 0 8px;
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    color: var(--muted);
+    font-weight: 600;
+  }
+  .legend-row { display: flex; align-items: center; gap: 8px; font-size: 12.5px; padding: 3px 0; }
+  .dot { width: 9px; height: 9px; border-radius: 50%; flex-shrink: 0; }
+
+  @media (max-width: 900px) {
+    nav.toc {
+      position: static;
+      flex-direction: row;
+      overflow-x: auto;
+      gap: 6px;
+      padding-bottom: 6px;
+      -webkit-overflow-scrolling: touch;
+    }
+    nav.toc .toc-label { display: none; }
+    nav.toc a { white-space: nowrap; border: 1px solid var(--line); }
+    .legend-card { display: none; }
+  }
+
+  main { min-width: 0; }
+
+  section.doc-section { margin-bottom: 56px; scroll-margin-top: 18px; }
+  section.doc-section > .kicker {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent-strong);
+    letter-spacing: 0.06em;
+  }
+  section.doc-section h2 { font-size: 1.55rem; margin: 4px 0 6px; }
+  section.doc-section > .lede { color: var(--muted); max-width: 68ch; margin: 0 0 22px; }
+
+  p { max-width: 68ch; }
+  h3 { font-size: 1.08rem; margin: 28px 0 8px; }
+  h3 .mono-h { font-family: var(--font-mono); font-weight: 500; color: var(--accent-strong); }
+
+  .callout {
+    border: 1px solid var(--line);
+    border-left: 3px solid var(--accent);
+    background: var(--surface);
+    border-radius: 0 10px 10px 0;
+    padding: 12px 16px;
+    max-width: 68ch;
+    font-size: 14px;
+    color: var(--ink);
+    margin: 16px 0;
+  }
+  .callout b { color: var(--accent-strong); }
+
+  /* literal UI control label, as printed in-app */
+  .ui {
+    display: inline-flex;
+    align-items: center;
+    font-family: var(--font-mono);
+    font-size: 12.5px;
+    font-weight: 500;
+    background: var(--accent-tint);
+    color: var(--accent-strong);
+    border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+    border-radius: 6px;
+    padding: 1px 7px;
+    white-space: nowrap;
+  }
+
+  .scrollx { overflow-x: auto; border-radius: 10px; }
+
+  /* ─────────────────────── Definition table (real reference data) ─────────────────────── */
+  table.ref {
+    border-collapse: collapse;
+    width: 100%;
+    min-width: 620px;
+    font-size: 13.5px;
+    background: var(--surface);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    overflow: hidden;
+  }
+  table.ref th, table.ref td {
+    text-align: left;
+    padding: 9px 13px;
+    border-bottom: 1px solid var(--line);
+    vertical-align: top;
+  }
+  table.ref thead th {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    background: var(--surface-2);
+    font-weight: 600;
+  }
+  table.ref tbody tr:last-child td { border-bottom: none; }
+  table.ref td.num { font-family: var(--font-mono); }
+  .pill-yes { color: var(--good); font-weight: 600; }
+  .pill-no { color: var(--muted); }
+
+  /* ─────────────────────── Mockup frame ─────────────────────── */
+  .mock-wrap { margin: 18px 0 6px; }
+  .mock-frame {
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    overflow: hidden;
+  }
+  .mock-frame .mf-bar {
+    display: flex; gap: 6px; align-items: center;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--line);
+    background: var(--surface-2);
+  }
+  .mf-bar .mf-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line); }
+  .mf-bar span.mf-title { margin-left: 6px; font-family: var(--font-mono); font-size: 10.5px; color: var(--muted); letter-spacing: 0.04em; }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 16px; height: 16px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: var(--surface);
+    font-family: var(--font-mono);
+    font-size: 10px;
+    font-weight: 600;
+    flex-shrink: 0;
+  }
+
+  .legend-list { list-style: none; margin: 14px 0 0; padding: 0; display: grid; gap: 9px; }
+  .legend-list li { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; }
+  .legend-list li > span:last-child { flex: 1; }
+  .legend-list li .badge { margin-top: 2px; }
+  .legend-list b { color: var(--ink); }
+
+  /* masthead mockup content */
+  .mm { padding: 18px; display: grid; gap: 16px; }
+  .mm-top { display: flex; flex-wrap: wrap; gap: 18px; align-items: flex-start; justify-content: space-between; }
+  .mm-eyebrow { font-family: var(--font-mono); font-size: 9.5px; letter-spacing: 0.14em; color: var(--accent-strong); text-transform: uppercase; }
+  .mm-title { font-family: var(--font-display); font-weight: 700; font-size: 1.5rem; margin: 3px 0 8px; }
+  .chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    border: 1px solid var(--line); border-radius: 6px;
+    background: var(--paper); padding: 4px 9px;
+    font-size: 11px; color: var(--muted);
+  }
+  .chip b { color: var(--ink); font-family: var(--font-mono); font-weight: 600; }
+  .chip-row { display: flex; gap: 7px; flex-wrap: wrap; }
+
+  .mm-field { text-align: left; min-width: 170px; }
+  .mm-field label { display: block; font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 4px; }
+  .mm-select {
+    border: 1px solid var(--line); border-radius: 6px; background: var(--paper);
+    padding: 6px 9px; font-size: 12.5px; display: flex; justify-content: space-between; gap: 8px;
+  }
+  .mm-pills { display: flex; gap: 5px; flex-wrap: wrap; margin-top: 6px; }
+  .mm-pills span { font-size: 10.5px; color: var(--muted); }
+  .mm-pills span.flag { color: var(--critical); font-weight: 600; }
+
+  .mm-hero { text-align: right; }
+  .mm-hero .hl { font-size: 9.5px; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); }
+  .mm-hero .hn { font-family: var(--font-display); font-weight: 700; font-size: 2.3rem; line-height: 1; margin: 3px 0; }
+  .mm-hero .hs { font-size: 10.5px; color: var(--muted); }
+  .hn.c-good { color: var(--good); }
+
+  .mm-ops { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; border-top: 1px solid var(--line); padding-top: 12px; font-size: 11.5px; color: var(--muted); }
+  .op { display: flex; align-items: center; gap: 6px; color: var(--ink); }
+  .op i { width: 9px; height: 9px; border-radius: 50%; display: inline-block; }
+
+  /* options bar mockup */
+  .ob { padding: 14px 16px; display: flex; flex-wrap: wrap; gap: 16px; align-items: center; }
+  .segctrl { display: inline-flex; border: 1px solid var(--line); border-radius: 7px; padding: 2px; background: var(--paper); }
+  .segctrl span { padding: 4px 10px; font-size: 11.5px; border-radius: 5px; color: var(--muted); }
+  .segctrl span.on { background: var(--accent-tint); color: var(--accent-strong); font-weight: 600; }
+  .cbx { display: inline-flex; align-items: center; gap: 6px; font-size: 11.5px; color: var(--muted); }
+  .cbx .box { width: 12px; height: 12px; border: 1.5px solid var(--muted); border-radius: 3px; display: inline-block; position: relative; }
+  .cbx .box.on { background: var(--accent); border-color: var(--accent); }
+  .cbx .box.on::after { content: "✓"; position: absolute; inset: 0; color: var(--surface); font-size: 9px; line-height: 12px; text-align: center; }
+  .cbx .box.off-disabled { opacity: 0.4; }
+
+  /* kpi row mockup */
+  .kpirow { display: grid; grid-template-columns: 1fr auto auto; gap: 18px; align-items: center; padding: 14px 16px; }
+  .kpirow .lbl { font-size: 13px; font-weight: 600; }
+  .kpirow .cell { text-align: right; min-width: 120px; }
+  .kpirow .meter { height: 4px; border-radius: 3px; background: color-mix(in srgb, var(--good) 18%, transparent); width: 110px; margin-left: auto; margin-bottom: 5px; overflow: hidden; }
+  .kpirow .meter i { display: block; height: 100%; background: var(--good); width: 92%; }
+  .kpirow .val { font-family: var(--font-mono); font-weight: 700; font-size: 14px; }
+  .kpirow .best { font-family: var(--font-mono); font-size: 8.5px; text-transform: uppercase; color: var(--muted); letter-spacing: 0.05em; margin-right: 6px; }
+  .kpirow .sub { font-family: var(--font-mono); font-size: 10px; color: var(--muted); margin-top: 2px; }
+  .kpirow .total .val { color: var(--muted); font-weight: 500; }
+
+  /* mix bars */
+  .mixbar { display: flex; height: 9px; border-radius: 5px; overflow: hidden; gap: 1px; width: 100%; }
+  .mixbar span { display: block; }
+  .mixlegend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 8px; font-size: 10.5px; color: var(--muted); }
+  .mixlegend i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 4px; vertical-align: -1px; }
+
+  /* pies */
+  .pies { display: flex; gap: 26px; flex-wrap: wrap; padding: 16px; justify-content: center; }
+  .pie-block { text-align: center; }
+  .pie {
+    width: 108px; height: 108px; border-radius: 50%; margin: 0 auto 8px;
+  }
+  .pie-cap { font-size: 11px; font-weight: 600; margin-bottom: 8px; }
+  .pie-legend { text-align: left; font-size: 10.5px; color: var(--muted); display: grid; gap: 3px; }
+  .pie-legend i { width: 7px; height: 7px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+
+  /* recipe cards */
+  .recipes { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); }
+  .recipe {
+    border: 1px solid var(--line); border-radius: 10px; background: var(--surface);
+    padding: 14px 16px; box-shadow: var(--shadow);
+  }
+  .recipe .q { font-family: var(--font-display); font-weight: 600; font-size: 14.5px; margin: 0 0 8px; }
+  .recipe .q::before { content: "» "; color: var(--accent); }
+  .recipe ul { margin: 0; padding-left: 18px; font-size: 13px; color: var(--muted); }
+  .recipe li { margin-bottom: 3px; }
+  .recipe li b { color: var(--ink); }
+
+  footer.page-foot {
+    max-width: 1180px; margin: 0 auto; padding: 0 24px 60px;
+    color: var(--muted); font-size: 12px;
+  }
+</style>
+
+<header class="page-head">
+  <div class="page-head-inner">
+    <div class="eyebrow">Οδηγός χρήσης</div>
+    <h1>Summary</h1>
+    <p class="dek">
+      Τι δείχνει η καρτέλα «Summary» — η κεφαλίδα, οι επιλογές προβολής, και οι πίνακες κλήσεων / PS Data — χωρίς κώδικα και χωρίς queries.
+      Μόνο τι βλέπεις στην οθόνη και τι σημαίνει.
+    </p>
+  </div>
+</header>
+
+<div class="layout">
+  <nav class="toc" aria-label="Περιεχόμενα">
+    <div class="toc-label">Περιεχόμενα</div>
+    <a href="#intro"><b>01</b>Τι είναι</a>
+    <a href="#header"><b>02</b>Η κεφαλίδα</a>
+    <a href="#options"><b>03</b>Επιλογές προβολής</a>
+    <a href="#calls"><b>04</b>Πίνακες κλήσεων</a>
+    <a href="#data"><b>05</b>PS Data Stats</a>
+    <a href="#colors"><b>06</b>Χρώματα</a>
+    <a href="#recipes"><b>07</b>Σενάρια χρήσης</a>
+
+    <div class="legend-card">
+      <h4>Χρωματικός οδηγός</h4>
+      <div class="legend-row"><span class="dot" style="background:var(--good)"></span>Καλή τιμή</div>
+      <div class="legend-row"><span class="dot" style="background:var(--warn)"></span>Οριακή</div>
+      <div class="legend-row"><span class="dot" style="background:var(--serious)"></span>Χαμηλή</div>
+      <div class="legend-row"><span class="dot" style="background:var(--critical)"></span>Κρίσιμη</div>
+      <div style="height:8px"></div>
+      <div class="legend-row"><span class="dot" style="background:var(--cosmote)"></span>COSMOTE</div>
+      <div class="legend-row"><span class="dot" style="background:var(--vodafone)"></span>VODAFONE</div>
+      <div class="legend-row"><span class="dot" style="background:var(--nova);box-shadow:inset 0 0 0 1px var(--line)"></span>NOVA</div>
+    </div>
+  </nav>
+
+  <main>
+
+    <!-- ═══════════════════════ 1. INTRO ═══════════════════════ -->
+    <section class="doc-section" id="intro">
+      <div class="kicker">01 — Εισαγωγή</div>
+      <h2>Τι είναι το Summary</h2>
+      <p class="lede">
+        Το Summary είναι η έτοιμη αναφορά της εφαρμογής: παίρνει ό,τι έχεις επιλέξει (database, collections, φίλτρα)
+        και το μετατρέπει αυτόματα σε πίνακες KPI ανά operator — χωρίς να χρειάζεται να γράψεις κανένα query.
+        Ενημερώνεται live· άλλαξε database ή collections πάνω στην ίδια σελίδα και οι πίνακες ξαναφτιάχνονται.
+      </p>
+      <div class="callout">
+        Η αναφορά έχει δύο «μεγέθη»: <b>Full</b> (όλη η λεπτομέρεια, για πλήρη ανάλυση/έλεγχο) και
+        <b>Compact</b> (μια πυκνή σύνοψη μίας–δύο σελίδων, για γρήγορη ματιά ή εκτύπωση). Εναλλάσσονται με ένα
+        κουμπί στην κεφαλίδα — βλ. <a href="#options">§03</a>.
+      </div>
+    </section>
+
+    <!-- ═══════════════════════ 2. HEADER ═══════════════════════ -->
+    <section class="doc-section" id="header">
+      <div class="kicker">02 — Πάνω μέρος της σελίδας</div>
+      <h2>Η κεφαλίδα αναφοράς</h2>
+      <p class="lede">
+        Το πρώτο πλαίσιο της σελίδας. Δείχνει σε ποιο διάστημα αναφέρεται η ανάλυση, πάνω σε ποια δεδομένα τρέχει,
+        και το ένα «νούμερο-βιτρίνα» της (overall success rate). Όλα τα υπόλοιπα κάτω στη σελίδα απλώς αναλύουν
+        αυτό το νούμερο σε λεπτομέρεια.
+      </p>
+
+      <div class="mock-wrap">
+        <div class="mock-frame">
+          <div class="mf-bar"><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-title">summary — κεφαλίδα</span></div>
+          <div class="mm">
+            <div class="mm-top">
+              <div>
+                <div class="mm-eyebrow">A-Level Analysis</div>
+                <div class="mm-title">Statistics Tables</div>
+                <div class="chip-row">
+                  <span class="chip"><span class="badge">1</span>Week <b>36</b></span>
+                  <span class="chip"><span class="badge">1</span>Period <b>25/08–31/08/2026</b></span>
+                  <span class="chip"><span class="badge">2</span>Loading <b>6/10</b> sources</span>
+                </div>
+              </div>
+              <div class="mm-hero">
+                <div class="hl"><span class="badge">5</span> Overall call success rate</div>
+                <div class="hn c-good">96.4%</div>
+                <div class="hs">18,402 normal releases / 19,088 attempts</div>
+                <div class="hs">412 data tests</div>
+              </div>
+            </div>
+            <div class="mm-top">
+              <div class="mm-field">
+                <label><span class="badge">3</span> Database</label>
+                <div class="mm-select"><span>nqdi_athens_run36</span><span>▾</span></div>
+              </div>
+              <div class="mm-field">
+                <label><span class="badge">4</span> Collections</label>
+                <div class="mm-select"><span>3 collections selected</span><span>▾</span></div>
+                <div class="mm-pills">
+                  <span>route_a_am</span>
+                  <span class="flag">route_a_pm</span>
+                  <span>route_b_am</span>
+                </div>
+              </div>
+            </div>
+            <div class="mm-ops">
+              <span class="badge">6</span>
+              <span>Operators</span>
+              <span class="op"><i style="background:var(--cosmote)"></i>COSMOTE</span>
+              <span class="op"><i style="background:var(--vodafone)"></i>VODAFONE</span>
+              <span class="op"><i style="background:var(--nova);box-shadow:0 0 0 1px var(--line)"></i>NOVA</span>
+            </div>
+          </div>
+        </div>
+
+        <ol class="legend-list" style="margin-top:16px">
+          <li><span class="badge">1</span><span><b>Week / Period</b> — υπολογίζονται αυτόματα από τις χρονοσφραγίδες των κλήσεων/tests που βλέπεις: αριθμός εβδομάδας + διάστημα ημερομηνιών από–έως. Με παραπάνω από ένα collection επιλεγμένο, το «Week» γίνεται <b>εύρος</b> (π.χ. «35–37») αν καλύπτουν διαφορετικές εβδομάδες — δες πώς ακριβώς από κάτω.</span></li>
+          <li><span class="badge">2</span><span><b>Loading n/10 sources</b> — εμφανίζεται όσο «τρέχουν» ακόμα πηγές δεδομένων (κλήσεις, data tests, technology mix, serving band/tech…). Κάθε κάρτα παρακάτω δείχνει το δικό της σκελετό φόρτωσης μέχρι να έρθουν <i>τα δικά της</i> δεδομένα — δεν περιμένουν όλες την πιο αργή.</span></li>
+          <li><span class="badge">3</span><span><b>Database</b> — dropdown επιλογής βάσης· ολόκληρη η αναφορά τρέχει πάνω σε αυτήν.</span></li>
+          <li><span class="badge">4</span><span><b>Collections</b> — πολυ-επιλογή σε αναδυόμενο μενού, με κουμπιά <span class="ui">Select all</span> / <span class="ui">Clear</span>. Ένα όνομα collection εμφανίζεται <span style="color:var(--critical);font-weight:600">κόκκινο</span> όταν έχει έστω μία dropped/failed κλήση χωρίς σχόλιο — γρήγορο σήμα «αυτό θέλει έλεγχο πριν κλείσει».</span></li>
+          <li><span class="badge">5</span><span><b>Overall call success rate</b> — το ένα hero-νούμερο: normal releases / attempts, όλοι οι operators μαζί. Παίρνει χρώμα (πράσινο/πορτοκαλί/κόκκινο) μόνο όταν είναι ενεργά ταυτόχρονα τα <span class="ui">Avoid system release</span> και <span class="ui">Valid calls</span> — αλλιώς μένει ουδέτερο, γιατί η βάση του ποσοστού δεν είναι ακόμα η «καθαρή».</span></li>
+          <li><span class="badge">6</span><span><b>Operators</b> — λεγκέντα χρωμάτων ταυτότητας: αυτά τα ίδια χρώματα ξαναβρίσκεις σε κάθε στήλη operator, σε κάθε πίνακα παρακάτω.</span></li>
+        </ol>
+      </div>
+
+      <h3>Week με παραπάνω από ένα collection επιλεγμένο</h3>
+      <p style="margin-top:-2px;color:var(--muted);font-size:13.5px">
+        Ο κανόνας: το «Week» παίρνει την ISO εβδομάδα της <b>πιο παλιάς</b> χρονοσφραγίδας και την ISO εβδομάδα
+        της <b>πιο πρόσφατης</b> — ανάμεσα σε ό,τι έχεις επιλέξει, όλα τα collections μαζί, όχι το καθένα
+        ξεχωριστά. Όταν οι δύο συμπίπτουν, δείχνει έναν αριθμό. Όταν διαφέρουν — π.χ. δύο collections από
+        διαφορετικές εβδομάδες — δείχνει το εύρος τους.
+      </p>
+      <div class="mock-wrap">
+        <div class="mock-frame">
+          <div class="mf-bar"><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-title">παράδειγμα — 2 collections, διαφορετικές εβδομάδες</span></div>
+          <div style="padding:16px;display:grid;gap:10px;font-size:13px">
+            <div style="display:flex;justify-content:space-between;gap:12px;color:var(--muted)">
+              <span><span class="mono">route_a</span> — 25/08/2026 → 26/08/2026 <span style="color:var(--ink)">(εβδομάδα 35)</span></span>
+            </div>
+            <div style="display:flex;justify-content:space-between;gap:12px;color:var(--muted)">
+              <span><span class="mono">route_b</span> — 07/09/2026 → 08/09/2026 <span style="color:var(--ink)">(εβδομάδα 37)</span></span>
+            </div>
+            <div style="border-top:1px dashed var(--line);padding-top:10px;display:flex;gap:18px;flex-wrap:wrap">
+              <span class="chip"><b>Week 35–37</b></span>
+              <span class="chip">Period <b>25/08 – 08/09/2026</b></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="callout">
+        Όσο η επιλογή μένει μέσα στην ίδια εβδομάδα, το chip δείχνει ένα καθαρό νούμερο (π.χ. «Week 35»). Μόλις
+        τα επιλεγμένα collections καλύψουν περισσότερες, γίνεται αυτόματα εύρος (<span class="mono">35–37</span>) —
+        ώστε να μην εμφανίζεται παραπλανητικά μόνο η πρώτη εβδομάδα ενώ η ανάλυση καλύπτει και άλλες. Το
+        <b>Period</b> δίπλα δείχνει πάντα το ίδιο πράγμα σε ημερομηνίες, για διασταύρωση.
+      </div>
+      <p style="font-size:12px;color:var(--muted)">
+        Μοναδική εξαίρεση: αν η επιλογή γεφυρώνει αλλαγή έτους (π.χ. εβδομάδα 52 → εβδομάδα 1), το εύρος θα
+        εμφανιστεί αριθμητικά «ανάποδο» (52–1) — σπάνιο σενάριο, και το Period δίπλα δείχνει έτσι κι αλλιώς το
+        σωστό πραγματικό διάστημα.
+      </p>
+    </section>
+
+    <!-- ═══════════════════════ 3. OPTIONS ═══════════════════════ -->
+    <section class="doc-section" id="options">
+      <div class="kicker">03 — Γραμμή ελέγχων</div>
+      <h2>Οι επιλογές προβολής</h2>
+      <p class="lede">
+        Ακριβώς κάτω από την κεφαλίδα, μία γραμμή με ένα διακόπτη και πέντε κουτάκια. Δεν αλλάζουν ποια δεδομένα
+        υπάρχουν στη βάση — αλλάζουν πώς παρουσιάζονται στη σελίδα (ποια σενάριο υπολογισμού, τι φαίνεται/κρύβεται).
+      </p>
+
+      <div class="mock-wrap">
+        <div class="mock-frame">
+          <div class="mf-bar"><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-title">γραμμή ελέγχων</span></div>
+          <div class="ob">
+            <span class="badge">1</span>
+            <div class="segctrl"><span>Full</span><span class="on">Compact</span></div>
+            <span class="badge">2</span><label class="cbx"><span class="box on"></span>Valid calls</label>
+            <span class="badge">3</span><label class="cbx"><span class="box on"></span>Avoid system release</label>
+            <span class="badge">4</span><label class="cbx"><span class="box on"></span>Hide incl. SR</label>
+            <span class="badge">5</span><label class="cbx"><span class="box on"></span>Highlight best</label>
+            <span class="badge">6</span><label class="cbx"><span class="box"></span>Hide empty rows</label>
+          </div>
+        </div>
+      </div>
+
+      <div class="scrollx" style="margin-top:18px">
+      <table class="ref">
+        <thead><tr><th style="width:26px"></th><th>Επιλογή</th><th>Προεπιλογή</th><th>Τι κάνει</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="num">1</td>
+            <td><span class="ui">Full</span> / <span class="ui">Compact</span></td>
+            <td>Compact</td>
+            <td>Διακόπτης, όχι κουτάκι — αλλάζει το σχήμα <b>όλης</b> της αναφοράς. <b>Compact</b>: οι πίνακες κλήσεων κρατούν μόνο Total Calls + τα 3 rates + POLQA avg MOS· τα PS Data tests μαζεύονται σε λιγότερα, πυκνότερα sections (βλ. §05) — στόχος, να χωρά σε 1–2 σελίδες. <b>Full</b>: κάθε γραμμή KPI, κάθε section ξεχωριστά, οι κάρτες ανά operator πάνω από τους πίνακες κλήσεων, και τα δύο pie charts Serving Band/Technology.</td>
+          </tr>
+          <tr>
+            <td class="num">2</td>
+            <td><span class="ui">Valid calls</span></td>
+            <td>Ενεργό</td>
+            <td>Βγάζει από <b>όλους</b> τους υπολογισμούς τις εγγραφές που είναι σημαδεμένες ως μη έγκυρες (isValid = 0). Δεν επηρεάζει τη γραμμή <b>Fake Event(s)</b> στους πίνακες κλήσεων — αυτή μετράει τις ίδιες εγγραφές πάντα, ανεξάρτητα από το κουτάκι.</td>
+          </tr>
+          <tr>
+            <td class="num">3</td>
+            <td><span class="ui">Avoid system release</span></td>
+            <td>Ενεργό</td>
+            <td>Τα τρία βασικά ποσοστά (Call Success / Dropped Call / Access Failure Rate) υπολογίζονται χωρίς τις κλήσεις που έκλεισε το ίδιο το σύστημα (system release), όχι ο χρήστης ή το δίκτυο. Η τιμή <i>με</i> αυτές μέσα μένει διαθέσιμη ως δεύτερη, μικρή γραμμή «incl. SR» κάτω από κάθε νούμερο — εκτός αν είναι ενεργό το επόμενο κουτάκι.</td>
+          </tr>
+          <tr>
+            <td class="num">4</td>
+            <td><span class="ui">Hide incl. SR</span></td>
+            <td>Ενεργό (κρυμμένο)</td>
+            <td>Κρύβει αυτή τη δεύτερη γραμμή «incl. SR». Ενεργοποιείται μόνο όσο είναι ενεργό το <span class="ui">Avoid system release</span> — χωρίς αυτό, δεν υπάρχει δεύτερο σενάριο να κρυφτεί. Σβήσ' το όποτε θες να συγκρίνεις τα δύο σενάρια σε κάθε κελί.</td>
+          </tr>
+          <tr>
+            <td class="num">5</td>
+            <td><span class="ui">Highlight best</span></td>
+            <td>Ενεργό</td>
+            <td>Στις κύριες γραμμές KPI, βάζει την ετικέτα <span class="mono">best</span> δίπλα στην καλύτερη τιμή ανάμεσα στους operators — μόνο όταν οι τιμές τους όντως διαφέρουν.</td>
+          </tr>
+          <tr>
+            <td class="num">6</td>
+            <td><span class="ui">Hide empty rows</span></td>
+            <td>Ανενεργό</td>
+            <td>Αποκρύπτει γραμμές KPI που είναι μηδενικές/κενές και για τους τρεις operators <b>και</b> για τη στήλη Total. Χρήσιμο όταν μια κατηγορία (π.χ. FREE table) δεν έχει καθόλου δεδομένα σε κάποιο μετρικό.</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+    </section>
+
+    <!-- ═══════════════════════ 4. CALL TABLES ═══════════════════════ -->
+    <section class="doc-section" id="calls">
+      <div class="kicker">04 — Voice</div>
+      <h2>Πίνακες κλήσεων — GSM &amp; FREE</h2>
+      <p class="lede">
+        Δύο κάρτες, ίδια δομή πίνακα (KPI × operator × Total), διαφορετικό υποσύνολο κλήσεων: <b>«GSM Call Stats»</b>
+        και <b>«Free (2G-3G-LTE) Call Stats»</b>. Σε <span class="ui">Compact</span> μπαίνουν η μία δίπλα στην άλλη
+        σε μισό πλάτος· σε <span class="ui">Full</span>, η μία κάτω από την άλλη με πλήρη λεπτομέρεια.
+      </p>
+
+      <h3>Πώς διαβάζεται μία γραμμή</h3>
+      <div class="mock-wrap">
+        <div class="mock-frame">
+          <div class="mf-bar"><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-title">Call Success Rate (%) — μία γραμμή</span></div>
+          <div class="kpirow" style="border-bottom:1px solid var(--line)">
+            <div class="lbl"><span class="badge">1</span> Call Success Rate (%)</div>
+            <div class="cell">
+              <div class="meter"><i></i></div>
+              <div><span class="best"><span class="badge">3</span>best</span><span class="val">96.9%</span></div>
+              <div class="sub"><span class="badge">4</span>sum=9,842</div>
+            </div>
+            <div class="cell total">
+              <div><span class="val">95.1%</span></div>
+              <div class="sub"><span class="badge">5</span>Total</div>
+            </div>
+          </div>
+          <div class="kpirow">
+            <div class="lbl" style="font-weight:400;color:var(--muted);font-size:12px"><span class="badge">2</span>δεύτερη γραμμή, όταν «Hide incl. SR» είναι σβηστό</div>
+            <div class="cell"><div class="sub">incl. SR 95.4%</div></div>
+            <div class="cell total"></div>
+          </div>
+        </div>
+        <ol class="legend-list">
+          <li><span class="badge">1</span><span>Η <b>μπάρα-μετρητής</b> (πράσινο → κόκκινο) δείχνει πόσο καλή είναι η τιμή σε σχέση με τα κατώφλια — βλ. <a href="#colors">§06</a>. Μόνο τα ποσοστά παίρνουν μπάρα.</span></li>
+          <li><span class="badge">2</span><span>Η γραμμή <span class="mono">incl. SR …</span> είναι το <i>ίδιο</i> KPI υπολογισμένο <i>με</i> τα system releases μέσα στη βάση — για σύγκριση με το κύριο νούμερο. Εμφανίζεται μόνο αν το <span class="ui">Hide incl. SR</span> είναι σβηστό.</span></li>
+          <li><span class="badge">3</span><span>Η ετικέτα <span class="mono">best</span> σημαδεύει τον operator με την καλύτερη τιμή σε αυτή τη γραμμή (μόνο σε κύριες γραμμές, μόνο όταν διαφέρουν).</span></li>
+          <li><span class="badge">4</span><span><span class="mono">sum=…</span> είναι το πλήθος πίσω από το ποσοστό (π.χ. πόσες Normal Releases αποτελούν αυτό το 96.9%) — εμφανίζεται κάτω από τα τρία βασικά rate KPIs.</span></li>
+          <li><span class="badge">5</span><span>Η δεξιότερη στήλη <b>Total</b> υπάρχει πάντα — άθροισμα/υπολογισμός πάνω σε όλους τους operators μαζί, ξεχωρισμένη με κάθετη γραμμή.</span></li>
+        </ol>
+      </div>
+
+      <h3>Τι δείχνει κάθε τύπος γραμμής</h3>
+      <div class="scrollx">
+      <table class="ref">
+        <thead><tr><th>Τύπος</th><th>Παραδείγματα γραμμών</th><th>Μορφή</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Ρυθμός (%)</td>
+            <td>Call Success Rate, Dropped Call Rate, Access Failure Rate, System Release Rate</td>
+            <td>Ποσοστό + μπάρα-μετρητής + <span class="mono">sum=</span> πλήθος</td>
+          </tr>
+          <tr>
+            <td>Πλήθος</td>
+            <td>Call Attempts, Total Calls, Normal Releases, Dropped Calls, System Releases, Unsuccessful Call Attempts (± VoLTE / CS)</td>
+            <td>Ακέραιος αριθμός</td>
+          </tr>
+          <tr>
+            <td>Τιμή</td>
+            <td>POLQA avg MOS, MOS UL/DL (μέσος όρος + εύρος min–max + δείγματα), MOC/MTC/CS Call Setup Time, Number of 900/1800 band Cells, SRVCC attempts, Fake Event(s)</td>
+            <td>Αριθμός με μονάδα, δείγματα <span class="mono">n=</span>, ενίοτε εύρος</td>
+          </tr>
+          <tr>
+            <td>Μείγμα (μπάρα)</td>
+            <td>Call outcome mix, Codec Type Usage %, Technology mix</td>
+            <td>Οριζόντια part-to-whole μπάρα + λεγκέντα — βλ. παρακάτω</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout">
+        <b>Fake Event(s)</b> μετράει sessions με δύο ταυτόχρονες προϋποθέσεις: <span class="mono">isValid = 0</span>
+        <b>ΚΑΙ</b> σχόλιο που ξεκινάει από τη λέξη <span class="mono">"fake"</span> (χωρίς διάκριση πεζών/κεφαλαίων)
+        — ίδιο κριτήριο με αυτό που θέτει η ίδια η εφαρμογή το <span class="mono">isValid = 0</span> όταν γράφεις
+        σχόλιο. Ένα session με <span class="mono">isValid = 0</span> αλλά χωρίς σχόλιο, ή με ένα εντελώς άσχετο
+        σχόλιο (π.χ. "route ok"), <b>δεν</b> μετράει εδώ — μόνο το <span class="mono">isValid=0</span> ποτέ δεν
+        αρκούσε από μόνο του, μπορεί να προέρχεται και από το ίδιο το import pipeline (ενημέρωση 2026-09-02, βλ.
+        <span class="mono">alev quries/FAKE EVENT LIST.sql</span>) — ανεξάρτητο από το <span class="ui">Valid calls</span>
+        checkbox, που μόνο κρύβει τα isValid=0 από τα υπόλοιπα στατιστικά.
+      </div>
+
+      <h3>Οι τρεις μπάρες-μείγματα</h3>
+      <div class="mock-wrap" style="display:grid;gap:18px">
+        <div class="mock-frame">
+          <div class="mf-bar"><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-title">Call outcome mix</span></div>
+          <div style="padding:16px">
+            <div class="mixbar">
+              <span style="width:82%;background:var(--good)"></span>
+              <span style="width:6%;background:#9085e9"></span>
+              <span style="width:8%;background:var(--serious)"></span>
+              <span style="width:4%;background:var(--critical)"></span>
+            </div>
+            <div class="mixlegend">
+              <span><i style="background:var(--good)"></i>Normal release</span>
+              <span><i style="background:#9085e9"></i>System release</span>
+              <span><i style="background:var(--serious)"></i>Dropped</span>
+              <span><i style="background:var(--critical)"></i>Access fail</span>
+            </div>
+          </div>
+        </div>
+        <p style="margin:-6px 0 0;font-size:13.5px;color:var(--muted)">
+          Πώς έκλεισαν οι κλήσεις, σε ένα κοίταγμα — τέσσερα τμήματα ανάλογα με το πλήθος τους. Ίδια λογική
+          part-to-whole και στο <b>Codec Type Usage %</b> (κατανομή FR AMR WB / AMR HR / AMR / EFR / FR / HR) και στο
+          <b>Technology mix</b> (κατανομή 2G/3G/4G/5G ανά band, από πραγματικά per-band δεδομένα).
+        </p>
+      </div>
+
+      <h3>GSM Call Stats <span class="mono-h">vs</span> Free (2G-3G-LTE) Call Stats</h3>
+      <div class="scrollx">
+      <table class="ref">
+        <thead><tr><th>Κάρτα</th><th>Έχει επιπλέον</th><th>Δεν έχει</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>GSM Call Stats</b></td>
+            <td>MOC / MTC Call Setup Time, Number of 900/1800 band Cells</td>
+            <td>SRVCC attempts, breakdown VoLTE/CS στα Unsuccessful/Dropped</td>
+          </tr>
+          <tr>
+            <td><b>Free (2G-3G-LTE) Call Stats</b></td>
+            <td>Total/Successful/Failed SRVCC attempts, Unsuccessful &amp; Dropped Calls VoLTE / CS ξεχωριστά</td>
+            <td>MOC/MTC Call Setup Time, band Cell counts</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <div class="callout">
+        Μόνο σε <span class="ui">Full</span>: πάνω από τους δύο πίνακες εμφανίζεται μία κάρτα ανά operator με το
+        μεγάλο ποσοστό CSR, τη μπάρα του, και το breakdown Dropped / Access fail / Sys release. Σε
+        <span class="ui">Compact</span> αυτές οι κάρτες λείπουν — τα ίδια νούμερα βρίσκονται ήδη μέσα στον πίνακα.
+      </div>
+    </section>
+
+    <!-- ═══════════════════════ 5. PS DATA ═══════════════════════ -->
+    <section class="doc-section" id="data">
+      <div class="kicker">05 — Data</div>
+      <h2>PS Data Stats</h2>
+      <p class="lede">
+        Μία κάρτα, «PS Data Stats», που περιέχει όλα τα data tests (FTP/HTTP throughput, ping, DNS, browsing,
+        streaming, HTTPS sites…). Κάθε τύπος test είναι ένα <b>section</b> με τη δική του μικρή κάρτα-πίνακα:
+        Test Success Rate, Total/Successful/Failed Tests, και το/τα μετρικά του (π.χ. Mean sustainable
+        throughput σε Mbps, Mean RTT σε ms).
+      </p>
+
+      <h3>Οι 5 ομάδες (Full mode)</h3>
+      <p style="margin-top:-2px;color:var(--muted);font-size:13.5px">
+        Σε <span class="ui">Full</span> τα sections εμφανίζονται ομαδοποιημένα κάτω από τίτλους «Ε1 ·», «Ε2 ·» κ.λπ.
+        Στο <span class="ui">Compact</span> οι τίτλοι ομάδων δεν φαίνονται, αλλά η ομάδα καθορίζει ποια sections
+        επιβιώνουν και πώς συμπτύσσονται:
+      </p>
+      <div class="scrollx">
+      <table class="ref">
+        <thead><tr><th>Ομάδα</th><th>Περιέχει</th><th>Στο Compact</th></tr></thead>
+        <tbody>
+          <tr>
+            <td><b>Ε1 · Bulk throughput</b></td>
+            <td>Capacity DL 10GB / UL 1GB (±ανά link grx/akamai στο Full), HTTP Transfer DL/UL, Ookla DL/UL</td>
+            <td>Capacity και Ookla γίνονται 2 συγχωνευμένα πίνακες DL/UL· HTTP Transfer και το ανά-link breakdown φεύγουν</td>
+          </tr>
+          <tr>
+            <td><b>Ε2 · Latency / Responsiveness</b></td>
+            <td>Ping 40B / 800B / 1000B, DNS Resolution, Interactivity (eGaming)</td>
+            <td>Τα 3 Ping μαζεύονται σε ένα section «Ping (all sizes combined)»· DNS και Interactivity φεύγουν</td>
+          </tr>
+          <tr>
+            <td><b>Ε3 · Browser engines</b></td>
+            <td>Kepler, Kepler +30s Pause, Newton</td>
+            <td class="pill-no">Φεύγει εντελώς</td>
+          </tr>
+          <tr>
+            <td><b>Ε4 · HTTPS sites</b></td>
+            <td>9 site tests: alpha, amazon, car.gr, ebay, google, imdb, in.gr, yahoo, youtube</td>
+            <td>Μαζεύονται σε ένα section «HTTPS sites (all sites combined)»</td>
+          </tr>
+          <tr>
+            <td><b>Ε5 · Video streaming</b></td>
+            <td>YouTube Service, YouTube Service 4K, YouTube Service Live</td>
+            <td class="pill-no">Φεύγει εντελώς</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>Συγχωνευμένοι πίνακες DL/UL (Compact)</h3>
+      <p style="margin-top:-2px;color:var(--muted);font-size:13.5px">
+        Στο <span class="ui">Compact</span>, τα ζευγάρια <i>Capacity DL 10GB / Capacity UL 1GB</i> και
+        <i>Ookla DL / Ookla UL</i> γίνονται το καθένα <b>ένα</b> πίνακα με έξι γραμμές: Test Success Rate DL,
+        Total Tests DL (σύνολο / επιτυχημένα σε ένα κελί), το κύριο metric DL — και μετά η ίδια τριάδα για UL.
+      </p>
+      <div class="mock-wrap">
+        <div class="mock-frame">
+          <div class="mf-bar"><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-title">Capacity DL 10GB / Capacity UL 1GB — compact</span></div>
+          <div style="padding:6px 0">
+            <div class="kpirow" style="padding:10px 16px"><div class="lbl" style="font-size:12.5px">Test Success Rate (%) DL</div><div class="cell"><span class="val" style="font-size:13px">98.2%</span></div><div class="cell total"><span class="val" style="font-size:12px">97.6%</span></div></div>
+            <div class="kpirow" style="padding:10px 16px"><div class="lbl" style="font-size:12.5px">Total Tests DL</div><div class="cell"><span class="val" style="font-size:13px">54 / 53</span></div><div class="cell total"><span class="val" style="font-size:12px">162 / 158</span></div></div>
+            <div class="kpirow" style="padding:10px 16px"><div class="lbl" style="font-size:12.5px;font-weight:700">Mean sustainable throughput (Mbps) DL</div><div class="cell"><span class="val" style="font-size:13px">187.4</span></div><div class="cell total"><span class="val" style="font-size:12px">179.1</span></div></div>
+            <div class="kpirow" style="padding:10px 16px;border-top:1px dashed var(--line)"><div class="lbl" style="font-size:12.5px;color:var(--muted)">… ίδια τριάδα για UL</div><div class="cell"></div><div class="cell total"></div></div>
+          </div>
+        </div>
+      </div>
+
+      <h3>Serving Band / Serving Technology (μόνο Full)</h3>
+      <p style="margin-top:-2px;color:var(--muted);font-size:13.5px">
+        Στην κορυφή της κάρτας «PS Data Stats», δύο μικρά pie chart ανά operator: δείχνουν σε τι band / τεχνολογία
+        ήταν «καμένο» το κινητό όσο έτρεχαν οι δοκιμές FTP / HTTP / Capacity DL.
+      </p>
+      <div class="mock-wrap">
+        <div class="mock-frame">
+          <div class="mf-bar"><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-dot"></span><span class="mf-title">Serving Band/Technology — παράδειγμα, ένας operator</span></div>
+          <div class="pies">
+            <div class="pie-block">
+              <div class="pie-cap">Serving Band (5G, per Time)</div>
+              <div class="pie" style="background: conic-gradient(var(--accent) 0% 58%, color-mix(in srgb, var(--accent) 55%, var(--paper)) 58% 83%, color-mix(in srgb, var(--accent) 30%, var(--paper)) 83% 100%)"></div>
+              <div class="pie-legend">
+                <div><i style="background:var(--accent)"></i>NR28 — 58%</div>
+                <div><i style="background:color-mix(in srgb, var(--accent) 55%, var(--paper))"></i>NR1 — 25%</div>
+                <div><i style="background:color-mix(in srgb, var(--accent) 30%, var(--paper))"></i>NR78 — 17%</div>
+              </div>
+            </div>
+            <div class="pie-block">
+              <div class="pie-cap">Serving Technology (per Time)</div>
+              <div class="pie" style="background: conic-gradient(var(--accent-strong) 0% 44%, var(--accent) 44% 70%, color-mix(in srgb, var(--accent) 40%, var(--paper)) 70% 88%, var(--muted) 88% 100%)"></div>
+              <div class="pie-legend">
+                <div><i style="background:var(--accent-strong)"></i>LTE-5GNR — 44%</div>
+                <div><i style="background:var(--accent)"></i>LTE CA — 26%</div>
+                <div><i style="background:color-mix(in srgb, var(--accent) 40%, var(--paper))"></i>LTE — 18%</div>
+                <div><i style="background:var(--muted)"></i>No data transfer — 12%</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <p style="font-size:13px;color:var(--muted);margin-top:-4px">
+        Το «Serving Band» δείχνει μόνο τα 5G NR bands (NR28 / NR1 / NR78)· το «Serving Technology» δείχνει όλο το
+        φάσμα από LTE-5GNR έως GPRS, με το «No data transfer» πάντα σε ξεχωριστό γκρι χρώμα.
+      </p>
+
+      <div class="callout">
+        Στο <span class="ui">Compact</span>, τα surviving sections μπαίνουν σε πλέγμα 2 στηλών χωρίς επικεφαλίδες
+        ομάδας — κάθε section έχει ήδη το δικό του όνομα μέσα στην κάρτα του. Στο <span class="ui">Full</span>,
+        εμφανίζονται το ένα κάτω από το άλλο, με τον τίτλο ομάδας («Ε1 ·» κ.λπ.) πάνω από την πρώτη κάρτα κάθε ομάδας.
+      </div>
+    </section>
+
+    <!-- ═══════════════════════ 6. COLORS ═══════════════════════ -->
+    <section class="doc-section" id="colors">
+      <div class="kicker">06 — Οπτική γλώσσα</div>
+      <h2>Πώς διαβάζονται τα χρώματα</h2>
+      <p class="lede">
+        Δύο διαφορετικά «συστήματα» χρωμάτων συνυπάρχουν στη σελίδα — μη τα μπερδεύεις: το ένα δείχνει
+        <b>κατάσταση</b> (καλό/κακό), το άλλο δείχνει <b>ταυτότητα</b> (ποιος operator).
+      </p>
+
+      <h3>Κατάσταση — μπάρες &amp; hero νούμερο</h3>
+      <div class="scrollx">
+      <table class="ref">
+        <thead><tr><th></th><th>Καλή</th><th>Οριακή</th><th>Χαμηλή</th><th>Κρίσιμη</th></tr></thead>
+        <tbody>
+          <tr>
+            <td>Μπάρα σε <b>ρυθμό όπου το «πιο ψηλά» είναι καλύτερο</b><br><span style="color:var(--muted);font-size:12px">π.χ. Call/Test Success Rate</span></td>
+            <td class="num" style="color:var(--good)">≥ 98%</td>
+            <td class="num" style="color:var(--warn)">95–98%</td>
+            <td class="num" style="color:var(--serious)">90–95%</td>
+            <td class="num" style="color:var(--critical)">&lt; 90%</td>
+          </tr>
+          <tr>
+            <td>Μπάρα σε <b>ρυθμό όπου το «πιο χαμηλά» είναι καλύτερο</b><br><span style="color:var(--muted);font-size:12px">π.χ. Dropped / Access Failure Rate</span></td>
+            <td class="num" style="color:var(--good)">≤ 1%</td>
+            <td class="num" style="color:var(--warn)">≤ 2%</td>
+            <td class="num" style="color:var(--serious)">≤ 5%</td>
+            <td class="num" style="color:var(--critical)">&gt; 5%</td>
+          </tr>
+          <tr>
+            <td>Hero νούμερο (<span class="mono">Overall call success rate</span>)<br><span style="color:var(--muted);font-size:12px">δικά του, πιο απλά κατώφλια</span></td>
+            <td class="num" style="color:var(--good)">&gt; 95%</td>
+            <td class="num" style="color:var(--warn)" colspan="2">90–95%</td>
+            <td class="num" style="color:var(--critical)">&lt; 90%</td>
+          </tr>
+        </tbody>
+      </table>
+      </div>
+
+      <h3>Ταυτότητα — operators</h3>
+      <p style="margin-top:-2px;color:var(--muted);font-size:13.5px">
+        Σταθερά χρώματα, ίδια σε κάθε πίνακα και κάρτα της σελίδας — δεν αλλάζουν ποτέ νόημα ανάλογα με την τιμή.
+      </p>
+      <div style="display:flex;gap:18px;flex-wrap:wrap;margin-top:8px">
+        <span class="op" style="font-size:13px"><i style="background:var(--cosmote);width:11px;height:11px"></i>COSMOTE</span>
+        <span class="op" style="font-size:13px"><i style="background:var(--vodafone);width:11px;height:11px"></i>VODAFONE</span>
+        <span class="op" style="font-size:13px"><i style="background:var(--nova);width:11px;height:11px;box-shadow:0 0 0 1px var(--line)"></i>NOVA</span>
+      </div>
+      <p style="font-size:13px;color:var(--muted);margin-top:10px">
+        Η ετικέτα <span class="mono">best</span> δεν έχει δικό της χρώμα — είναι απλά ένα γκρι/ασημί λεκτικό δίπλα
+        στο νούμερο, ελεγχόμενο από το <span class="ui">Highlight best</span>.
+      </p>
+    </section>
+
+    <!-- ═══════════════════════ 7. RECIPES ═══════════════════════ -->
+    <section class="doc-section" id="recipes" style="margin-bottom:20px">
+      <div class="kicker">07 — Πρακτικός οδηγός</div>
+      <h2>Σενάρια χρήσης</h2>
+      <p class="lede">Πέντε συχνά «θέλω να δω…» και ποιο συνδυασμό επιλογών ταιριάζει.</p>
+
+      <div class="recipes">
+        <div class="recipe">
+          <p class="q">Αναφορά μιας σελίδας, για παρουσίαση</p>
+          <ul>
+            <li><span class="ui">Compact</span></li>
+            <li><span class="ui">Hide empty rows</span>: ενεργό</li>
+          </ul>
+        </div>
+        <div class="recipe">
+          <p class="q">Πόσο ακριβώς επηρεάζουν τα system release στα rates</p>
+          <ul>
+            <li><span class="ui">Full</span></li>
+            <li><span class="ui">Avoid system release</span>: ενεργό</li>
+            <li><span class="ui">Hide incl. SR</span>: ανενεργό — για να φανεί η σύγκριση</li>
+          </ul>
+        </div>
+        <div class="recipe">
+          <p class="q">Το ωμό, συνολικό ποσοστό, με τα πάντα μέσα</p>
+          <ul>
+            <li><span class="ui">Avoid system release</span>: ανενεργό — τα rates υπολογίζονται πάνω στη συνολική βάση</li>
+          </ul>
+        </div>
+        <div class="recipe">
+          <p class="q">Ποιο collection χρειάζεται σχολιασμό πριν κλείσει</p>
+          <ul>
+            <li>Κοίτα τα <b style="color:var(--critical)">κόκκινα</b> ονόματα στο dropdown <span class="ui">Collections</span></li>
+          </ul>
+        </div>
+        <div class="recipe">
+          <p class="q">Ποια τεχνολογία (2G/3G/4G/5G) «έπιασε» κάθε operator</p>
+          <ul>
+            <li><span class="ui">Full</span> → γραμμή <b>Technology mix</b> στους πίνακες κλήσεων</li>
+            <li>ή τα δύο pie <b>Serving Band / Technology</b> πάνω στο PS Data Stats</li>
+          </ul>
+        </div>
+        <div class="recipe">
+          <p class="q">Διαφορά GSM vs FREE Call Stats σε ένα σημείο</p>
+          <ul>
+            <li>GSM: setup times &amp; band cells</li>
+            <li>FREE: SRVCC &amp; VoLTE/CS breakdown</li>
+          </ul>
+        </div>
+      </div>
+    </section>
+
+  </main>
+</div>
+
+<footer class="page-foot">
+  Καλύπτει την καρτέλα <span class="ui">Summary</span> όπως εμφανίζεται στην εφαρμογή σήμερα — μόνο τι δείχνει η
+  οθόνη· χωρίς κώδικα, χωρίς queries.
+</footer>
