@@ -339,9 +339,20 @@ const Index = () => {
   useEffect(() => {
     if (activeTab === "calls" && callsSubTab === "list" && lastClickedRowId) {
       setTimeout(() => {
-        const el = document.getElementById(lastClickedRowId);
-        if (el) {
-          el.scrollIntoView({ behavior: "auto", block: "center" });
+        // Η mobile card λίστα ("sm:hidden") και το desktop table ("hidden sm:block") ρεντάρουν
+        // ΚΑΙ ΤΑ ΔΥΟ ταυτόχρονα στο DOM (μόνο το CSS τα κρύβει ανά breakpoint) — παλιά είχαν το
+        // ΙΔΙΟ id, οπότε το getElementById έβρισκε πάντα το πρώτο (mobile), που σε desktop οθόνη
+        // είναι display:none. Το scrollIntoView σε display:none element δεν κάνει τίποτα, γι'αυτό
+        // η λίστα "πήγαινε στην αρχή" αντί στη σωστή θέση. Τώρα διαλέγουμε όποιο από τα δύο id
+        // είναι πραγματικά ορατό (offsetParent !== null) στο τρέχον breakpoint.
+        const desktopEl = document.getElementById(`call-row-desktop-${lastClickedRowId}`);
+        const mobileEl = document.getElementById(`call-row-mobile-${lastClickedRowId}`);
+        const target =
+          desktopEl && desktopEl.offsetParent !== null ? desktopEl :
+          mobileEl && mobileEl.offsetParent !== null ? mobileEl :
+          desktopEl || mobileEl;
+        if (target) {
+          target.scrollIntoView({ behavior: "auto", block: "center" });
         }
       }, 100);
     }
@@ -1919,10 +1930,13 @@ const Index = () => {
                       && prevFileTime !== null
                       && currentFileTime !== null
                       && prevFileTime !== currentFileTime;
-                    const rowId = `call-row-${row.SessionId}-${idx}`;
+                    // Bare κλειδί χωρίς πρόθεμα view — το ίδιο mobile card & desktop table row
+                    // μοιράζονται το ίδιο κλειδί, αλλά έχουν ΞΕΧΩΡΙΣΤΑ DOM id (call-row-mobile-/
+                    // call-row-desktop-) ώστε το scroll-restore useEffect να μην τα μπερδεύει.
+                    const rowKey = `${row.SessionId}-${idx}`;
                     const statusStyle = getAllCallsStatusStyle(row);
                     const openRow = () => {
-                      setLastClickedRowId(rowId);
+                      setLastClickedRowId(rowKey);
                       const record = callRecords.find((call) => call.callId === row.SessionId);
                       if (record) openCallDetail(record);
                     };
@@ -1935,7 +1949,7 @@ const Index = () => {
                           </div>
                         )}
                         <button
-                          id={rowId}
+                          id={`call-row-mobile-${rowKey}`}
                           type="button"
                           onClick={openRow}
                           className={`w-full border-b border-border/60 p-3 text-left transition-colors active:brightness-110 ${getAllCallsRowClass(row)}`}
@@ -1951,7 +1965,7 @@ const Index = () => {
                               </div>
                               <p className="mt-1 truncate font-mono text-[11px] text-muted-foreground">Session {row.SessionId}</p>
                             </div>
-                            <ChevronRight className={`mt-1 h-4 w-4 shrink-0 ${lastClickedRowId === rowId ? "text-primary" : "text-muted-foreground"}`} />
+                            <ChevronRight className={`mt-1 h-4 w-4 shrink-0 ${lastClickedRowId === rowKey ? "text-primary" : "text-muted-foreground"}`} />
                           </div>
 
                           <div className="mt-3 grid grid-cols-3 gap-1.5">
@@ -2050,10 +2064,10 @@ const Index = () => {
                             )}
                             <tr
 
-                              id={`call-row-${row.SessionId}-${idx}`}
+                              id={`call-row-desktop-${row.SessionId}-${idx}`}
                               className={`border-b border-border/60 ${getAllCallsRowClass(row)} cursor-pointer transition-colors`}
                               onClick={() => {
-                                setLastClickedRowId(`call-row-${row.SessionId}-${idx}`);
+                                setLastClickedRowId(`${row.SessionId}-${idx}`);
                                 const record = callRecords.find((c) => c.callId === row.SessionId);
                                 if (record) {
                                   openCallDetail(record);
@@ -2062,7 +2076,7 @@ const Index = () => {
                             >
                               <td className="px-2 py-2 text-foreground">
                                 <div className="flex items-center gap-1">
-                                  {lastClickedRowId === `call-row-${row.SessionId}-${idx}` ? (
+                                  {lastClickedRowId === `${row.SessionId}-${idx}` ? (
                                     <ChevronRight className="h-4 w-4 text-primary" />
                                   ) : (
                                     <div className="w-4 h-4" />
