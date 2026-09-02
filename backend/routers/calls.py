@@ -21,74 +21,23 @@ def update_call_comment(req: CommentRequest):
         conn = get_connection(req.database)
         cursor = conn.cursor()
 
-        wrote_old = False
-        wrote_dw = False
-
-        # Old way: AnalysisComment (comment text, deduped) + AnalysisCommentSessionsBridge
-        # (SessionId -> commentId). Kept alongside the newer mapping table so both
-        # get the write.
-        try:
-            cursor.execute("SELECT commentID FROM AnalysisComment WHERE Comment = ?", (req.comment,))
-            row = cursor.fetchone()
-
-            if row:
-                comment_id = row[0]
-            else:
-                try:
-                    # We must insert it. In SQL Server OUTPUT INSERTED is supported.
-                    cursor.execute("INSERT INTO AnalysisComment (Comment) OUTPUT INSERTED.commentID VALUES (?)", (req.comment,))
-                    comment_id = cursor.fetchone()[0]
-                except Exception:
-                    # Fallback if OUTPUT INSERTED is not supported or identity fails
-                    cursor.execute("INSERT INTO AnalysisComment (Comment) VALUES (?)", (req.comment,))
-                    cursor.execute("SELECT @@IDENTITY")
-                    comment_id = cursor.fetchone()[0]
-
-            # check if it exists in bridge
-            cursor.execute("SELECT sessionID FROM AnalysisCommentSessionsBridge WHERE sessionID = ?", (req.session_id,))
-            if cursor.fetchone():
-                cursor.execute("UPDATE AnalysisCommentSessionsBridge SET commentId = ? WHERE sessionID = ?", (comment_id, req.session_id))
-            else:
-                cursor.execute("INSERT INTO AnalysisCommentSessionsBridge (sessionID, commentId) VALUES (?, ?)", (req.session_id, comment_id))
-
-            wrote_old = True
-        except Exception as e:
-            print(f"Error in update_call_comment old-way bridge update (continuing): {e}")
-            # Reset the transaction (some ODBC drivers abort the whole txn on error)
-            # so the mapping-table write below isn't blocked by this failure.
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-
-        # New way: DwAnalysisCommentToSessionMapping holds one row per SessionId
-        # (SessionId, Comment) — upsert it too.
-        try:
+        # DwAnalysisCommentToSessionMapping holds one row per SessionId
+        # (SessionId, Comment) — upsert it. AnalysisComment/AnalysisCommentSessionsBridge
+        # are deprecated and no longer written to.
+        cursor.execute(
+            "SELECT 1 FROM DwAnalysisCommentToSessionMapping WHERE SessionId = ?",
+            (req.session_id,),
+        )
+        if cursor.fetchone():
             cursor.execute(
-                "SELECT 1 FROM DwAnalysisCommentToSessionMapping WHERE SessionId = ?",
-                (req.session_id,),
+                "UPDATE DwAnalysisCommentToSessionMapping SET Comment = ? WHERE SessionId = ?",
+                (req.comment, req.session_id),
             )
-            if cursor.fetchone():
-                cursor.execute(
-                    "UPDATE DwAnalysisCommentToSessionMapping SET Comment = ? WHERE SessionId = ?",
-                    (req.comment, req.session_id),
-                )
-            else:
-                cursor.execute(
-                    "INSERT INTO DwAnalysisCommentToSessionMapping (SessionId, Comment) VALUES (?, ?)",
-                    (req.session_id, req.comment),
-                )
-
-            wrote_dw = True
-        except Exception as e:
-            print(f"Error in update_call_comment mapping upsert (continuing): {e}")
-            try:
-                conn.rollback()
-            except Exception:
-                pass
-
-        if not wrote_old and not wrote_dw:
-            raise Exception("Could not write comment to AnalysisComment/bridge or DwAnalysisCommentToSessionMapping")
+        else:
+            cursor.execute(
+                "INSERT INTO DwAnalysisCommentToSessionMapping (SessionId, Comment) VALUES (?, ?)",
+                (req.session_id, req.comment),
+            )
 
         # If comment starts with 'fake' or 'FAKE', set session as invalid (Valid = 0), otherwise Valid = 1
         if req.comment and req.comment.lower().startswith("fake"):
@@ -130,7 +79,8 @@ def list_calls(
         cursor = conn.cursor()
 
         # Not every database has DwAnalysisCommentToSessionMapping, so only
-        # join it when it exists; comments there win over AnalysisComment.
+        # join it when it exists. AnalysisComment/AnalysisCommentSessionsBridge
+        # are deprecated and no longer read from.
         cursor.execute(
             "SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'DwAnalysisCommentToSessionMapping'"
         )
@@ -142,9 +92,9 @@ def list_calls(
             else ""
         )
         comment_expr = (
-            "COALESCE(DWC.Comment, AC.Comment, S.InvalidReason)"
+            "COALESCE(DWC.Comment, S.InvalidReason)"
             if has_dw_comments
-            else "COALESCE(AC.Comment, S.InvalidReason)"
+            else "S.InvalidReason"
         )
 
         query = f"""
@@ -234,8 +184,6 @@ def list_calls(
             LEFT JOIN Position POS ON CA.PosId = POS.PosId
             LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
             LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
-			LEFT JOIN AnalysisCommentSessionsBridge ACSB ON ACSB.sessionID = CA.SessionId
-			LEFT JOIN AnalysisComment AC ON ACSB.commentId = AC.commentID
             {dw_comment_join}
             -- Raw ResultsLQ08Avg samples (ίδιο κριτήριο με το A-LEVEL Attachment C query:
             -- OptionalWB BETWEEN 1 AND 5, TestInfo.Valid = 1), σπασμένα σε UL (A->B) / DL (B->A)

@@ -1095,15 +1095,14 @@ ORDER BY ASideLocation`,
   dbo.CallAnalysis.callType,
   dbo.CallAnalysis.callDir,
   dbo.CallAnalysis.callStatus,
-  dbo.AnalysisComment.Comment AS UserComment,
+  dbo.DwAnalysisCommentToSessionMapping.Comment AS UserComment,
   dbo.CallAnalysis.codeDescription AS DiversityComment,
   dbo.FileList.ASideFileName,
   dbo.FileList.BSideFileName,
   dbo.Sessions.valid as SessionValidity
 FROM dbo.Sessions
   INNER JOIN dbo.CallAnalysis ON dbo.Sessions.SessionId = dbo.CallAnalysis.SessionId
-  INNER JOIN dbo.AnalysisCommentSessionsBridge ON dbo.AnalysisCommentSessionsBridge.sessionID = dbo.Sessions.SessionId
-  INNER JOIN dbo.AnalysisComment ON dbo.AnalysisCommentSessionsBridge.commentId = dbo.AnalysisComment.commentID
+  INNER JOIN dbo.DwAnalysisCommentToSessionMapping ON dbo.DwAnalysisCommentToSessionMapping.SessionId = dbo.Sessions.SessionId
   INNER JOIN dbo.FileList ON dbo.FileList.FileId = dbo.Sessions.FileId
 WHERE CollectionName like '%%' AND
   dbo.Sessions.sessionType = 'CALL' AND
@@ -1123,15 +1122,14 @@ WHERE CollectionName like '%%' AND
   dbo.CallAnalysis.callType,
   dbo.CallAnalysis.callDir,
   dbo.CallAnalysis.callStatus,
-  dbo.AnalysisComment.Comment AS UserComment,
+  dbo.DwAnalysisCommentToSessionMapping.Comment AS UserComment,
   dbo.CallAnalysis.codeDescription AS DiversityComment,
   dbo.FileList.ASideFileName,
   dbo.FileList.BSideFileName,
   dbo.Sessions.valid as SessionValidity
 FROM dbo.Sessions
   INNER JOIN dbo.CallAnalysis ON dbo.Sessions.SessionId = dbo.CallAnalysis.SessionId
-  INNER JOIN dbo.AnalysisCommentSessionsBridge ON dbo.AnalysisCommentSessionsBridge.sessionID = dbo.Sessions.SessionId
-  INNER JOIN dbo.AnalysisComment ON dbo.AnalysisCommentSessionsBridge.commentId = dbo.AnalysisComment.commentID
+  INNER JOIN dbo.DwAnalysisCommentToSessionMapping ON dbo.DwAnalysisCommentToSessionMapping.SessionId = dbo.Sessions.SessionId
   INNER JOIN dbo.FileList ON dbo.FileList.FileId = dbo.Sessions.FileId
 WHERE CollectionName like '%%' AND
   dbo.Sessions.sessionType = 'CALL' AND
@@ -1518,8 +1516,8 @@ WHERE CollectionName like '%%' AND Sessions.Valid = 1`,
     sql: `
 SELECT
 	S.SessionId,
-  CAST(p.Latitude  AS FLOAT) AS latitude,
-  CAST(p.Longitude AS FLOAT) AS longitude,
+  --CAST(p.Latitude  AS FLOAT) AS latitude,
+  --CAST(p.Longitude AS FLOAT) AS longitude,
    NULLIF(CAST(raap.DLThroughput AS FLOAT) * 8.0 / 1000000.0, 0) AS ookla_dl_mbps,
   fl.ASideLocation                                AS Location,
   fl.CollectionName,
@@ -1532,81 +1530,49 @@ INNER JOIN FileList                 fl  ON fl.FileId   = s.FileId
 INNER JOIN TestInfo                 ti  ON s.SessionId = ti.SessionId AND ti.Valid = 1
 INNER JOIN ResultsAppTestParameters atp ON ti.TestId   = atp.TestId
 LEFT  JOIN ResultsAppAction         aa  ON ti.TestId   = aa.TestId   AND aa.LastBlock = 1
-LEFT JOIN Position					P	ON ti.PosId	   = p.PosId
+--LEFT JOIN Position					P	ON ti.PosId	   = p.PosId
 
 left join ResultsAppActionPerformance raap ON ti.TestId=raap.TestId
 
-WHERE s.valid = 1 and
-p.Latitude    IS NOT NULL
-  AND p.Longitude   IS NOT NULL
+WHERE s.valid = 1 
+--p.Latitude    IS NOT NULL
+--AND p.Longitude   IS NOT NULL
   AND s.SessionId     IS NOT NULL
-  --AND raap.DLThroughput         IS NOT NULL
-  --AND fl.CollectionName = '{collection}'
+  AND raap.DLThroughput         IS NOT NULL
+  AND fl.CollectionName like '%%'
   --AND fl.ASideLocation  = '{location}'
 ORDER BY ti.TestId, raap.ActionId`,
   },
   {
     label: "OOKLA Speed Test UL",
     category: "Data Tests",
-    sql: `WITH SessionsCTE AS (
-  SELECT SessionId, FileId, info FROM Sessions WHERE valid = 1
-  GROUP BY SessionId, FileId, info
-)
-SELECT
-  ti.SessionId,
-  ti.TestId,
+    sql: `SELECT	S.SessionId,
+  --CAST(p.Latitude  AS FLOAT) AS latitude,
+  --CAST(p.Longitude AS FLOAT) AS longitude,
+   NULLIF(CAST(raap.ULThroughput AS FLOAT) * 8.0 / 1000000.0, 0) AS ookla_ul_mbps,
+  fl.ASideLocation                                AS Location,
   fl.CollectionName,
-  fl.ASideDevice,
-  fl.ASideFileName,
-  fl.ASideNumber,
-  s.info AS Session_Info,
-  ti.TestName,
-  ti.TypeOfTest,
-  fl.ASideLocation,
-  ni.HomeOperator,
-  ni.Technology,
-  t.PrevTechnology as 'Data_Technology',
-  aaf.dir AS Direction,
-  CONVERT(VARCHAR, COALESCE(aa.MsgTime, aaf.MsgTime), 121) AS EndTime,
-  atp.ServiceProvider AS App,
-  atp.ServiceProfileName AS ProfileName,
-  COALESCE(aa.ActionId, aaf.ActionId) AS ActionId,
-  COALESCE(aa.Duration, aaf.Duration) AS 'Duration[ms]',
-  CASE aaf.thp WHEN 0 THEN NULL ELSE aaf.thp END AS 'Throughput[Mbps]',
-  CASE COALESCE(aa.ErrorCode, aaf.ErrorCode) WHEN 0 THEN 'Success' ELSE 'Failed' END AS ActionStatus,
-  aaf.Latency AS 'Latency[ms]',
-  aaf.PacketLossPercent AS 'PacketLoss[%]',
-  ni.CGI,
-  DATEADD(MS, -1 * COALESCE(aa.Duration, aaf.Duration),
-    COALESCE(aa.MsgTime, aaf.MsgTime)) AS StartTime
-FROM SessionsCTE s
-  INNER JOIN FileList fl ON fl.FileId = s.FileId
-  INNER JOIN TestInfo ti ON s.SessionId = ti.SessionId AND ti.Valid = 1
-  INNER JOIN ResultsAppTestParameters atp ON ti.TestId = atp.TestId
-  LEFT JOIN ResultsAppAction aa ON ti.TestId = aa.TestId AND aa.LastBlock = 1
-  LEFT JOIN (
-    SELECT 'DL' AS dir, raap.TestId, raap.ActionId, raap.MsgTime, raap.ErrorCode, raap.NetworkId,
-           CAST(raap.DLThroughput AS FLOAT) * 8.0 / 1000000.0              AS thp,
-           CAST(ISNULL(raap.Ping, raap.Latency) AS FLOAT) / 1000.0         AS ping_s,
-           1000 * CAST(raap.DLSize AS REAL) / NULLIF(raap.DLThroughput, 0) AS Duration,
-           ISNULL(raap.Ping, raap.Latency)                                  AS Latency,
-           raap.PacketLossPercent
-    FROM ResultsAppActionPerformance raap
-    UNION ALL
-    SELECT 'UL', raap.TestId, raap.ActionId, raap.MsgTime, raap.ErrorCode, raap.NetworkId,
-           CAST(raap.ULThroughput AS FLOAT) * 8.0 / 1000000.0,
-           CAST(ISNULL(raap.Ping, raap.Latency) AS FLOAT) / 1000.0,
-           1000 * CAST(raap.ULSize AS REAL) / NULLIF(raap.ULThroughput, 0),
-           ISNULL(raap.Ping, raap.Latency),
-           raap.PacketLossPercent
-    FROM ResultsAppActionPerformance raap
-  ) aaf ON ti.TestId = aaf.TestId
-  INNER JOIN NetworkInfo ni ON ni.NetworkId = ISNULL(ISNULL(aa.NetworkId, aaf.NetworkId), ti.NetworkId)
-  LEFT JOIN Technology t ON t.PrevTechnology IS NOT NULL AND (
-    (t.TestId = aaf.TestId AND aaf.MsgTime BETWEEN DATEADD(ms, -1 * t.Duration, t.MsgTime) AND t.MsgTime) OR
-    (t.TestId = aa.TestId  AND aa.MsgTime  BETWEEN DATEADD(ms, -1 * t.Duration, t.MsgTime) AND t.MsgTime))
-WHERE CollectionName like '%%' AND s.SessionId IS NOT NULL AND aaf.dir = 'UL'
-ORDER BY ti.TestId, ISNULL(aa.ActionId, aaf.ActionId)`,
+  atp.ServiceProvider                             AS App,
+  CASE COALESCE(aa.ErrorCode, raap.ErrorCode)
+    WHEN 0 THEN 'Success' ELSE 'Failed'
+  END                                             AS ActionStatus
+FROM Sessions s
+INNER JOIN FileList                 fl  ON fl.FileId   = s.FileId
+INNER JOIN TestInfo                 ti  ON s.SessionId = ti.SessionId AND ti.Valid = 1
+INNER JOIN ResultsAppTestParameters atp ON ti.TestId   = atp.TestId
+LEFT  JOIN ResultsAppAction         aa  ON ti.TestId   = aa.TestId   AND aa.LastBlock = 1
+--LEFT JOIN Position					P	ON ti.PosId	   = p.PosId
+
+left join ResultsAppActionPerformance raap ON ti.TestId=raap.TestId
+
+WHERE s.valid = 1 
+--p.Latitude    IS NOT NULL
+--AND p.Longitude   IS NOT NULL
+  AND s.SessionId     IS NOT NULL
+  AND raap.ULThroughput         IS NOT NULL
+  AND fl.CollectionName like '%%'
+  --AND fl.ASideLocation  = '{location}'
+ORDER BY ti.TestId, raap.ActionId`,
   },
   // ── Browsing ──
   {
