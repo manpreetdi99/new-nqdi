@@ -302,6 +302,16 @@ const COLOR_SCHEMES: Record<string, ColorScheme> = {
       { min: -200, max: -110, color: "#800000", label: "< -110 (πολύ χαμηλό)" },
     ],
   },
+  pci_lte: {
+    // Categories are computed dynamically per-query (see buildDynamicPciCategories):
+    // the N most-sampled PCI values each get a distinct color; every other PCI
+    // falls through to defaultColor. Static placeholder here just for suggestCol.
+    type: "category",
+    label: "PCI (top values by sample count)",
+    suggestCol: "PCI",
+    categories: [],
+    defaultColor: "#808080",
+  },
   nr5g_sssinr: {
     type: "range",
     label: "5G SS-SINR (dB)",
@@ -1124,6 +1134,31 @@ WHERE s.Valid = 1 AND ti.Valid = 1
 ORDER BY p.MsgTime`,
   },
   {
+    label: "PCI – LTE Measurement Report",
+    category: "Technology",
+    mode: "points",
+    valueCol: "PCI",
+    colorScheme: "pci_lte",
+    labelCol: "Location",
+    sql: `SELECT
+  F.CollectionName,
+  F.ASideLocation      AS Location,
+  POS.PosId,
+  CAST(POS.Latitude  AS FLOAT) AS latitude,
+  CAST(POS.Longitude AS FLOAT) AS longitude,
+  LMR.PhyCellId        AS PCI
+FROM LTEMeasurementReport AS LMR
+JOIN Position POS ON LMR.PosId     = POS.PosId
+JOIN Sessions S    ON LMR.SessionId = S.SessionId
+JOIN Filelist F    ON S.FileId      = F.FileId
+WHERE POS.Latitude    IS NOT NULL
+  AND POS.Longitude   IS NOT NULL
+  AND LMR.PhyCellId    IS NOT NULL
+  AND F.CollectionName = '{collection}'
+  AND F.ASideLocation  = '{location}'
+ORDER BY LMR.MsgTime`,
+  },
+  {
     label: "RSRP σημεία – FREE LTE",
     category: "RSRP",
     mode: "points",
@@ -1470,6 +1505,28 @@ function computeBucketCounters(
   return counters;
 }
 
+// ── Dynamic PCI coloring: the N most-sampled PCI values get distinct colors; ──
+// everything else falls back to the scheme's defaultColor (no fixed 1-99/100-199… bands).
+const DYNAMIC_PCI_COLORS = [
+  "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
+  "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#008080",
+];
+
+function buildDynamicPciCategories(rows: Record<string, CellValue>[], valueCol: string): CategoryEntry[] {
+  if (!valueCol) return [];
+  const counts = new Map<string, number>();
+  for (const row of rows) {
+    const raw = row[valueCol];
+    if (raw === null || raw === undefined || raw === "") continue;
+    const key = String(raw).trim();
+    counts.set(key, (counts.get(key) ?? 0) + 1);
+  }
+  return [...counts.entries()]
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, DYNAMIC_PCI_COLORS.length)
+    .map(([value], i) => ({ value, color: DYNAMIC_PCI_COLORS[i] }));
+}
+
 // ── Spatial decimation: keep at most maxPoints, one per adaptive grid cell ────
 const MAX_RENDER_POINTS = 20000;
 
@@ -1583,12 +1640,12 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     setFilterNRARFCN(""); setFilterLink(""); setSelectedGroup(null); setSelectedBuckets(new Set());
   }, [syncTarget]);
 
-  const currentScheme = COLOR_SCHEMES[colorSchemeKey];
+  const baseScheme = COLOR_SCHEMES[colorSchemeKey];
 
   const effLatCol   = latCol      || columns.find((c) => ["lat","latitude"].includes(lc(c)))                                          || "";
   const effLngCol   = lngCol      || columns.find((c) => ["lng","lon","longitude"].includes(lc(c)))                                   || "";
   const effQtyCol   = quantityCol || columns.find((c) => ["total_calls","count","total","calls","sessions","avg","value"].some(k => lc(c).includes(k))) || columns[1] || "";
-  const effValCol   = valueCol    || columns.find((c) => lc(c) === lc(currentScheme.suggestCol))                                      || columns[2]  || "";
+  const effValCol   = valueCol    || columns.find((c) => lc(c) === lc(baseScheme.suggestCol))                                         || columns[2]  || "";
   const effLabelCol = labelCol    || columns.find((c) => ["location","asidelocation","name","label"].includes(lc(c)))                 || columns[0]  || "";
 
   const collectionColName = columns.find((c) => ["collectionname","collection"].includes(lc(c))) ?? "";
@@ -1607,6 +1664,15 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     if (selectedGroup !== null && effLabelCol) out = out.filter((r) => String(r[effLabelCol] ?? "") === selectedGroup);
     return out;
   }, [rows, tmplIdx, filterNRARFCN, filterLink, selectedGroup, effLabelCol]);
+
+  // PCI has no fixed value bands: color the top-sampled PCI values dynamically,
+  // per the current result set, instead of static 1-99/100-199… ranges.
+  const currentScheme = useMemo<ColorScheme>(() => {
+    if (colorSchemeKey === "pci_lte") {
+      return { ...baseScheme, type: "category", categories: buildDynamicPciCategories(filteredRows, effValCol) } as CategoryScheme;
+    }
+    return baseScheme;
+  }, [colorSchemeKey, baseScheme, filteredRows, effValCol]);
 
   const availableNRARFCNs = useMemo(() => {
     const nrCol = TEMPLATES[tmplIdx]?.nrarfcnCol;
