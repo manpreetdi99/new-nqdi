@@ -263,101 +263,101 @@ WHERE Sessions.Valid = 1
   AND FileList.ASideLocation IS NOT NULL
 ORDER BY FileList.CollectionName;`,
   },
-  {
-    label: "R24 Scanner vs Radio RSRP (time bins)",
-    category: "SmartAnalytics R24",
-    defaultChart: { type: "line", xCol: "TimeBin", yCols: ["Scan_RSRP", "Radio_RSRP"], aggFn: "avg", aggEnabled: false },
-    sql: `DECLARE @MaxRows INT = 5000;
-DECLARE @Collection NVARCHAR(200) = '%';   -- π.χ. '%Epirus%'
+//   {
+//     label: "R24 Scanner vs Radio RSRP (time bins)",
+//     category: "SmartAnalytics R24",
+//     defaultChart: { type: "line", xCol: "TimeBin", yCols: ["Scan_RSRP", "Radio_RSRP"], aggFn: "avg", aggEnabled: false },
+//     sql: `DECLARE @MaxRows INT = 5000;
+// DECLARE @Collection NVARCHAR(200) = '%';   -- π.χ. '%Epirus%'
 
-WITH Combined AS (
-    -- Πηγή 1: Scanner
-    SELECT
-        'SCAN'          AS Src,
-        fs.FullDate,
-        fs.RSRP, fs.RSRQ, fs.SINR, fs.RSSI,
-        CAST(NULL AS FLOAT) AS RSRP_Rx0,
-        CAST(NULL AS FLOAT) AS RSRP_Rx1,
-        CAST(NULL AS FLOAT) AS SINR_Rx0,
-        CAST(NULL AS FLOAT) AS SINR_Rx1,
-        CAST(NULL AS FLOAT) AS Latitude,
-        CAST(NULL AS FLOAT) AS Longitude,
-        df.CollectionName
-    FROM FactLTEScanner fs
-    JOIN DmnFile df    ON df.FileId = fs.DmnIdFile
-    WHERE fs.MccMncList = '202-1'
-      AND fs.RSRP IS NOT NULL
-      AND dmnIdTopN_RSRP = 1
-      AND df.CollectionName LIKE @Collection
+// WITH Combined AS (
+//     -- Πηγή 1: Scanner
+//     SELECT
+//         'SCAN'          AS Src,
+//         fs.FullDate,
+//         fs.RSRP, fs.RSRQ, fs.SINR, fs.RSSI,
+//         CAST(NULL AS FLOAT) AS RSRP_Rx0,
+//         CAST(NULL AS FLOAT) AS RSRP_Rx1,
+//         CAST(NULL AS FLOAT) AS SINR_Rx0,
+//         CAST(NULL AS FLOAT) AS SINR_Rx1,
+//         CAST(NULL AS FLOAT) AS Latitude,
+//         CAST(NULL AS FLOAT) AS Longitude,
+//         df.CollectionName
+//     FROM FactLTEScanner fs
+//     JOIN DmnFile df    ON df.FileId = fs.DmnIdFile
+//     WHERE fs.MccMncList = '202-1'
+//       AND fs.RSRP IS NOT NULL
+//       AND dmnIdTopN_RSRP = 1
+//       AND df.CollectionName LIKE @Collection
 
-    UNION ALL
+//     UNION ALL
 
-    -- Πηγή 2: Radio (UE)
-    SELECT
-        'RADIO'         AS Src,
-        fr.FullDate,
-        fr.RSRP, fr.RSRQ, fr.SINR, fr.RSSI,
-        fr.RSRP_Rx0, fr.RSRP_Rx1,
-        fr.SINR_Rx0, fr.SINR_Rx1,
-        dp.Latitude, dp.Longitude,
-        df.CollectionName
-    FROM FactLTERadio fr
-    LEFT JOIN DmnPosition dp ON dp.DmnId = fr.DmnIdPosition
-    INNER JOIN DmnFile df    ON df.FileId = fr.DmnIdFile
-    WHERE df.Location LIKE '%cos%a'
-      AND df.CollectionName LIKE @Collection
-),
-Ranked AS (
-    SELECT *,
-        NTILE(@MaxRows) OVER (ORDER BY FullDate) AS BinId
-    FROM Combined
-),
-BinCollections AS (
-    -- διακριτά CollectionNames ανά bin (όχι ένα ανά δείγμα)
-    SELECT BinId,
-           STRING_AGG(CAST(CollectionName AS NVARCHAR(MAX)), ', ')
-             WITHIN GROUP (ORDER BY CollectionName) AS Collections
-    FROM (SELECT DISTINCT BinId, CollectionName FROM Ranked) d
-    GROUP BY BinId
-),
-Agg AS (
-    SELECT
-        BinId
-       ,MIN(FullDate)                                          AS TimeBin
-       ,COUNT(*)                                               AS Samples_Total
-       ,SUM(CASE WHEN Src = 'SCAN'  THEN 1 ELSE 0 END)         AS Samples_Scanner
-       ,SUM(CASE WHEN Src = 'RADIO' THEN 1 ELSE 0 END)         AS Samples_Radio
-        -- Scanner metrics
-       ,ROUND(AVG(CASE WHEN Src = 'SCAN' THEN RSRP END), 2)    AS Scan_RSRP
-       ,ROUND(AVG(CASE WHEN Src = 'SCAN' THEN RSRQ END), 2)    AS Scan_RSRQ
-       ,ROUND(AVG(CASE WHEN Src = 'SCAN' THEN SINR END), 2)    AS Scan_SINR
-       ,ROUND(AVG(CASE WHEN Src = 'SCAN' THEN RSSI END), 2)    AS Scan_RSSI
-        -- Radio (UE) metrics
-       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSRP END), 2)   AS Radio_RSRP
-       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSRQ END), 2)   AS Radio_RSRQ
-       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN SINR END), 2)   AS Radio_SINR
-       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSSI END), 2)   AS Radio_RSSI
-       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSRP_Rx0 END), 2) AS Radio_RSRP_Rx0
-       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSRP_Rx1 END), 2) AS Radio_RSRP_Rx1
-       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN SINR_Rx0 END), 2) AS Radio_SINR_Rx0
-       ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN SINR_Rx1 END), 2) AS Radio_SINR_Rx1
-        -- Θέση (μόνο από radio)
-       ,AVG(CASE WHEN Src = 'RADIO' THEN Latitude END)         AS Latitude
-       ,AVG(CASE WHEN Src = 'RADIO' THEN Longitude END)        AS Longitude
-    FROM Ranked
-    GROUP BY BinId
-)
-SELECT
-    a.TimeBin, a.Samples_Total, a.Samples_Scanner, a.Samples_Radio,
-    a.Scan_RSRP, a.Scan_RSRQ, a.Scan_SINR, a.Scan_RSSI,
-    a.Radio_RSRP, a.Radio_RSRQ, a.Radio_SINR, a.Radio_RSSI,
-    a.Radio_RSRP_Rx0, a.Radio_RSRP_Rx1, a.Radio_SINR_Rx0, a.Radio_SINR_Rx1,
-    a.Latitude, a.Longitude,
-    bc.Collections
-FROM Agg a
-LEFT JOIN BinCollections bc ON bc.BinId = a.BinId
-ORDER BY a.TimeBin`,
-  },
+//     -- Πηγή 2: Radio (UE)
+//     SELECT
+//         'RADIO'         AS Src,
+//         fr.FullDate,
+//         fr.RSRP, fr.RSRQ, fr.SINR, fr.RSSI,
+//         fr.RSRP_Rx0, fr.RSRP_Rx1,
+//         fr.SINR_Rx0, fr.SINR_Rx1,
+//         dp.Latitude, dp.Longitude,
+//         df.CollectionName
+//     FROM FactLTERadio fr
+//     LEFT JOIN DmnPosition dp ON dp.DmnId = fr.DmnIdPosition
+//     INNER JOIN DmnFile df    ON df.FileId = fr.DmnIdFile
+//     WHERE df.Location LIKE '%cos%a'
+//       AND df.CollectionName LIKE @Collection
+// ),
+// Ranked AS (
+//     SELECT *,
+//         NTILE(@MaxRows) OVER (ORDER BY FullDate) AS BinId
+//     FROM Combined
+// ),
+// BinCollections AS (
+//     -- διακριτά CollectionNames ανά bin (όχι ένα ανά δείγμα)
+//     SELECT BinId,
+//            STRING_AGG(CAST(CollectionName AS NVARCHAR(MAX)), ', ')
+//              WITHIN GROUP (ORDER BY CollectionName) AS Collections
+//     FROM (SELECT DISTINCT BinId, CollectionName FROM Ranked) d
+//     GROUP BY BinId
+// ),
+// Agg AS (
+//     SELECT
+//         BinId
+//        ,MIN(FullDate)                                          AS TimeBin
+//        ,COUNT(*)                                               AS Samples_Total
+//        ,SUM(CASE WHEN Src = 'SCAN'  THEN 1 ELSE 0 END)         AS Samples_Scanner
+//        ,SUM(CASE WHEN Src = 'RADIO' THEN 1 ELSE 0 END)         AS Samples_Radio
+//         -- Scanner metrics
+//        ,ROUND(AVG(CASE WHEN Src = 'SCAN' THEN RSRP END), 2)    AS Scan_RSRP
+//        ,ROUND(AVG(CASE WHEN Src = 'SCAN' THEN RSRQ END), 2)    AS Scan_RSRQ
+//        ,ROUND(AVG(CASE WHEN Src = 'SCAN' THEN SINR END), 2)    AS Scan_SINR
+//        ,ROUND(AVG(CASE WHEN Src = 'SCAN' THEN RSSI END), 2)    AS Scan_RSSI
+//         -- Radio (UE) metrics
+//        ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSRP END), 2)   AS Radio_RSRP
+//        ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSRQ END), 2)   AS Radio_RSRQ
+//        ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN SINR END), 2)   AS Radio_SINR
+//        ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSSI END), 2)   AS Radio_RSSI
+//        ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSRP_Rx0 END), 2) AS Radio_RSRP_Rx0
+//        ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN RSRP_Rx1 END), 2) AS Radio_RSRP_Rx1
+//        ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN SINR_Rx0 END), 2) AS Radio_SINR_Rx0
+//        ,ROUND(AVG(CASE WHEN Src = 'RADIO' THEN SINR_Rx1 END), 2) AS Radio_SINR_Rx1
+//         -- Θέση (μόνο από radio)
+//        ,AVG(CASE WHEN Src = 'RADIO' THEN Latitude END)         AS Latitude
+//        ,AVG(CASE WHEN Src = 'RADIO' THEN Longitude END)        AS Longitude
+//     FROM Ranked
+//     GROUP BY BinId
+// )
+// SELECT
+//     a.TimeBin, a.Samples_Total, a.Samples_Scanner, a.Samples_Radio,
+//     a.Scan_RSRP, a.Scan_RSRQ, a.Scan_SINR, a.Scan_RSSI,
+//     a.Radio_RSRP, a.Radio_RSRQ, a.Radio_SINR, a.Radio_RSSI,
+//     a.Radio_RSRP_Rx0, a.Radio_RSRP_Rx1, a.Radio_SINR_Rx0, a.Radio_SINR_Rx1,
+//     a.Latitude, a.Longitude,
+//     bc.Collections
+// FROM Agg a
+// LEFT JOIN BinCollections bc ON bc.BinId = a.BinId
+// ORDER BY a.TimeBin`,
+//  },
   {
     label: "All calls",
     category: "General",
@@ -381,21 +381,24 @@ ORDER BY CA.SessionId DESC`,
   },
   // ── General ──
   {
-    label: "Drop / Fail / Sys Rel  summary",
+    label: "Drop / Fail / Sys Rel  summary WITH NO FAKE CALLS",
     category: "General",
-    defaultChart: { type: "bar", xCol: "callStatus", yCols: ["total"], aggFn: "sum", aggEnabled: true },
+    // xCol=Location/filterCol=CollectionName όπως όλα τα υπόλοιπα templates· groupCol=callStatus
+    // δίνει grouped bar (Drop/Fail/SysRel) ανά τοποθεσία αντί για ένα μπερδεμένο μέσο όρο.
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["total"], aggFn: "sum", aggEnabled: true, filterCol: "CollectionName", groupCol: "callStatus" },
     sql: `SELECT
   FL.ASideLocation AS Location,
   CA.callStatus,
   CA.callType,
   CA.technology,
+  FL.CollectionName,
   COUNT(*) AS total
 FROM CallAnalysis CA
 LEFT JOIN FileList FL ON CA.FileId = FL.FileId
 LEFT JOIN Sessions S  ON S.SessionId = CA.SessionId
 WHERE S.Valid IN (0, 1)
   AND (CA.callStatus LIKE '%Drop%' OR CA.callStatus LIKE '%Fail%' OR CA.callStatus LIKE '%Sys%%Rel%')
-GROUP BY FL.ASideLocation, CA.callStatus, CA.callType, CA.technology
+GROUP BY FL.CollectionName,FL.ASideLocation, CA.callStatus, CA.callType, CA.technology
 ORDER BY total DESC`,
   },
   {
@@ -405,24 +408,24 @@ ORDER BY total DESC`,
 FROM FileList
 ORDER BY CollectionName`,
   },
-    {
-    label: "All Call with HO",
-    category: "General",
-    sql: `SELECT CA.SessionId,
-    CA.callStartTimeStamp,
-    CA.callStatus,
-    CA.technology,
-    CA.LastLTEHoType        AS LastHoType,      -- π.χ. 'Intra LTE', 'LTE to UMTS', 'LTE to GSM'
-    CA.LastHoCause          AS LastHoCause,
-    CA.LastLTEHoTimeStamp   AS LastHoTime,
-    DF.CollectionName,
-    DF.ASideLocation
-FROM CallAnalysis CA
-LEFT JOIN FileList DF ON DF.FileId = CA.FileId
-WHERE CA.LastLTEHoType IS NOT NULL
-  AND CA.LastLTEHoType <> ''
-ORDER BY CA.callStartTimeStamp`,
-  },
+//     {
+//     label: "All Call with HO",
+//     category: "General",
+//     sql: `SELECT CA.SessionId,
+//     CA.callStartTimeStamp,
+//     CA.callStatus,
+//     CA.technology,
+//     CA.LastLTEHoType        AS LastHoType,      -- π.χ. 'Intra LTE', 'LTE to UMTS', 'LTE to GSM'
+//     CA.LastHoCause          AS LastHoCause,
+//     CA.LastLTEHoTimeStamp   AS LastHoTime,
+//     DF.CollectionName,
+//     DF.ASideLocation
+// FROM CallAnalysis CA
+// LEFT JOIN FileList DF ON DF.FileId = CA.FileId
+// WHERE CA.LastLTEHoType IS NOT NULL
+//   AND CA.LastLTEHoType <> ''
+// ORDER BY CA.callStartTimeStamp`,
+//   },
 
   
   // ── KPI ──
@@ -471,6 +474,7 @@ ORDER BY total_calls DESC`,
   {
     label: "Setup time ανά callType & technology",
     category: "KPI",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_setup_ms"], aggFn: "avg", aggEnabled: true, filterCol: ["callType", "technology"] },
     sql: `SELECT
   FL.ASideLocation AS Location,
   CA.callType,
@@ -530,6 +534,7 @@ ORDER BY LQ.SessionId DESC`,
   {
     label: "MOS + Codec ανά call (FactSpeech + ResultsLQ08Avg)",
     category: "MOS",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["MOS_POLQA", "LQ_Speech"], aggFn: "avg", aggEnabled: true, filterCol: "CollectionName" },
     sql: `SELECT
   FL.ASideLocation              AS Location,
   FL.CollectionName,
@@ -592,7 +597,7 @@ ORDER BY avg_RSRP DESC`,
   {
     label: "RSRP + MOS ανά operator & collection",
     category: "Signal",
-    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_rsrp"], filterCol: "CollectionName", aggFn: "avg", aggEnabled: false },
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_rsrp", "avg_mos"], rightCols: ["avg_mos"], filterCol: "CollectionName", aggFn: "avg", aggEnabled: false },
     sql: `WITH RSRP_CTE AS (
   SELECT
     FL.CollectionName,
@@ -650,6 +655,16 @@ ORDER BY LM.SessionId, LM.MsgTime`,
   {
     label: "GSM RxLev/RxQual ανά operator",
     category: "Signal",
+    defaultChart: {
+      type: "bar",
+      xCol: "Location",
+      yCols: ["avg_RxLev", "avg_RxQual"],
+      // avg_RxQual: ίδιο trick με το "GSM RxLev/RxQual ανά κλήση" παρακάτω — δικός του
+      // κρυφός άξονας 0–7 ανάποδα, ώστε να μην κολλάει flat δίπλα στο avg_RxLev.
+      axisOverrides: { avg_RxQual: { domain: [0, 7], reversed: true } },
+      aggFn: "avg",
+      aggEnabled: false,
+    },
     sql: `SELECT
   FL.ASideLocation                              AS Location,
   COUNT(*)                                      AS measurements,
@@ -769,6 +784,7 @@ ORDER BY FileList.ASideLocation, samples DESC`,
   {
     label: "NR 5G Bands",
     category: "Signal",
+    defaultChart: { type: "bar", xCol: "ASideLocation", yCols: ["RSRP", "SINR"], aggFn: "avg", aggEnabled: true, filterCol: "CollectionName" },
     sql: `SELECT
   FileList.CollectionName,
   FileList.ASideLocation,
@@ -920,6 +936,7 @@ ORDER BY SessionID`,
   {
     label: "LQ PDF Data",
     category: "LQ Stats",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_MOS"], aggFn: "avg", aggEnabled: true, filterCol: ["Direction", "CodecRate"] },
     sql: `WITH SessionCTE AS (
   SELECT
     Filelist.FileID, 'CM ' + Filelist.CallingModule AS CallingModule,
@@ -945,10 +962,10 @@ SELECT
   CASE WHEN vvct.CodecName IS NULL THEN 'no codec rate'
        WHEN vvct.CodecName = '-' THEN 'no codec rate' ELSE vvct.CodecName END AS CodecRate,
   'PDF' AS PDFCDF,
-  ROUND(AVG(ResultsLQ08Avg.OptionalWB), 2),
-  ROUND(MIN(ResultsLQ08Avg.OptionalWB), 2),
-  ROUND(MAX(ResultsLQ08Avg.OptionalWB), 2),
-  ROUND(STDEV(ResultsLQ08Avg.OptionalWB), 2),
+  ROUND(AVG(ResultsLQ08Avg.OptionalWB), 2) AS avg_MOS,
+  ROUND(MIN(ResultsLQ08Avg.OptionalWB), 2) AS min_MOS,
+  ROUND(MAX(ResultsLQ08Avg.OptionalWB), 2) AS max_MOS,
+  ROUND(STDEV(ResultsLQ08Avg.OptionalWB), 2) AS stdev_MOS,
   COUNT(ResultsLQ08Avg.OptionalWB) AS CountLQ
 FROM SessionCTE
   JOIN Testinfo ON SessionCTE.SessionID = Testinfo.SessionId
@@ -965,6 +982,7 @@ GROUP BY FL.ASideLocation, SessionCTE.FileID, SessionCTE.CallingModule, SessionC
   {
     label: "Call Codec Rate (Free A)",
     category: "Codec",
+    defaultChart: { type: "bar", xCol: "CodecRate", yCols: ["Testduration", "TestCount"], aggFn: "sum", aggEnabled: true, filterCol: "CollectionName" },
     sql: `WITH SessionCTE AS (
   SELECT
     Filelist.FileID, Sessions.SessionID,
@@ -988,7 +1006,7 @@ SELECT
   CASE WHEN vvct.CodecName IS NULL THEN 'no codec rate'
        WHEN vvct.CodecName = '-' THEN 'no codec rate' ELSE vvct.CodecName END AS CodecRate,
   SUM(Testinfo.duration * 0.001) AS Testduration,
-  COUNT(Testinfo.testid)
+  COUNT(Testinfo.testid) AS TestCount
 FROM Filelist
   JOIN SessionCTE ON Filelist.FileID = SessionCTE.FileID
   JOIN Testinfo ON SessionCTE.SessionID = Testinfo.SessionID AND Testinfo.Valid = 1
@@ -1006,6 +1024,7 @@ GROUP BY
   {
     label: "Call Codec Rate (GSM)",
     category: "Codec",
+    defaultChart: { type: "bar", xCol: "CodecRate", yCols: ["Testduration", "TestCount"], aggFn: "sum", aggEnabled: true, filterCol: "CollectionName" },
     sql: `WITH SessionCTE AS (
   SELECT
     Filelist.FileID, Sessions.SessionID,
@@ -1049,6 +1068,7 @@ GROUP BY
   {
     label: "SRVCC RAW",
     category: "SRVCC",
+    defaultChart: { type: "bar", xCol: "Operator", yCols: ["CallAttemps", "CallCompleted", "CallDropped", "CallFailed"], aggFn: "sum", aggEnabled: true, filterCol: "CollectionName" },
     sql: `SELECT DISTINCT Sessions.SessionId,
   FileList.CollectionName,
   Case When ResultsKPI.KPIId = 38040 then '4G->3G'
@@ -1057,7 +1077,7 @@ GROUP BY
        When ResultsKPI.ErrorCode = 108003 then 'Fail' Else 'N/A' End as 'HO_Status',
   CallSession.CallTechnology AS 'Technology',
   ASideLocation as Operator,
-  Networkinfo.Technology,
+  Networkinfo.Technology AS ServingTechnology,
   CallSession.callDir,
   Case When Callsession.Callstatus in ('Completed','Dropped','Failed') then 1 else 0 end as 'CallAttemps',
   Case When Callsession.Callstatus in ('Failed') then 0 else 1 end as 'Callconnected',
@@ -1095,18 +1115,21 @@ ORDER BY ASideLocation`,
   dbo.CallAnalysis.callType,
   dbo.CallAnalysis.callDir,
   dbo.CallAnalysis.callStatus,
-  dbo.DwAnalysisCommentToSessionMapping.Comment AS UserComment,
+  COALESCE(dbo.DwAnalysisCommentToSessionMapping.Comment, dbo.AnalysisComment.Comment) AS UserComment,
   dbo.CallAnalysis.codeDescription AS DiversityComment,
   dbo.FileList.ASideFileName,
   dbo.FileList.BSideFileName,
   dbo.Sessions.valid as SessionValidity
 FROM dbo.Sessions
   INNER JOIN dbo.CallAnalysis ON dbo.Sessions.SessionId = dbo.CallAnalysis.SessionId
-  INNER JOIN dbo.DwAnalysisCommentToSessionMapping ON dbo.DwAnalysisCommentToSessionMapping.SessionId = dbo.Sessions.SessionId
+  LEFT JOIN dbo.DwAnalysisCommentToSessionMapping ON dbo.DwAnalysisCommentToSessionMapping.SessionId = dbo.Sessions.SessionId
+  LEFT JOIN dbo.AnalysisCommentSessionsBridge ON dbo.AnalysisCommentSessionsBridge.sessionID = dbo.Sessions.SessionId
+  LEFT JOIN dbo.AnalysisComment ON dbo.AnalysisCommentSessionsBridge.commentId = dbo.AnalysisComment.commentID
   INNER JOIN dbo.FileList ON dbo.FileList.FileId = dbo.Sessions.FileId
 WHERE CollectionName like '%%' AND
   dbo.Sessions.sessionType = 'CALL' AND
-  dbo.Sessions.valid = '1'`,
+  dbo.Sessions.valid = '1' AND
+  COALESCE(dbo.DwAnalysisCommentToSessionMapping.Comment, dbo.AnalysisComment.Comment) IS NOT NULL`,
   },
   {
     label: "Event List (Invalid/Fake)",
@@ -1122,18 +1145,21 @@ WHERE CollectionName like '%%' AND
   dbo.CallAnalysis.callType,
   dbo.CallAnalysis.callDir,
   dbo.CallAnalysis.callStatus,
-  dbo.DwAnalysisCommentToSessionMapping.Comment AS UserComment,
+  COALESCE(dbo.DwAnalysisCommentToSessionMapping.Comment, dbo.AnalysisComment.Comment) AS UserComment,
   dbo.CallAnalysis.codeDescription AS DiversityComment,
   dbo.FileList.ASideFileName,
   dbo.FileList.BSideFileName,
   dbo.Sessions.valid as SessionValidity
 FROM dbo.Sessions
   INNER JOIN dbo.CallAnalysis ON dbo.Sessions.SessionId = dbo.CallAnalysis.SessionId
-  INNER JOIN dbo.DwAnalysisCommentToSessionMapping ON dbo.DwAnalysisCommentToSessionMapping.SessionId = dbo.Sessions.SessionId
+  LEFT JOIN dbo.DwAnalysisCommentToSessionMapping ON dbo.DwAnalysisCommentToSessionMapping.SessionId = dbo.Sessions.SessionId
+  LEFT JOIN dbo.AnalysisCommentSessionsBridge ON dbo.AnalysisCommentSessionsBridge.sessionID = dbo.Sessions.SessionId
+  LEFT JOIN dbo.AnalysisComment ON dbo.AnalysisCommentSessionsBridge.commentId = dbo.AnalysisComment.commentID
   INNER JOIN dbo.FileList ON dbo.FileList.FileId = dbo.Sessions.FileId
 WHERE CollectionName like '%%' AND
   dbo.Sessions.sessionType = 'CALL' AND
-  dbo.Sessions.valid = '0'`,
+  dbo.Sessions.valid = '0' AND
+  COALESCE(dbo.DwAnalysisCommentToSessionMapping.Comment, dbo.AnalysisComment.Comment) IS NOT NULL`,
   },
 //   // ── Cell ID ──
 //   {
@@ -1326,6 +1352,7 @@ WHERE CollectionName like '%%' AND
   {
     label: "Capacity RAW",
     category: "Data Tests",
+    defaultChart: { type: "bar", xCol: "A Side Location", yCols: ["DLThrptkbps", "ULThrptkbps"], aggFn: "avg", aggEnabled: true, filterCol: "Collection Name" },
     sql: `SELECT
   FileList.ASideFileName AS 'A Side File Name',
   FileList.CollectionName AS 'Collection Name',
@@ -1375,6 +1402,7 @@ WHERE CollectionName like '%%' AND Sessions.Valid=1 AND TestInfo.Valid=1 AND cap
   {
     label: "HTTPS Transfer RAW",
     category: "Data Tests",
+    defaultChart: { type: "bar", xCol: "A Side Location", yCols: ["Throughput"], aggFn: "avg", aggEnabled: true, filterCol: "Collection Name" },
     sql: `SELECT
   FileList.ASideFileName as 'A Side File Name',
   FileList.CollectionName As 'Collection Name',
@@ -1440,6 +1468,7 @@ WHERE CollectionName like '%%' AND
   {
     label: "Ping RAW",
     category: "Data Tests",
+    defaultChart: { type: "bar", xCol: "ASideLocation", yCols: ["RTT"], aggFn: "avg", aggEnabled: true, filterCol: "CollectionName" },
     sql: `SELECT
   FileList.ASideFileName,
   FileList.TestDescription,
@@ -1467,6 +1496,7 @@ WHERE CollectionName like '%%' AND Sessions.Valid = 1 AND TestInfo.Valid = 1 AND
   {
     label: "DNS RAW",
     category: "Data Tests",
+    defaultChart: { type: "bar", xCol: "ASideLocation", yCols: ["Avg"], aggFn: "avg", aggEnabled: true, groupCol: "Status" },
     sql: `SELECT
   FileList.ASideLocation,
   KPIStatus AS 'Status',
@@ -1484,6 +1514,7 @@ GROUP BY FileList.ASideLocation, KPIStatus`,
   {
     label: "Interactivity RAW",
     category: "Data Tests",
+    defaultChart: { type: "bar", xCol: "ASideLocation", yCols: ["ThroughputKbps", "RTTAverage"], rightCols: ["RTTAverage"], aggFn: "avg", aggEnabled: true, filterCol: "CollectionName" },
     sql: `SELECT
   TestInfo.TestId,
   Sessions.SessionId,
@@ -1513,6 +1544,7 @@ WHERE CollectionName like '%%' AND Sessions.Valid = 1`,
   {
     label: "OOKLA Speed Test DL",
     category: "Data Tests",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["ookla_dl_mbps"], aggFn: "avg", aggEnabled: true, filterCol: "CollectionName" },
     sql: `
 SELECT
 	S.SessionId,
@@ -1546,6 +1578,7 @@ ORDER BY ti.TestId, raap.ActionId`,
   {
     label: "OOKLA Speed Test UL",
     category: "Data Tests",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["ookla_ul_mbps"], aggFn: "avg", aggEnabled: true, filterCol: "CollectionName" },
     sql: `SELECT	S.SessionId,
   --CAST(p.Latitude  AS FLOAT) AS latitude,
   --CAST(p.Longitude AS FLOAT) AS longitude,
@@ -1578,6 +1611,7 @@ ORDER BY ti.TestId, raap.ActionId`,
   {
     label: "HTTP Browsing Page Load Time",
     category: "Browsing",
+    defaultChart: { type: "bar", xCol: "ASideLocation", yCols: ["Avg"], aggFn: "avg", aggEnabled: true, filterCol: "Collection Name", groupCol: "Status" },
     sql: `SELECT
   TestInfo.testname AS 'Collection Name',
   FileList.ASideLocation,
@@ -1600,6 +1634,7 @@ GROUP BY TestInfo.testname, FileList.ASideLocation, NetworkInfo.Operator, KPISta
   {
     label: "HTTP Browsing Throughput",
     category: "Browsing",
+    defaultChart: { type: "bar", xCol: "ASideLocation", yCols: ["Avg"], aggFn: "avg", aggEnabled: true, filterCol: "Collection Name", groupCol: "Status" },
     sql: `SELECT
   TestInfo.testname AS 'Collection Name',
   FileList.ASideLocation,
@@ -1622,6 +1657,7 @@ GROUP BY TestInfo.testname, FileList.ASideLocation, NetworkInfo.Operator, KPISta
   {
     label: "HTTPS Browser Page Load",
     category: "Browsing",
+    defaultChart: { type: "bar", xCol: "ASideLocation", yCols: ["Avg"], aggFn: "avg", aggEnabled: true, filterCol: "Collection Name", groupCol: "Status" },
     sql: `SELECT
   TestInfo.testname as 'Collection Name',
   FileList.ASideLocation,
@@ -1644,6 +1680,7 @@ GROUP BY TestInfo.testname, FileList.ASideLocation, NetworkInfo.Operator, KPISta
   {
     label: "HTTPS Setup Time",
     category: "Browsing",
+    defaultChart: { type: "bar", xCol: "ASideLocation", yCols: ["cAvg"], aggFn: "avg", aggEnabled: true, filterCol: "Collection Name", groupCol: "Status" },
     sql: `SELECT
   TestInfo.testname AS 'Collection Name',
   FileList.ASideLocation,
@@ -1666,6 +1703,7 @@ GROUP BY TestInfo.testname, FileList.ASideLocation, NetworkInfo.Operator, KPISta
   {
     label: "HTTPS Throughput (PDF)",
     category: "Browsing",
+    defaultChart: { type: "bar", xCol: "ASideLocation", yCols: ["Avg"], aggFn: "avg", aggEnabled: true, filterCol: "Collection Name", groupCol: "Status" },
     sql: `SELECT
   TestInfo.testname as 'Collection Name',
   FileList.ASideLocation,
@@ -1690,6 +1728,7 @@ GROUP BY TestInfo.testname, FileList.ASideLocation, NetworkInfo.Operator, KPISta
   {
     label: "YouTube RAW",
     category: "Multimedia",
+    defaultChart: { type: "bar", xCol: "A Side Location", yCols: ["Avg Visual Quality", "Freezing Ratio"], rightCols: ["Freezing Ratio"], aggFn: "avg", aggEnabled: true, filterCol: "Collection Name" },
     sql: `WITH SessionsCTE AS (
   SELECT Sessions.FileId, Sessions.SessionId, Testinfo.TestId
   FROM Sessions
@@ -1737,6 +1776,7 @@ WHERE CollectionName like '%%' AND SessionsCTE.SessionId IS NOT NULL
   {
     label: "YT IP Layer (Throughput Map)",
     category: "Multimedia",
+    defaultChart: { type: "bar", xCol: "ASideLocation", yCols: ["Throughput"], aggFn: "avg", aggEnabled: true, filterCol: "CollectionName" },
     sql: `SELECT
   NetworkInfo.CID, NetworkInfo.LAC, NetworkInfo.MCC, NetworkInfo.MNC,
   Position.Latitude, Position.Longitude, Position.PosId,
@@ -1790,6 +1830,7 @@ ORDER BY nr.PosId`,
   {
     label: "5G Phone – raw μετρήσεις (FactNR5GRadio)",
     category: "5G",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["SS-RSRP", "SS-SINR"], aggFn: "avg", aggEnabled: true, filterCol: "CollectionName" },
     sql: `SELECT TOP 2000
   nr.SessionId,
   nr.PosId,
@@ -1813,6 +1854,7 @@ ORDER BY nr.FullDate`,
   {
     label: "5G Scanner – SS-RSRP top beam (FactNR5GScannerBeam)",
     category: "5G",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["SS_RSRP", "SS_SINR"], aggFn: "avg", aggEnabled: true, filterCol: "CollectionName" },
     sql: `SELECT
   nr.PCI,
   nr.AbsFreqSSB                 AS NRARFCN,
@@ -1832,6 +1874,7 @@ ORDER BY latitude, longitude`,
   {
     label: "5G Scanner – avg SS-RSRP ανά NRARFCN & collection",
     category: "5G",
+    defaultChart: { type: "bar", xCol: "Location", yCols: ["avg_SS_RSRP", "avg_SS_SINR"], aggFn: "avg", aggEnabled: true, filterCol: "CollectionName" },
     sql: `SELECT
   nr.AbsFreqSSB                        AS NRARFCN,
   fl.CollectionName,

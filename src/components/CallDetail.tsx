@@ -50,6 +50,14 @@ interface ChartEventMarker {
  * Δέχεται σαν είσοδο (iso) ένα string και εγγυάται(: string) 
  * ότι το αποτέλεσμά της θα είναι επίσης string.
  */
+// Το GPS map (και το antenna-matching) αφορά το Cosmote dataset "Free" ή το εναλλακτικό του
+// naming "Voice" (π.χ. "Cosmote Free A", "Cosmote_Voice_A") — όχι τα Cosmote GSM/Data, ούτε
+// άλλους operators. Ίδια σύμβαση με το resolveMode() στο attachmentC.ts.
+function isCosmoteFreeRegion(region: string | null | undefined): boolean {
+  const loc = (region ?? "").toLowerCase();
+  return loc.includes("cosmote") && (loc.includes("free") || loc.includes("voice"));
+}
+
 // Χρωματισμός LTE RSRP: πράσινο καλό, πορτοκαλί οριακό, κόκκινο κακό (χρησιμοποιείται στο χάρτη)
 function rsrpColor(val: number | null | undefined): string {
   if (val == null) return "#6b7280";
@@ -720,7 +728,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // Cosmote Free only: match the A-side serving cell (by PCI) to the physical antenna closest
   // to the call's average GPS position, since PCI alone can be reused by several sites.
   useEffect(() => {
-    const isCosmoteFree = call.region?.toLowerCase().includes("cosmote free");
+    const isCosmoteFree = isCosmoteFreeRegion(call.region);
     if (!isCosmoteFree || !cellInfo || cellInfo.PCI === null) {
       setMatchedAntenna(null);
       return;
@@ -746,7 +754,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
 
   // Same antenna-matching logic as above, but for the B-side (second leg) of the call
   useEffect(() => {
-    const isCosmoteFree = call.region?.toLowerCase().includes("cosmote free");
+    const isCosmoteFree = isCosmoteFreeRegion(call.region);
     if (!isCosmoteFree || !bSideCellInfo || bSideCellInfo.PCI === null) {
       setMatchedAntennaBSide(null);
       return;
@@ -1269,9 +1277,10 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     };
   }, [bSideLteValues]);
 
-  // The GPS map is only shown for the "Cosmote Free" region, since that's the only dataset
-  // that reliably carries per-sample Latitude/Longitude values.
-  const isCosmoteFree = call.region?.toLowerCase().includes("cosmote free");
+  // The GPS map is shown for Cosmote's "Free" dataset and its "Voice" alternate naming
+  // (e.g. "Cosmote Free A", "Cosmote_Voice_A") — both carry per-sample Latitude/Longitude
+  // values; other Cosmote datasets (GSM, Data) and other operators do not.
+  const isCosmoteFree = isCosmoteFreeRegion(call.region);
 
   // GPS points for the currently selected side/network, colored by signal strength
   const mapActivePts = useMemo(() => {
@@ -2446,7 +2455,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
               )}
             </div>
             {/* Map — 1/4 */}
-            {/*Εμφανίζεται μόνο αν είναι Cosmote Free και υπάρχουν GPS σημεία */}
+            {/*Εμφανίζεται μόνο αν είναι Cosmote Free/Voice και υπάρχουν GPS σημεία */}
             {isCosmoteFree && (() => {
               const antennaColor = selectedLteSide === "B" ? "#c48105" : "#b200f8";
 
