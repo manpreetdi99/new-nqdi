@@ -29,6 +29,12 @@ interface L3SignalingPanelProps {
   l3Data: CallL3MessagesResponse | null;
   l3DataBSide: CallL3MessagesResponse | null;
   asideLocation?: string | null;
+  /**
+   * Κοινός cursor με το διάγραμμα σήματος: περνώντας το ποντίκι πάνω από ένα μήνυμα L3
+   * δείχνει την ώρα του πάνω στην καμπύλη, ώστε να βλέπεις αμέσως τι έκανε το σήμα
+   * τη στιγμή που στάλθηκε το μήνυμα.
+   */
+  onHoverTime?: (time: number | null) => void;
 }
 
 type Side = "A" | "B";
@@ -121,7 +127,7 @@ function FilterChip({
   );
 }
 
-function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp }: SignalingPaneProps) {
+function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp, onHoverTime }: SignalingPaneProps) {
   const [selectedSide, setSide] = useState<Side>("A");
   const side = fixedSide ?? (selectedSide === "A" && !l3Data?.callWindow && l3DataBSide?.callWindow ? "B" : selectedSide);
   const [phaseFilter, setPhaseFilter] = useState<PhaseFilter>("all");
@@ -500,7 +506,7 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
                 </tr>
               </thead>
               <tbody>
-                {visible.map(({ r, i, h }) => {
+                {visible.map(({ r, i, h, timestamp }) => {
                   const paging = isPagingRow(r);
                   const dir = (r.Direction || "").toUpperCase();
                   const isOpen = expanded === i;
@@ -510,6 +516,8 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
                         ref={(element) => { if (element) rowRefs.current.set(i, element); else rowRefs.current.delete(i); }}
                         data-message-index={i}
                         onClick={() => setExpanded(isOpen ? null : i)}
+                        onMouseEnter={() => onHoverTime?.(Number.isFinite(timestamp) ? timestamp : null)}
+                        onMouseLeave={() => onHoverTime?.(null)}
                         title={h.reason || undefined}
                         className={`border-b border-border/40 cursor-pointer transition-colors hover:bg-muted/50 ${
                           SEV_ROW_CLASS[h.severity]
@@ -631,13 +639,13 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
   );
 }
 
-export function L3SignalingPanel({ l3Data, l3DataBSide, asideLocation }: L3SignalingPanelProps) {
+export function L3SignalingPanel({ l3Data, l3DataBSide, asideLocation, onHoverTime }: L3SignalingPanelProps) {
   const [syncEnabled, setSyncEnabled] = useState(true);
   const [anchor, setAnchor] = useState<ScrollAnchor | null>(null);
   const onTimestamp = useCallback((side: Side, timestamp: number) => setAnchor({ side, timestamp }), []);
   const split = shouldSplitSignaling(asideLocation);
   if (!l3Data?.callWindow && !l3DataBSide?.callWindow) return null;
-  if (!split) return <SignalingPane l3Data={l3Data} l3DataBSide={l3DataBSide} />;
+  if (!split) return <SignalingPane l3Data={l3Data} l3DataBSide={l3DataBSide} onHoverTime={onHoverTime} />;
   const canSync = !!l3Data?.l3Messages.some((row) => row.MsgTime && Number.isFinite(Date.parse(row.MsgTime)))
     && !!l3DataBSide?.l3Messages.some((row) => row.MsgTime && Number.isFinite(Date.parse(row.MsgTime)));
   return (
@@ -652,7 +660,7 @@ export function L3SignalingPanel({ l3Data, l3DataBSide, asideLocation }: L3Signa
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
         {(["A", "B"] as const).map((side) => (
           <SignalingPane key={side} fixedSide={side} l3Data={l3Data} l3DataBSide={l3DataBSide}
-            syncTarget={syncEnabled && canSync ? anchor : null} onTimestamp={onTimestamp} />
+            syncTarget={syncEnabled && canSync ? anchor : null} onTimestamp={onTimestamp} onHoverTime={onHoverTime} />
         ))}
       </div>
     </section>

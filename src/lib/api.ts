@@ -1062,6 +1062,26 @@ export async function fetchGsmContextSignalBSide(
   return requestJson(`/api/gsm_context_signal_b_side?${params.toString()}`);
 }
 
+// 5G NR SS-RSRP/SS-RSRQ γύρω από την κλήση (FactNR5GRadio) — το NR αντίστοιχο των
+// call_context_signal / gsm_context_signal, ώστε το ενιαίο διάγραμμα να έχει σειρά και για VoNR.
+export async function fetchNr5gContextSignal(
+  database: string,
+  session_id: string,
+  window_sec = 10
+): Promise<{ signal: any[] }> {
+  const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
+  return requestJson(`/api/nr5g_context_signal?${params.toString()}`);
+}
+
+export async function fetchNr5gContextSignalBSide(
+  database: string,
+  session_id: string,
+  window_sec = 10
+): Promise<{ signal: any[] }> {
+  const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
+  return requestJson(`/api/nr5g_context_signal_b_side?${params.toString()}`);
+}
+
 export interface HandoverInfoRow {
   MsgId: number;
   SessionId: string | null;

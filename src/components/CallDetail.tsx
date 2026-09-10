@@ -11,12 +11,14 @@ import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/components/ui/use-toast";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchNr5gValues, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchCallSrvccDetail, fetchTechnologyTimeline, fetchTechnologyPeriods, fetchVoiceCodec, fetchMarkers, fetchCallNeighbors, type TechnologyPeriodRow, type CallNeighbors, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type SrvccDetailResponse, type SrvccEventRow, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchNr5gValues, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchNr5gContextSignal, fetchNr5gContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchCallSrvccDetail, fetchTechnologyTimeline, fetchTechnologyPeriods, fetchVoiceCodec, fetchMarkers, fetchCallNeighbors, type TechnologyPeriodRow, type CallNeighbors, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type SrvccDetailResponse, type SrvccEventRow, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
-import { CHART_PALETTE, AXIS_STYLE, GRID_STYLE, technologyColor } from "@/lib/chartStyles";
+import { technologyColor } from "@/lib/chartStyles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { L3SignalingPanel } from "@/components/L3SignalingPanel";
-import { SessionOverview, type OverviewLane, type OverviewSegment } from "@/components/SessionOverview";
+import { type OverviewLane, type OverviewSegment } from "@/components/SessionOverview";
+import { CallSignalChart, type SignalEvent } from "@/components/CallSignalChart";
+import { attachNearest, mergeSignalSamples, nearestIndex, sampleDomain, toNumber, toTimestamp, type SignalSample } from "@/lib/signalSeries";
 //ReferenceLine για γραμμες στο διαγραμμα, πχ για thresholds. 
 /**
  * Interface για τα props του Component CallDetail.
@@ -32,24 +34,19 @@ interface CallDetailProps {
   onNavigateToCall?: (sessionId: string) => void;
 }
 
-interface ChartEventMarker {
-  timestamp: number;
-  index: number;
-  lane: number;
-  percent: number;
-  label: string;
-  detail: string;
-  technology: string | null;
-  layer: string | null;
-  direction: string | null;
-  color: string;
-}
 
 /**
  * Παράδειγμα συνάρτησης με Types.
  * Δέχεται σαν είσοδο (iso) ένα string και εγγυάται(: string) 
  * ότι το αποτέλεσμά της θα είναι επίσης string.
  */
+/**
+ * Πόσο κοντά πρέπει να είναι μια γραμμή πίνακα στον κοινό cursor για να θεωρηθεί «αυτή που
+ * κοιτάς». Τα measurement reports απέχουν τυπικά ~0.5s, οπότε το 1.5s καλύπτει και τους
+ * αραιούς πίνακες (KPI, TraceLog) χωρίς να φωτίζει άσχετες γραμμές.
+ */
+const HOVER_TOLERANCE_MS = 1500;
+
 // Χρωματισμός LTE RSRP: πράσινο καλό, πορτοκαλί οριακό, κόκκινο κακό (χρησιμοποιείται στο χάρτη)
 function rsrpColor(val: number | null | undefined): string {
   if (val == null) return "#6b7280";
@@ -191,7 +188,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   const [contextSignalBSide, setContextSignalBSide] = useState<any[]>([]);
   const [gsmContextSignal, setGsmContextSignal] = useState<any[]>([]);
   const [gsmContextSignalBSide, setGsmContextSignalBSide] = useState<any[]>([]);
-  const [selectedContextSide, setSelectedContextSide] = useState<"A" | "B">("A");
+  const [nr5gContextSignal, setNr5gContextSignal] = useState<any[]>([]);
+  const [nr5gContextSignalBSide, setNr5gContextSignalBSide] = useState<any[]>([]);
   const [contextWindowSec, setContextWindowSec] = useState(30);
   const [contextTechnology, setContextTechnology] = useState<any[]>([]);
   // Περίοδοι τεχνολογίας (FactRadioTechnology) — η πηγή του Session Overview, ανά πλευρά
@@ -232,12 +230,6 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // empty/partial once the UE is camped on NR. Rows from both are merged chronologically below.
   const isVoNRMode = /VoNR/i.test(call.callMode ?? "");
   const [isLoadingRadio, setIsLoadingRadio] = useState(false);
-  // Chart series visibility toggles (strength/quality/scanner overlay)
-  const [showStrength, setShowStrength] = useState(true);
-  const [showQuality, setShowQuality] = useState(true);
-  const [showScanner, setShowScanner] = useState(false);
-  const [showBScanner, setShowBScanner] = useState(false);
-  const [showSignalingEvents, setShowSignalingEvents] = useState(true);
   // SRVCC Transition chart: ίδια λογική σειρών/κατωφλίων με το κύριο RSRP/RxLev διάγραμμα,
   // αλλά με δικά του toggles ώστε να μη «μολύνεται» η κύρια προβολή της κλήσης.
   // "all" = ολόκληρη η κλήση (default), αλλιώς ±N δευτερόλεπτα γύρω από τα SRVCC events
@@ -252,15 +244,17 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   const [isEditingComment, setIsEditingComment] = useState(false);
   const [isSavingComment, setIsSavingComment] = useState(false);
   const { toast } = useToast();
-  // Index του hovered row στο activeRadioValues (για ακριβή αντιστοίχιση με chartData)
-  const [hoveredRadioIndex, setHoveredRadioIndex] = useState<number | null>(null);
-  // Για TraceLog & KPI: αποθηκεύουμε το time string ώστε να βρούμε το κοντινότερο σημείο στο chart
-  const [hoveredTimeStr, setHoveredTimeStr] = useState<string | null>(null);
-
-  const toChartTime = (isoOrDate: string | null) => {
-    if (!isoOrDate) return null;
-    return new Date(isoOrDate).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  // Ένας κοινός cursor για ΟΛΗ τη σελίδα: το absolute timestamp (epoch ms) κάτω από το
+  // ποντίκι, από όποιον πίνακα/λωρίδα/ταμπέλα κι αν προέρχεται. Το διάγραμμα δείχνει εκεί
+  // την κάθετη γραμμή και οι πίνακες φωτίζουν τη γραμμή τους — και προς τις δύο κατευθύνσεις.
+  const [hoveredTime, setHoveredTime] = useState<number | null>(null);
+  // Καρφιτσωμένο διάγραμμα: μένει ορατό στην κορυφή όσο κυλάς τους πίνακες από κάτω.
+  const [chartPinned, setChartPinned] = useState(true);
+  const hoverIso = (iso: string | null | undefined) => {
+    const t = toTimestamp(iso);
+    setHoveredTime(Number.isFinite(t) ? t : null);
   };
+
 
 
 
@@ -530,7 +524,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       setSrvccDetail(null);
       setSrvccError(null);
       setLoadErrors([]);
-      setSelectedContextSide("A");
+      setSelectedLteSide("A");
       loadRadio();
     }
   }, [database, call.callId, call.callMode]);
@@ -697,12 +691,17 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   useEffect(() => {
     if (!call.callId || !database) return;
     async function reloadContext() {
-      const [ctxRes, ctxTechRes, gsmCtxRes, ctxBRes, gsmCtxBRes, techPerRes, techPerBRes] = await Promise.allSettled([
+      const [ctxRes, ctxTechRes, gsmCtxRes, ctxBRes, gsmCtxBRes, nrCtxRes, nrCtxBRes, techPerRes, techPerBRes] = await Promise.allSettled([
         call.callMode !== "CS" ? fetchCallContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
         fetchCallContextTechnology(database, call.callId, contextWindowSec),
         call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
         call.callMode !== "CS" ? fetchCallContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
         call.callMode === "CS" || call.callMode === "SRVCC" ? fetchGsmContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+        // Όχι μόνο σε VoNR: μια VoLTE κλήση με EN-DC (5G NSA πάνω σε LTE anchor) έχει κι αυτή
+        // γραμμές στο FactNR5GRadio, και το NR σκέλος της αξίζει να φαίνεται στην καμπύλη.
+        // Σε CS δεν υπάρχει τίποτα να ρωτήσουμε.
+        call.callMode !== "CS" ? fetchNr5gContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+        call.callMode !== "CS" ? fetchNr5gContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
         fetchTechnologyPeriods(database, call.callId, contextWindowSec, "A"),
         fetchTechnologyPeriods(database, call.callId, contextWindowSec, "B"),
       ]);
@@ -711,6 +710,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       if (gsmCtxRes.status === "fulfilled") setGsmContextSignal((gsmCtxRes.value as any).signal || []);
       if (ctxBRes.status === "fulfilled") setContextSignalBSide((ctxBRes.value as any).signal || []);
       if (gsmCtxBRes.status === "fulfilled") setGsmContextSignalBSide((gsmCtxBRes.value as any).signal || []);
+      setNr5gContextSignal(nrCtxRes.status === "fulfilled" ? ((nrCtxRes.value as any).signal || []) : []);
+      setNr5gContextSignalBSide(nrCtxBRes.status === "fulfilled" ? ((nrCtxBRes.value as any).signal || []) : []);
       if (techPerRes.status === "fulfilled") setTechPeriods((techPerRes.value as { periods?: TechnologyPeriodRow[] }).periods || []);
       if (techPerBRes.status === "fulfilled") setTechPeriodsBSide((techPerBRes.value as { periods?: TechnologyPeriodRow[] }).periods || []);
     }
@@ -914,39 +915,92 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     return matchNearestByTime(lteScannerBestRaw, activeRadioValues);
   }, [lteScannerBestRaw, selectedLteSide, activeRadioValues, isGSMMode]);
 
-  const chartData = useMemo(() => {
-    return activeRadioValues.map((val, idx) => {
-      const isGSM = isGSMMode;
+  // ── Ενιαία σειρά σήματος ────────────────────────────────────────────────────
+  // Ένα και μόνο dataset για ΟΛΟ το διάγραμμα: τα δείγματα του context (±Ns γύρω από την
+  // κλήση) και τα δείγματα της ίδιας της κλήσης πέφτουν στον ίδιο πίνακα με κλειδί το
+  // absolute timestamp. Έτσι το «πριν/μετά» και η ίδια η κλήση διαβάζονται σε μία καμπύλη
+  // αντί για δύο ξεχωριστά διαγράμματα με διαφορετικούς άξονες.
+  const unifiedSamples = useMemo<SignalSample[]>(() => {
+    const lteContext = (selectedLteSide === "B" ? contextSignalBSide : contextSignal).map((v: any) => ({
+      t: toTimestamp(v.MsgTime), RSRP: toNumber(v.RSRP), RSRQ: toNumber(v.RSRQ),
+    }));
+    const gsmContext = (selectedLteSide === "B" ? gsmContextSignalBSide : gsmContextSignal).map((v: any) => ({
+      t: toTimestamp(v.MsgTime), RxLev: toNumber(v.RxLevSub), RxQual: toNumber(v.RxQualSub),
+    }));
+    const nrContext = (selectedLteSide === "B" ? nr5gContextSignalBSide : nr5gContextSignal).map((v: any) => ({
+      t: toTimestamp(v.MsgTime), NrRSRP: toNumber(v.RSRP), NrRSRQ: toNumber(v.RSRQ),
+    }));
 
-      // Βοηθητική συνάρτηση για να μην μετατρέπεται το null/κενό σε 0 από την Number()
-      const parseValue = (v: any) => (v == null || v === "") ? undefined : Number(v);
-
+    // Τα δείγματα της κλήσης: καλύπτουν ό,τι δεν επιστρέφει το context (π.χ. CS κλήση χωρίς
+    // LTE context) και είναι αυτά που κουμπώνουν με τον πίνακα Radio Measurements.
+    const callRows = activeRadioValues.map((val: any) => {
+      const isNr = String(val.Technology ?? "").toUpperCase().includes("NR");
       return {
-        time: new Date(val.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-        timestamp: new Date(val.MsgTime).getTime(),
-        RxLevSub: isGSM ? parseValue(val.RxLevSub) : undefined,
-        RxQualSub: isGSM ? parseValue(val.RxQualSub) : undefined,
-        RSRP: !isGSM ? parseValue(val.RSRP) : undefined,
-        RSRQ: !isGSM ? parseValue(val.RSRQ) : undefined,
-        ScannerRxLev: isGSM ? parseValue(gsmScannerMatched[idx]?.RxLev) : undefined,
-        BestScannerRxLev: isGSM ? parseValue(gsmScannerBestMatched[idx]?.RxLev) : undefined,
-        ScannerRSRP: !isGSM ? parseValue(lteScannerMatched[idx]?.RSRP) : undefined,
-        BestScannerRSRP: !isGSM ? parseValue(lteScannerBestMatched[idx]?.RSRP) : undefined,
+        t: toTimestamp(val.MsgTime),
+        RSRP: !isGSMMode && !isNr ? toNumber(val.RSRP) : undefined,
+        RSRQ: !isGSMMode && !isNr ? toNumber(val.RSRQ) : undefined,
+        NrRSRP: isNr ? toNumber(val.RSRP) : undefined,
+        NrRSRQ: isNr ? toNumber(val.RSRQ) : undefined,
+        RxLev: isGSMMode ? toNumber(val.RxLevSub) : undefined,
+        RxQual: isGSMMode ? toNumber(val.RxQualSub) : undefined,
       };
     });
-  }, [activeRadioValues, isGSMMode, gsmScannerMatched, gsmScannerBestMatched, lteScannerMatched, lteScannerBestMatched]);
+
+    // Σε SRVCC το GSM σκέλος δεν είναι το «ενεργό» activeRadioValues όταν βλέπουμε LTE, αλλά
+    // πρέπει να σχεδιαστεί ώστε το σκαλοπάτι του handover να φαίνεται στην ίδια καμπύλη.
+    const gsmLeg = (call.callMode === "SRVCC" && !isGSMMode
+      ? (selectedLteSide === "B" ? bSideGsmValues : gsmValues)
+      : []
+    ).map((val: any) => ({ t: toTimestamp(val.MsgTime), RxLev: toNumber(val.RxLevSub), RxQual: toNumber(val.RxQualSub) }));
+
+    const merged = mergeSignalSamples([lteContext, gsmContext, nrContext, gsmLeg, callRows]);
+
+    // Το scanner έρχεται από άλλο query και σπάνια πέφτει στο ίδιο ακριβώς ms, οπότε
+    // προσαρτάται στο πλησιέστερο δείγμα αντί για exact-match merge.
+    return attachNearest(merged, activeRadioValues.map((val: any, idx: number) => ({
+      t: toTimestamp(val.MsgTime),
+      values: isGSMMode
+        ? { ScannerStrength: toNumber(gsmScannerMatched[idx]?.RxLev), BestScannerStrength: toNumber(gsmScannerBestMatched[idx]?.RxLev) }
+        : { ScannerStrength: toNumber(lteScannerMatched[idx]?.RSRP), BestScannerStrength: toNumber(lteScannerBestMatched[idx]?.RSRP) },
+    })));
+  }, [activeRadioValues, isGSMMode, selectedLteSide, call.callMode, gsmValues, bSideGsmValues,
+      contextSignal, contextSignalBSide, gsmContextSignal, gsmContextSignalBSide, nr5gContextSignal, nr5gContextSignalBSide,
+      gsmScannerMatched, gsmScannerBestMatched, lteScannerMatched, lteScannerBestMatched]);
+
+  const unifiedDomain = useMemo(() => sampleDomain(unifiedSamples), [unifiedSamples]);
+
+  /** Υπάρχει όντως B-side; Αλλιώς ο επιλογέας πλευράς μένει απενεργοποιημένος. */
+  const hasBSideData = bSideLteValues.length > 0 || bSideGsmValues.length > 0
+    || contextSignalBSide.length > 0 || gsmContextSignalBSide.length > 0 || nr5gContextSignalBSide.length > 0;
+  const unifiedTimes = useMemo(() => unifiedSamples.map((sample) => sample.t), [unifiedSamples]);
+
+  /** Ποιο δίκτυο ορίζει τον άξονα ποιότητας και τα κατώφλια του διαγράμματος. */
+  const chartNetwork = isGSMMode ? "GSM" : isVoNRMode ? "NR" : "LTE";
+
+  // Όρια κλήσης σε epoch ms — σκιάζουν το «κατά» και χωρίζουν πριν/μετά, κοινά με το overview.
+  const callBounds = useMemo(() => {
+    const start = new Date(call.startTime).getTime();
+    const end = new Date(call.endTime).getTime();
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) return { start, end };
+    // Fallback: η φάση "during" όπως την έδωσε το backend στα context rows
+    const during = [...contextSignal, ...gsmContextSignal]
+      .filter((v: any) => v.phase === "during")
+      .map((v: any) => toTimestamp(v.MsgTime))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+    return during.length > 1 ? { start: during[0], end: during[during.length - 1] } : null;
+  }, [call.startTime, call.endTime, contextSignal, gsmContextSignal]);
 
   // Important L3/SIP/NAS events are projected onto the nearest radio sample, producing the
   // vertical event lines and stacked labels seen in drive-test tools. Repeated low-value
   // messages (especially Paging) are rate-limited so the RSRP/RxLev trace remains readable.
-  const signalingMarkers = useMemo<ChartEventMarker[]>(() => {
-    if (chartData.length === 0) return [];
+  const signalEvents = useMemo<SignalEvent[]>(() => {
+    if (!unifiedDomain) return [];
     const sideL3 = selectedLteSide === "B" ? l3DataBSide : l3Data;
-    const firstTimestamp = chartData[0]?.timestamp;
-    const lastTimestamp = chartData[chartData.length - 1]?.timestamp;
-    if (!Number.isFinite(firstTimestamp) || !Number.isFinite(lastTimestamp)) return [];
+    const firstTimestamp = unifiedDomain.start;
+    const lastTimestamp = unifiedDomain.end;
 
-    type Candidate = Omit<ChartEventMarker, "index" | "lane" | "percent"> & { dedupeKey: string };
+    type Candidate = SignalEvent & { dedupeKey: string };
     const candidates: Candidate[] = [];
 
     const eventColor = (layer: string | null, label: string) => {
@@ -1055,32 +1109,14 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       lastByLabel.set(candidate.dedupeKey, candidate.timestamp);
     }
 
+    // Η κατανομή σε λωρίδες γίνεται πλέον στο ίδιο το διάγραμμα, πάνω στον χρονικό άξονα
+    // (layoutEventLanes) — εδώ μένει μόνο το «ποια events αξίζουν ταμπέλα».
     const limited = accepted.length <= 16
       ? accepted
       : accepted.filter((_, index) => index === 0 || index === accepted.length - 1 || index % Math.ceil(accepted.length / 14) === 0).slice(0, 16);
-    const laneLastIndex = [-100, -100, -100];
 
-    return limited.map((candidate) => {
-      let nearestIndex = 0;
-      let nearestDistance = Number.POSITIVE_INFINITY;
-      chartData.forEach((point, index) => {
-        const distance = Math.abs(point.timestamp - candidate.timestamp);
-        if (distance < nearestDistance) {
-          nearestDistance = distance;
-          nearestIndex = index;
-        }
-      });
-      let lane = laneLastIndex.findIndex((lastIndex) => nearestIndex - lastIndex >= 10);
-      if (lane === -1) lane = laneLastIndex.indexOf(Math.min(...laneLastIndex));
-      laneLastIndex[lane] = nearestIndex;
-      return {
-        ...candidate,
-        index: nearestIndex,
-        lane,
-        percent: chartData.length === 1 ? 50 : (nearestIndex / (chartData.length - 1)) * 100,
-      };
-    });
-  }, [call.callMode, chartData, handoverInfo, isGSMMode, l3Data, l3DataBSide, selectedLteSide, srvccDetail]);
+    return limited.map(({ dedupeKey, ...event }) => event);
+  }, [call.callMode, unifiedDomain, handoverInfo, isGSMMode, l3Data, l3DataBSide, selectedLteSide, srvccDetail]);
 
   const srvccEvents = useMemo(() => srvccDetail?.events ?? [], [srvccDetail]);
   const activeSrvccEvents = useMemo(
@@ -1204,18 +1240,25 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   const headerHandoverInfo = call.callMode === "SRVCC" ? [] : handoverInfo;
   const activeCellInfo = selectedLteSide === "B" ? bSideCellInfo : cellInfo;
 
-  // Ποιό x-value (time string) να δείξει στο ReferenceLine — ορίζεται ΜΕΤΑ το chartData
-  const chartHighlightTime = hoveredRadioIndex !== null
-    ? chartData[hoveredRadioIndex]?.time ?? null
-    : hoveredTimeStr !== null
-      ? (chartData.find(d => d.time === hoveredTimeStr)?.time ?? null)
-      : null;
+  // Ποιά γραμμή του πίνακα Radio Measurements αντιστοιχεί στον κοινό cursor: η πλησιέστερη
+  // χρονικά, αλλά μόνο αν είναι όντως κοντά — αλλιώς ένα event εκτός παραθύρου θα «φώτιζε»
+  // αυθαίρετα την πρώτη ή την τελευταία γραμμή.
+  const activeRadioTimes = useMemo(
+    () => activeRadioValues.map((val: any) => toTimestamp(val.MsgTime)),
+    [activeRadioValues],
+  );
+  const activeRadioIndex = useMemo(() => {
+    if (hoveredTime == null) return -1;
+    const index = nearestIndex(activeRadioTimes, hoveredTime);
+    return index >= 0 && Math.abs(activeRadioTimes[index] - hoveredTime) <= HOVER_TOLERANCE_MS ? index : -1;
+  }, [hoveredTime, activeRadioTimes]);
 
-  const chartHighlightIndex = useMemo(() => {
-    if (hoveredRadioIndex !== null) return hoveredRadioIndex;
-    if (hoveredTimeStr !== null) return chartData.findIndex(d => d.time === hoveredTimeStr);
-    return -1;
-  }, [hoveredRadioIndex, hoveredTimeStr, chartData]);
+  /** Είναι αυτή η γραμμή (με το δικό της timestamp) κάτω από τον κοινό cursor; */
+  const isHoveredIso = (iso: string | null | undefined) => {
+    if (hoveredTime == null) return false;
+    const t = toTimestamp(iso);
+    return Number.isFinite(t) && Math.abs(t - hoveredTime) <= HOVER_TOLERANCE_MS;
+  };
 
   // TraceLog rows + user-placed Markers merged into one time-sorted timeline, so annotations
   // the user dropped during the session show up alongside the engine's own trace events.
@@ -1233,15 +1276,6 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       return ta - tb;
     });
   }, [tracelogValues, markers]);
-
-  // Τα threshold ReferenceLines εμφανίζονται μόνο όταν είναι επιλεγμένο ακριβώς ΕΝΑ checkbox
-  // σειράς — με 2+ σειρές ταυτόχρονα απενεργοποιούνται για να μένει καθαρό το διάγραμμα.
-  const selectedSeriesCount = [showStrength, showQuality, showScanner, showBScanner].filter(Boolean).length;
-  const showStrengthThresholds = selectedSeriesCount === 1 && !showQuality;
-  const showQualityThresholds = selectedSeriesCount === 1 && showQuality;
-  // Ο αριστερός άξονας (ισχύς) χρειάζεται και από τις scanner σειρές (yAxisId="left"), αλλιώς
-  // η σύγκριση scanner με μόνο RxQual/RSRQ ενεργό δεν σχεδιάζεται (λείπει ο άξονάς τους).
-  const showLeftAxis = showStrength || showScanner || showBScanner;
 
   // Aggregate min/max/avg RSRP & RSRQ for the B-side LTE leg (samples, avg, min, max)
   const bSideLteSummary = useMemo(() => {
@@ -1302,91 +1336,11 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
 
   // Keep sides isolated. Empty B-side data is rendered as a clear no-data state instead of
   // silently showing A-side measurements under a B-side label.
-  const activeContextSignal = selectedContextSide === "B" ? contextSignalBSide : contextSignal;
+  const activeContextSignal = selectedLteSide === "B" ? contextSignalBSide : contextSignal;
+  const activeGsmContextSignal = selectedLteSide === "B" ? gsmContextSignalBSide : gsmContextSignal;
 
-  const activeGsmContextSignal = selectedContextSide === "B" ? gsmContextSignalBSide : gsmContextSignal;
-
-  // LTE RSRP/RSRQ series for the "network behavior around the call" chart, tagged with
-  // before/during/after phase so the chart can shade each period differently
-  const contextChartData = useMemo(() =>
-    activeContextSignal.map((v, idx) => ({
-      idx,
-      t: new Date(v.MsgTime).getTime(),
-      time: new Date(v.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-      RSRP: v.RSRP != null ? Number(v.RSRP) : undefined,
-      RSRQ: v.RSRQ != null ? Number(v.RSRQ) : undefined,
-      phase: v.phase as "before" | "during" | "after",
-    }))
-  , [activeContextSignal]);
-
-  // Το GSM context chart δεν αφορά μόνο τις CS κλήσεις: σε SRVCC το δεύτερο σκέλος είναι GSM,
-  // οπότε το δείχνουμε πάντα δίπλα στο LTE χωρίς να χρειάζεται το LTE/GSM toggle.
+  // Το GSM σκέλος δεν αφορά μόνο τις CS κλήσεις: σε SRVCC το δεύτερο σκέλος είναι GSM.
   const showGsmContext = isGSMMode || call.callMode === "SRVCC";
-
-  const gsmChartData = useMemo(() => {
-    if (!showGsmContext) return [];
-    // Το A-side GSM context φιλτράρεται στο backend μόνο χρονικά, οπότε επιστρέφει και
-    // GSMMeasReport παράλληλων sessions (άλλες συσκευές του ίδιου drive test). Κρατάμε μόνο
-    // τα δείγματα της ίδιας της κλήσης — αλλιώς οι σειρές πλέκονται σε μία πριονωτή καμπύλη.
-    const ownSession = activeGsmContextSignal.filter(
-      (v: any) => v.SessionId != null && String(v.SessionId) === String(call.callId),
-    );
-    const contextRows = ownSession.length > 0 ? ownSession : activeGsmContextSignal;
-
-    // Use the active context signal (A or B side, has real before/during/after) when available
-    if (contextRows.length > 0) {
-      return contextRows.map((v: any, idx: number) => ({
-        idx,
-        t: new Date(v.MsgTime).getTime(),
-        time: new Date(v.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-        RxLevSub: v.RxLevSub != null ? Number(v.RxLevSub) : undefined,
-        RxQualSub: v.RxQualSub != null ? Number(v.RxQualSub) : undefined,
-        phase: v.phase as "before" | "during" | "after",
-      }));
-    }
-    // Fallback: τα GSM measurements της ίδιας της κλήσης (όλα "during") ώστε το chart να
-    // εμφανίζεται πάντα. Παίρνουμε ρητά GSM rows — σε SRVCC το activeRadioValues μπορεί να
-    // δείχνει το LTE σκέλος, που δεν έχει καθόλου RxLev/RxQual.
-    return (selectedContextSide === "B" ? bSideGsmValues : gsmValues).map((val: any, idx: number) => ({
-      idx,
-      t: new Date(val.MsgTime).getTime(),
-      time: new Date(val.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }),
-      RxLevSub: val.RxLevSub != null ? Number(val.RxLevSub) : undefined,
-      RxQualSub: val.RxQualSub != null ? Number(val.RxQualSub) : undefined,
-      phase: "during" as const,
-    }));
-  }, [showGsmContext, activeGsmContextSignal, selectedContextSide, gsmValues, bSideGsmValues, call.callId]);
-
-  // ── Κοινός χρονικός άξονας για τα context charts ──────────────────────────
-  // Τα δύο διαγράμματα (LTE και GSM) στοιβάζονται το ένα κάτω από το άλλο και μοιράζονται
-  // ΤΟ ΙΔΙΟ absolute-time domain. Έτσι σε SRVCC το GSM σκέλος πιάνει μόνο το κομμάτι του
-  // άξονα που όντως διήρκεσε (π.χ. 42s στο τέλος) αντί να τεντώνεται σε όλο το πλάτος, και
-  // οι δύο καμπύλες διαβάζονται κάθετα η μία πάνω στην άλλη όπου συνυπάρχουν.
-  const ctxDomain = useMemo(() => {
-    const times = [...contextChartData, ...gsmChartData].map((d) => d.t).filter(Number.isFinite);
-    if (times.length < 2) return null;
-    return { start: Math.min(...times), end: Math.max(...times) };
-  }, [contextChartData, gsmChartData]);
-
-  // Όρια κλήσης σε epoch ms — κοινά και για τα δύο charts, ώστε οι ζώνες πριν/κατά/μετά
-  // να πέφτουν στην ίδια κάθετη θέση.
-  const ctxCallBounds = useMemo(() => {
-    const start = new Date(call.startTime).getTime();
-    const end = new Date(call.endTime).getTime();
-    if (Number.isFinite(start) && Number.isFinite(end) && end > start) return { start, end };
-    // Fallback: τα όρια της φάσης "during" όπως τα έδωσε το backend
-    const during = (contextChartData.length > 0 ? contextChartData : gsmChartData).filter((d) => d.phase === "during");
-    return during.length > 0 ? { start: during[0].t, end: during[during.length - 1].t } : null;
-  }, [call.startTime, call.endTime, contextChartData, gsmChartData]);
-
-  const ctxTimeTick = (value: number) =>
-    new Date(value).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
-
-  // Πόσο κράτησε πραγματικά το GSM σκέλος (πρώτο → τελευταίο RxLev δείγμα)
-  const gsmSpanSec = useMemo(() => {
-    const times = gsmChartData.filter((d) => d.RxLevSub != null).map((d) => d.t);
-    return times.length > 1 ? (Math.max(...times) - Math.min(...times)) / 1000 : null;
-  }, [gsmChartData]);
 
   // ── Session Overview ──────────────────────────────────────────────────────
   // Χρονική επισκόπηση (τύπου Gantt) που μπαίνει ακριβώς πάνω από το διάγραμμα
@@ -1394,17 +1348,17 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // Δένεται στα ΙΔΙΑ δείγματα με το chart από κάτω (index domain), ώστε κάθε
   // μπάρα να πέφτει πάνω από το αντίστοιχο σημείο της καμπύλης.
   const sessionOverview = useMemo(() => {
-    if (!ctxDomain) return null;
+    if (!unifiedDomain) return null;
 
     // Τα charts από κάτω έχουν πλέον γραμμικό άξονα χρόνου, οπότε το overview δένεται σε
     // ισαπέχοντα δείγματα του ίδιου domain (γραμμική αντιστοίχιση χρόνου → θέσης).
     const STEPS = 120;
-    const times = Array.from({ length: STEPS + 1 }, (_, i) => ctxDomain.start + ((ctxDomain.end - ctxDomain.start) * i) / STEPS);
+    const times = Array.from({ length: STEPS + 1 }, (_, i) => unifiedDomain.start + ((unifiedDomain.end - unifiedDomain.start) * i) / STEPS);
 
-    const winStart = ctxDomain.start;
-    const winEnd = ctxDomain.end;
-    const callStart = ctxCallBounds?.start ?? null;
-    const callEnd = ctxCallBounds?.end ?? null;
+    const winStart = unifiedDomain.start;
+    const winEnd = unifiedDomain.end;
+    const callStart = callBounds?.start ?? null;
+    const callEnd = callBounds?.end ?? null;
 
     // Λωρίδα κατάστασης — τα όρια είναι ακριβώς αυτά του shaded "κατά την κλήση"
     // area του chart, οπότε οι δύο απεικονίσεις δείχνουν πάντα το ίδιο διάστημα.
@@ -1436,7 +1390,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     // StartTime/EndTime και το band που σέρβιρε πραγματικά το δίκτυο ("LTE E-UTRA 20",
     // "GSM 900"). Είναι η ίδια πηγή που διαβάζει και το SmartAnalytics Scene, οπότε
     // περιέχει το GSM σκέλος ενός SRVCC, ολόκληρη μια CS κλήση και τα κενά "No service".
-    const periods = selectedContextSide === "B" ? techPeriodsBSide : techPeriods;
+    const periods = selectedLteSide === "B" ? techPeriodsBSide : techPeriods;
     const periodSegments: OverviewSegment[] = [];
     for (const period of periods) {
       const from = new Date(period.StartTime).getTime();
@@ -1576,75 +1530,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     if (techSegments.length > 0) lanes.push({ name: "Τεχνολογία", segments: techSegments });
 
     return { times, lanes, callStart, callEnd };
-  }, [ctxDomain, ctxCallBounds, contextTechnology, techPeriods, techPeriodsBSide, selectedContextSide, srvccDetail, call.callType, call.callMode, call.status]);
-
-  // GSM context chart (RxLev / RxQual με τις ζώνες πριν/κατά/μετά). Ορίζεται μία φορά εδώ γιατί
-  // η θέση του μέσα στο panel αλλάζει: πάνω σε GSM view, κάτω από το LTE chart σε SRVCC.
-  const gsmContextChart = showGsmContext && gsmChartData.length > 0 ? (
-    <div>
-      <div className="flex items-center gap-3 mb-1">
-        <span className="text-xs text-muted-foreground">
-          RxLev / RxQual
-          {call.callMode === "SRVCC" && !isGSMMode && gsmSpanSec != null
-            ? ` · GSM σκέλος ${gsmSpanSec.toFixed(0)}s (μετά το SRVCC)`
-            : ""}
-        </span>
-        <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-amber-400/30 border border-amber-400/50" />Πριν</span>
-        <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-blue-500/30 border border-blue-500/50" />Κατά</span>
-        <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-orange-400/30 border border-orange-400/50" />Μετά</span>
-      </div>
-      <ResponsiveContainer width="100%" height={160}>
-        <LineChart data={gsmChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-          <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
-          {/* Κοινός άξονας χρόνου με το LTE chart από πάνω — το GSM σκέλος καταλαμβάνει μόνο
-              το πραγματικό του διάστημα, στη σωστή θέση της κλήσης */}
-          <XAxis
-            dataKey="t"
-            type="number"
-            scale="time"
-            domain={ctxDomain ? [ctxDomain.start, ctxDomain.end] : ["dataMin", "dataMax"]}
-            allowDataOverflow
-            tickFormatter={ctxTimeTick}
-            tick={{ fontSize: 9, fill: "#94a3b8" }}
-            interval="preserveStartEnd"
-          />
-          <YAxis yAxisId="rxlev" domain={[-120, -40]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={32} />
-          <YAxis yAxisId="rxqual" orientation="right" domain={[7, 0]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={28} />
-          <RechartsTooltip
-            contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155", fontSize: 11 }}
-            labelFormatter={ctxTimeTick}
-            formatter={(val: any, name: string) => [val != null ? Number(val).toFixed(1) : "—", name]}
-          />
-          {/* Ζώνες πριν / κατά / μετά — σε χρόνο, ίδιες με του LTE chart */}
-          {ctxDomain && ctxCallBounds && (
-            <>
-              {ctxCallBounds.start > ctxDomain.start && (
-                <ReferenceArea yAxisId="rxlev" x1={ctxDomain.start} x2={ctxCallBounds.start} fill="#f59e0b" fillOpacity={0.25} stroke="#f59e0b" strokeOpacity={0.4} strokeWidth={1} />
-              )}
-              <ReferenceArea yAxisId="rxlev" x1={ctxCallBounds.start} x2={ctxCallBounds.end} fill="#3b82f6" fillOpacity={0.22} stroke="#3b82f6" strokeOpacity={0.5} strokeWidth={1} />
-              {ctxDomain.end > ctxCallBounds.end && (
-                <ReferenceArea yAxisId="rxlev" x1={ctxCallBounds.end} x2={ctxDomain.end} fill="#f97316" fillOpacity={0.25} stroke="#f97316" strokeOpacity={0.4} strokeWidth={1} />
-              )}
-            </>
-          )}
-          {/* Σε SRVCC σημειώνουμε το handover στην ακριβή του ώρα */}
-          {call.callMode === "SRVCC" && activeSrvccEvents.map((event, idx) => event.EventTime && (
-            <ReferenceLine
-              key={`gsm-srvcc-${event.MsgId ?? idx}`}
-              yAxisId="rxlev"
-              x={new Date(event.EventTime).getTime()}
-              stroke={event.Status === "Success" ? "#22c55e" : "#ef4444"}
-              strokeWidth={2}
-              strokeDasharray="4 3"
-              label={{ value: `SRVCC ${event.HandoverType}`, position: "insideTopRight", fill: "#cbd5e1", fontSize: 9 }}
-            />
-          ))}
-          <Line yAxisId="rxlev" dataKey="RxLevSub" stroke="#22c55e" dot={false} strokeWidth={2} connectNulls name="RxLev" />
-          <Line yAxisId="rxqual" dataKey="RxQualSub" stroke="#e2e8f0" dot={false} strokeWidth={1} connectNulls name="RxQual" />
-        </LineChart>
-      </ResponsiveContainer>
-    </div>
-  ) : null;
+  }, [unifiedDomain, callBounds, contextTechnology, techPeriods, techPeriodsBSide, selectedLteSide, srvccDetail, call.callType, call.callMode, call.status]);
 
   return (
     <motion.div
@@ -2098,69 +1984,6 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
 
             <div className="flex items-center gap-3 flex-wrap">
               <h2 className="text-sm font-bold font-mono text-foreground">{call.region} · {call.callId}</h2>
-              {/* Checkboxes to toggle each line series on the chart below (labels swap for GSM vs LTE) */}
-              {activeRadioValues && activeRadioValues.length > 0 && (
-                <div className="flex items-center gap-3 bg-muted/50 px-2 py-0.5 rounded border border-border/50">
-                  <label className="flex items-center gap-1.5 text-xs font-medium text-foreground cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={showStrength}
-                      onChange={(e) => setShowStrength(e.target.checked)}
-                      className="h-3.5 w-3.5 rounded-sm border-primary text-primary focus:ring-primary"
-                    />
-                    {isGSMMode ? "RxLev" : "RSRP"}
-                  </label>
-                  <label className="flex items-center gap-1.5 text-xs font-medium text-foreground cursor-pointer select-none">
-                    <input
-                      type="checkbox"
-                      checked={showQuality}
-                      onChange={(e) => setShowQuality(e.target.checked)}
-                      className="h-3.5 w-3.5 rounded-sm border-primary text-primary focus:ring-primary"
-                    />
-                    {isGSMMode ? "RxQual" : "RSRQ"}
-                  </label>
-                  <Tooltip delayDuration={150}>
-                    <TooltipTrigger asChild>
-                      <label className="flex items-center gap-1.5 text-xs font-medium text-foreground cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={showScanner}
-                          onChange={(e) => setShowScanner(e.target.checked)}
-                          className="h-3.5 w-3.5 rounded-sm border-primary text-primary focus:ring-primary"
-                        />
-                        {isGSMMode ? "RxLev Scanner" : "LTE Scanner"}
-                      </label>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" align="center" className="max-w-[220px]">
-                      <p className="text-xs">
-                        {isGSMMode
-                          ? "Ο scanner στο ίδιο CGI με το κινητό — σύγκριση RxLev κινητού vs scanner στο κοινό serving CGI."
-                          : "Ο scanner στο ίδιο EARFCN/PCI με το κινητό — σύγκριση RSRP κινητού vs scanner στο κοινό serving cell."}
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
-                  <Tooltip delayDuration={150}>
-                    <TooltipTrigger asChild>
-                      <label className="flex items-center gap-1.5 text-xs font-medium text-foreground cursor-pointer select-none">
-                        <input
-                          type="checkbox"
-                          checked={showBScanner}
-                          onChange={(e) => setShowBScanner(e.target.checked)}
-                          className="h-3.5 w-3.5 rounded-sm border-primary text-primary focus:ring-primary"
-                        />
-                        {isGSMMode ? "best RxLev Scanner" : "Best LTE Scanner"}
-                      </label>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom" align="center" className="max-w-[220px]">
-                      <p className="text-xs">
-                        {isGSMMode
-                          ? "Top 1 RxLev του scanner για τον operator της κλήσης."
-                          : "Top 1 RSRP του scanner για τον operator της κλήσης, ανεξαρτήτως EARFCN/PCI του κινητού."}
-                      </p>
-                    </TooltipContent>
-                  </Tooltip>
-                </div>
-              )}
             </div>
             {/* Call meta + timing on one line */}
             <div className="text-[10px] text-muted-foreground flex flex-wrap items-center gap-x-3 mt-0.5">
@@ -2323,128 +2146,12 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
           </div>
         </div>
 
-        {/* Chart inside the top card */}
+        {/* Χάρτης της κλήσης — το διάγραμμα σήματος έφυγε από εδώ και μπήκε σε δικό του,
+            καρφιτσώσιμο block ακριβώς από κάτω (CallSignalChart), ώστε να μένει ορατό
+            όσο κυλάς τους πίνακες. */}
         {activeRadioValues && activeRadioValues.length > 0 && (
           <div className="mt-1 pt-1 border-t border-border">
-            <div className="mb-1 flex items-center justify-between gap-2">
-              <h3 className="text-[10px] font-semibold text-foreground flex items-center gap-1">
-                <Activity className="h-3 w-3 text-primary" />
-                {isGSMMode ? "GSM (RxLev / RxQual)" : "LTE (RSRP / RSRQ)"}
-              </h3>
-              {signalingMarkers.length > 0 && (
-                <label className="flex items-center gap-1.5 text-[10px] text-muted-foreground cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    checked={showSignalingEvents}
-                    onChange={(event) => setShowSignalingEvents(event.target.checked)}
-                    className="h-3 w-3 rounded-sm border-primary text-primary focus:ring-primary"
-                  />
-                  Signaling events ({signalingMarkers.length})
-                </label>
-              )}
-            </div>
             <div className="flex gap-2 items-end">
-            {/* Chart — flex 3 */}
-            <div className="relative" style={{ flex: 3, height: showSignalingEvents && signalingMarkers.length > 0 ? 245 : 220 }}>
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={chartData} margin={{ top: showSignalingEvents && signalingMarkers.length > 0 ? 54 : 5, right: 0, left: 0, bottom: 5 }}>
-                  <CartesianGrid {...GRID_STYLE} vertical={false} />
-                  <XAxis dataKey="time" {...AXIS_STYLE} axisLine={false} tickLine={false} />
-
-                  {/* Axis domains, threshold reference lines and dashed thresholds differ per network:
-                      GSM uses RxLev/RxQual scales (RxQual axis reversed, 0=best..7=worst),
-                      LTE uses RSRP/RSRQ scales (both axes standard, more negative=worse). */}
-                  {isGSMMode ? (
-                    <>
-                      {showLeftAxis && <YAxis yAxisId="left" domain={[-105, dataMax => Math.max(dataMax, -60)]} {...AXIS_STYLE} axisLine={false} tickLine={false} />}
-                      {showQuality && <YAxis yAxisId="right" orientation="right" reversed={true} domain={[0, 7]} {...AXIS_STYLE} axisLine={false} tickLine={false} />}
-                      {showStrengthThresholds && <ReferenceLine y={-88} yAxisId="left" stroke="hsl(var(--warning, 45 93% 58%))" strokeDasharray="3 3" />}
-                      {showStrengthThresholds && <ReferenceLine y={-92} yAxisId="left" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
-                      {showQualityThresholds && <ReferenceLine y={5} yAxisId="right" stroke="hsl(var(--warning, 45 93% 58%))" strokeDasharray="3 3" />}
-                      {showQualityThresholds && <ReferenceLine y={6} yAxisId="right" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
-                      <RechartsTooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }} itemStyle={{ color: 'hsl(var(--foreground))' }} />
-                      <Legend wrapperStyle={{ fontSize: '12px' }} />
-                      {/* Custom dot renderer: only draws a visible circle at chartHighlightIndex (the
-                          row currently hovered in the table below), keeping every other point invisible */}
-                      {showStrength && <Line yAxisId="left" type="monotone" dataKey="RxLevSub" stroke={CHART_PALETTE[1]} dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill={CHART_PALETTE[1]} stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RxLevSub" />}
-                      {showScanner && <Line yAxisId="left" type="monotone" dataKey="ScannerRxLev" stroke={CHART_PALETTE[2]} strokeDasharray="4 3" dot={false} activeDot={false} strokeWidth={2} connectNulls name="RxLev Scanner" />}
-                      {showBScanner && <Line yAxisId="left" type="monotone" dataKey="BestScannerRxLev" stroke={CHART_PALETTE[3]} strokeDasharray="2 2" dot={false} activeDot={false} strokeWidth={2} connectNulls name="Best RxLev Scanner" />}
-                      {showQuality && <Line yAxisId="right" type="monotone" dataKey="RxQualSub" stroke={CHART_PALETTE[4]} dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill={CHART_PALETTE[4]} stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RxQualSub" />}
-                      {chartHighlightTime && (showLeftAxis || showQuality) && (
-                        <ReferenceLine
-                          x={chartHighlightTime}
-                          yAxisId={showLeftAxis ? "left" : "right"}
-                          stroke="hsl(180, 90%, 55%)"
-                          strokeWidth={3}
-                          label={{ value: "│", position: "insideTopLeft", fill: "hsl(180, 90%, 65%)", fontSize: 18, fontWeight: 800 }}
-                        />
-                      )}
-                    </>
-                  ) : (
-                    <>
-                      {showLeftAxis && <YAxis yAxisId="left" domain={[-140, dataMax => Math.max(dataMax, -100)]} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} axisLine={false} tickLine={false} />}
-                      {showQuality && <YAxis yAxisId="right" orientation="right" domain={[-25, -12]} tick={{ fill: "hsl(var(--muted-foreground))", fontSize: 10 }} axisLine={false} tickLine={false} />}
-                      {showStrengthThresholds && <ReferenceLine y={-115} yAxisId="left" stroke="hsl(var(--warning, 45 93% 58%))" strokeDasharray="3 3" />}
-                      {showStrengthThresholds && <ReferenceLine y={-120} yAxisId="left" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
-                      {showQualityThresholds && <ReferenceLine y={-16} yAxisId="right" stroke="hsl(var(--warning, 45 93% 58%))" strokeDasharray="3 3" />}
-                      {showQualityThresholds && <ReferenceLine y={-18} yAxisId="right" stroke="hsl(var(--destructive, 0 72% 51%))" strokeDasharray="3 3" />}
-                      <RechartsTooltip contentStyle={{ backgroundColor: 'hsl(var(--card))', borderColor: 'hsl(var(--border))', borderRadius: '8px', fontSize: '12px' }} itemStyle={{ color: 'hsl(var(--foreground))' }} />
-                      <Legend wrapperStyle={{ fontSize: '12px' }} />
-                      {showStrength && <Line yAxisId="left" type="monotone" dataKey="RSRP" stroke="hsl(200, 80%, 55%)" dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill="hsl(200, 80%, 55%)" stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RSRP" />}
-                      {showScanner && <Line yAxisId="left" type="monotone" dataKey="ScannerRSRP" stroke={CHART_PALETTE[2]} strokeDasharray="4 3" dot={false} activeDot={false} strokeWidth={2} connectNulls name="LTE Scanner" />}
-                      {showBScanner && <Line yAxisId="left" type="monotone" dataKey="BestScannerRSRP" stroke={CHART_PALETTE[3]} strokeDasharray="2 2" dot={false} activeDot={false} strokeWidth={2} connectNulls name="Best LTE Scanner" />}
-                      {showQuality && <Line yAxisId="right" type="monotone" dataKey="RSRQ" stroke="hsl(45, 93%, 58%)" dot={(p: any) => p.index === chartHighlightIndex && p.cx != null && p.cy != null ? <circle key={p.index} cx={p.cx} cy={p.cy} r={5} fill="hsl(45, 93%, 58%)" stroke="white" strokeWidth={1.5} /> : <g key={p.index} />} activeDot={false} strokeWidth={2} name="RSRQ" />}
-                      {chartHighlightTime && (showLeftAxis || showQuality) && (
-                        <ReferenceLine
-                          x={chartHighlightTime}
-                          yAxisId={showLeftAxis ? "left" : "right"}
-                          stroke="hsl(180, 90%, 55%)"
-                          strokeWidth={3}
-                          label={{ value: "│", position: "insideTopLeft", fill: "hsl(180, 90%, 65%)", fontSize: 18, fontWeight: 800 }}
-                        />
-                      )}
-                    </>
-                  )}
-                </LineChart>
-              </ResponsiveContainer>
-              {showSignalingEvents && signalingMarkers.length > 0 && (
-                <TooltipProvider delayDuration={120}>
-                  <div className="absolute pointer-events-none" style={{ left: 38, right: 38, top: 0, bottom: 5 }}>
-                    {signalingMarkers.map((marker) => {
-                      const translate = marker.percent < 8 ? "translateX(0)" : marker.percent > 92 ? "translateX(-100%)" : "translateX(-50%)";
-                      const labelTop = marker.lane * 17;
-                      return (
-                        <div key={`signal-label-${marker.timestamp}-${marker.index}`}>
-                          <span
-                            className="absolute w-px opacity-80"
-                            style={{ left: `${marker.percent}%`, top: labelTop + 15, bottom: 13, backgroundColor: marker.color }}
-                          />
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <button
-                                type="button"
-                                className="absolute pointer-events-auto h-[15px] max-w-[140px] truncate rounded-sm border bg-card/95 px-1.5 text-[10px] font-semibold leading-[13px] text-foreground shadow-sm hover:z-20 hover:max-w-none"
-                                style={{ left: `${marker.percent}%`, top: labelTop, transform: translate, borderColor: marker.color }}
-                              >
-                                {marker.label}
-                              </button>
-                            </TooltipTrigger>
-                            <TooltipContent side="top" className="max-w-[360px] text-xs">
-                              <div className="font-semibold" style={{ color: marker.color }}>{marker.label}</div>
-                              <div className="mt-1 text-muted-foreground">{new Date(marker.timestamp).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3 })}</div>
-                              <div>{marker.detail}</div>
-                              <div className="mt-1 text-muted-foreground">
-                                {[marker.technology, marker.layer, marker.direction].filter(Boolean).join(" · ")}
-                              </div>
-                            </TooltipContent>
-                          </Tooltip>
-                        </div>
-                      );
-                    })}
-                  </div>
-                </TooltipProvider>
-              )}
-            </div>
             {/* Map — 1/4 */}
             {/*Εμφανίζεται μόνο αν είναι Cosmote Free και υπάρχουν GPS σημεία */}
             {isCosmoteFree && (() => {
@@ -2534,6 +2241,72 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
         )}
       </div>
 
+      {/* ── Ενιαίο διάγραμμα σήματος ──
+          Ένα διάγραμμα για όλη την κλήση: Session Overview + καμπύλη σήματος + ζώνες
+          πριν/κατά/μετά + ταμπέλες L3, σε κοινό άξονα απόλυτου χρόνου. Όταν είναι
+          καρφιτσωμένο μένει στην κορυφή όσο κυλάς τους πίνακες από κάτω, ώστε ο κοινός
+          cursor να δείχνει πάντα πού πέφτει η γραμμή που κοιτάς. */}
+      <div
+        className={chartPinned ? "sticky z-30 bg-background/95 backdrop-blur-sm rounded-lg" : ""}
+        style={chartPinned ? { top: "var(--app-header-height, 57px)" } : undefined}
+      >
+        <CallSignalChart
+          network={chartNetwork}
+          samples={unifiedSamples}
+          domain={unifiedDomain}
+          callBounds={callBounds}
+          overviewTimes={sessionOverview?.times ?? []}
+          overviewLanes={sessionOverview?.lanes ?? []}
+          events={signalEvents}
+          hoveredTime={hoveredTime}
+          onHoverTime={setHoveredTime}
+          pinned={chartPinned}
+          onPinnedChange={setChartPinned}
+          subtitle={`±${contextWindowSec}s γύρω από την κλήση · ${unifiedSamples.length} δείγματα · ${selectedLteSide}-side`}
+          controls={
+            <>
+              {/* Μέγεθος παραθύρου — αλλάζοντάς το ξαναφορτώνει το context (reloadContext effect) */}
+              <div className="inline-flex rounded-md border border-border overflow-hidden">
+                {[10, 30, 60, 120].map((seconds) => (
+                  <button
+                    key={seconds}
+                    type="button"
+                    onClick={() => setContextWindowSec(seconds)}
+                    className={`px-2 py-1 text-[10px] border-r last:border-r-0 border-border ${contextWindowSec === seconds ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
+                  >
+                    ±{seconds}s
+                  </button>
+                ))}
+              </div>
+              {/* Μία επιλογή πλευράς για όλη τη σελίδα — διάγραμμα, πίνακες και χάρτης μαζί */}
+              <div className="inline-flex rounded-md border border-border overflow-hidden">
+                {(["A", "B"] as const).map((side) => {
+                  const enabled = side === "A" || hasBSideData;
+                  return (
+                    <button
+                      key={side}
+                      type="button"
+                      disabled={!enabled}
+                      onClick={() => enabled && setSelectedLteSide(side)}
+                      title={enabled ? undefined : "Δεν υπάρχουν δεδομένα B-side"}
+                      className={`px-2 py-1 text-[10px] ${side === "B" ? "border-l border-border" : ""} ${
+                        selectedLteSide === side
+                          ? "bg-primary text-primary-foreground"
+                          : enabled
+                            ? "bg-muted text-foreground hover:bg-muted/80"
+                            : "bg-muted text-muted-foreground/40 cursor-not-allowed"
+                      }`}
+                    >
+                      {side}-side
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          }
+        />
+      </div>
+
       {/* Panels Side by Side */}
       <div className="grid grid-cols-1 xl:grid-cols-3 lg:grid-cols-2 gap-2">
         {/* TraceLog panel (Αριστερά) */}
@@ -2558,8 +2331,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                 </thead>
                 <tbody className="divide-y divide-border/50">
                   {combinedTraceLog.map((entry, idx) => {
-                    const tStr = toChartTime(entry.time ?? null);
-                    const isActive = tStr !== null && tStr === hoveredTimeStr;
+                    const isActive = isHoveredIso(entry.time);
                     const isMarker = entry.kind === "marker";
                     // Flag TraceLog rows containing known failure/teardown keywords so they stand out in red
                     const isCritical = !isMarker && entry.info != null && [
@@ -2586,8 +2358,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                               ? "bg-cyan-500/10"
                               : "hover:bg-muted/40"
                           }`}
-                        onMouseEnter={() => { setHoveredRadioIndex(null); setHoveredTimeStr(tStr); }}
-                        onMouseLeave={() => setHoveredTimeStr(null)}
+                        onMouseEnter={() => hoverIso(entry.time)}
+                        onMouseLeave={() => setHoveredTime(null)}
                       >
                         <td className="px-1 py-0.5">{entry.time ? formatDateTime(entry.time) : "N/A"}</td>
                         <td className="px-1 py-0.5 font-mono">
@@ -2633,8 +2405,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                   {[...kpiValues]
                     .sort((a, b) => new Date(a.StartTime).getTime() - new Date(b.StartTime).getTime())
                     .map((val, idx) => {
-                      const tStr = toChartTime(val.StartTime ?? null);
-                      const isActive = tStr !== null && tStr === hoveredTimeStr;
+                      const isActive = isHoveredIso(val.StartTime);
                       return (
                         <tr
                           key={idx}
@@ -2643,8 +2414,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                             ? "bg-cyan-500/10"
                             : "hover:bg-muted/40"
                             }`}
-                          onMouseEnter={() => { setHoveredRadioIndex(null); setHoveredTimeStr(tStr); }}
-                          onMouseLeave={() => setHoveredTimeStr(null)}
+                          onMouseEnter={() => hoverIso(val.StartTime)}
+                          onMouseLeave={() => setHoveredTime(null)}
                         >
                           <td className="px-1 py-0.5 whitespace-nowrap">{formatDateTime(val.StartTime)}</td>
                           <td className="px-1 py-0.5 font-mono">
@@ -2769,7 +2540,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                       const rxColor = rxAbs >= 95 ? "text-destructive" : rxAbs >= 90 ? "text-warning" : "text-primary";
                       const rxqAbs = Math.abs(Number(val.RxQualSub));
                       const rxqColor = rxqAbs >= 6 ? "text-destructive" : rxqAbs >= 5 ? "text-warning" : "text-primary";
-                      const isActive = hoveredRadioIndex === idx;
+                      const isActive = activeRadioIndex === idx;
 
                       // Pre-matched scanner sample for this row (see gsmScannerMatched memo above)
                       const scn = gsmScannerMatched[idx] ?? null;
@@ -2781,8 +2552,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                           key={idx}
                           style={isActive ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" } : undefined}
                           className={`transition-all duration-100 cursor-pointer ${isActive ? "bg-cyan-500/10" : "hover:bg-muted/40"}`}
-                          onMouseEnter={() => { setHoveredTimeStr(null); setHoveredRadioIndex(idx); }}
-                          onMouseLeave={() => setHoveredRadioIndex(null)}
+                          onMouseEnter={() => hoverIso(val.MsgTime)}
+                          onMouseLeave={() => setHoveredTime(null)}
                         >
                           <td className="px-1 py-0.5 font-mono text-left font-bold">{scn?.BCCH ?? "—"}</td>
                           <td className="px-1 py-0.5 font-mono text-left">{val.band ?? "—"}</td>
@@ -2830,7 +2601,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                       const rsrpColor = rsrpAbs >= 120 ? "text-destructive" : rsrpAbs >= 115 ? "text-warning" : "text-primary";
                       const rsrqAbs = Math.abs(Number(val.RSRQ));
                       const rsrqColor = rsrqAbs >= 18 ? "text-destructive" : rsrqAbs >= 16 ? "text-warning" : "text-primary";
-                      const isActive = hoveredRadioIndex === idx;
+                      const isActive = activeRadioIndex === idx;
 
                       const scn = scannerByEarfcn.size > 0
                         ? findNearestScanner(val.CGI, val.EARFCN, val.PhyCellId, val.MsgTime)
@@ -2846,8 +2617,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                           key={idx}
                           style={isActive ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" } : undefined}
                           className={`transition-all duration-100 cursor-pointer ${isActive ? "bg-cyan-500/10" : "hover:bg-muted/40"}`}
-                          onMouseEnter={() => { setHoveredTimeStr(null); setHoveredRadioIndex(idx); }}
-                          onMouseLeave={() => setHoveredRadioIndex(null)}
+                          onMouseEnter={() => hoverIso(val.MsgTime)}
+                          onMouseLeave={() => setHoveredTime(null)}
                         >
                           <td className="px-1 py-0.5 font-mono text-left">{val.EARFCN}</td>
                           <td className={`px-1 py-0.5 font-mono font-bold ${val.RSRP != null ? rsrpColor : "text-muted-foreground/40"}`}>
@@ -2934,142 +2705,25 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
 
       </div>
 
-      {/* ── Συμπεριφορά δικτύου πριν / κατά / μετά κλήση ── */}
-      {(contextChartData.length > 0 || contextTechnology.length > 0 || gsmChartData.length > 0) && (
+      {/* ── Αλλαγές τεχνολογίας ──
+          Το διάγραμμα σήματος και το Session Overview που βρίσκονταν εδώ έχουν ενωθεί με το
+          κύριο διάγραμμα της κάρτας (CallSignalChart) πάνω σε έναν κοινό άξονα χρόνου· εδώ
+          μένει ο πίνακας των αλλαγών, που δεν έχει νόημα ως καμπύλη. */}
+      {contextTechnology.length > 0 && (
         <div className="bg-card border border-border rounded-lg p-3 space-y-3">
-          <div className="flex items-center justify-between gap-2 flex-wrap">
-            <h3 className="text-sm font-semibold text-foreground">
-              Συμπεριφορά δικτύου ±{contextWindowSec}δευτ. πριν / μετά κλήση
-            </h3>
-            <div className="flex items-center gap-2">
-              {/* Window-size selector — changing this re-fetches context data via the reloadContext effect */}
-              <div className="inline-flex rounded-md border border-border overflow-hidden">
-                {[10, 30, 60, 120].map(s => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setContextWindowSec(s)}
-                    className={`px-2 py-1 text-xs border-r last:border-r-0 border-border ${contextWindowSec === s ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
-                  >
-                    {s}s
-                  </button>
-                ))}
-              </div>
-              {/* A/B context is side-isolated for both LTE and GSM. */}
-              {(() => {
-                // Σε SRVCC υπάρχει B-side context αν το έχει έστω μία από τις δύο τεχνολογίες
-                const hasBSide = isGSMMode
-                  ? gsmContextSignalBSide.length > 0
-                  : contextSignalBSide.length > 0 || (showGsmContext && gsmContextSignalBSide.length > 0);
-                return (
-                  <div className={`inline-flex rounded-md border border-border overflow-hidden ${!hasBSide && isLoadingRadio ? "opacity-40 pointer-events-none" : ""}`}>
-                    <button
-                      type="button"
-                      onClick={() => setSelectedContextSide("A")}
-                      className={`px-2 py-1 text-xs ${selectedContextSide === "A" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
-                    >
-                      A-side
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => hasBSide ? setSelectedContextSide("B") : undefined}
-                      className={`px-2 py-1 text-xs border-l border-border ${selectedContextSide === "B" ? "bg-primary text-primary-foreground" : hasBSide ? "bg-muted text-foreground hover:bg-muted/80" : "bg-muted text-muted-foreground/40 cursor-not-allowed"}`}
-                    >
-                      B-side
-                    </button>
-                  </div>
-                );
-              })()}
-            </div>
-          </div>
+          <h3 className="text-sm font-semibold text-foreground">
+            Συμπεριφορά δικτύου ±{contextWindowSec}δευτ. πριν / μετά κλήση
+          </h3>
 
-          {selectedContextSide === "B" && activeContextSignal.length === 0 && (!showGsmContext || activeGsmContextSignal.length === 0) && (
+          {selectedLteSide === "B" && activeContextSignal.length === 0 && (!showGsmContext || activeGsmContextSignal.length === 0) && (
             <div className="rounded border border-border/60 bg-muted/20 px-3 py-2 text-xs text-muted-foreground">
               Δεν υπάρχουν context measurements για B-side. Δεν χρησιμοποιούνται δεδομένα A-side ως fallback.
             </div>
           )}
 
-          {/* Session Overview — χρονική επισκόπηση (IDLE/CALL + τεχνολογία) ακριβώς
-              πάνω από το διάγραμμα RSRP/RxLev, στο ίδιο x-domain με αυτό */}
-          {sessionOverview && (
-            <div>
-              <div className="mb-1 flex items-center gap-3">
-                <span className="text-xs text-muted-foreground">Session Overview</span>
-                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm" style={{ backgroundColor: "#4b5563" }} />IDLE</span>
-                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm" style={{ backgroundColor: "#dc2626" }} />CALL</span>
-                <span className="text-xs text-muted-foreground">· 2η λωρίδα: τεχνολογία / band</span>
-              </div>
-              <SessionOverview
-                times={sessionOverview.times}
-                lanes={sessionOverview.lanes}
-                callStart={sessionOverview.callStart}
-                callEnd={sessionOverview.callEnd}
-                padLeft={32}
-                padRight={36}
-              />
-            </div>
-          )}
-
-          {/* Σε καθαρό GSM view το RxLev chart μπαίνει πρώτο (ευθυγραμμισμένο με το Session
-              Overview από πάνω). Σε SRVCC με ενεργό LTE view μπαίνει κάτω από το LTE. */}
-          {isGSMMode && gsmContextChart}
-
-          {/* LTE Signal chart — RSRP / RSRQ over the before/during/after window, shaded by duringZone */}
-          {contextChartData.length > 0 && (
-            <div>
-              <div className="flex items-center gap-3 mb-1">
-                <span className="text-xs text-muted-foreground">RSRP / RSRQ</span>
-                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-amber-400/30 border border-amber-400/50" />Πριν</span>
-                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-primary/20 border border-primary/40" />Κατά</span>
-                <span className="flex items-center gap-1 text-xs"><span className="inline-block w-3 h-2 rounded-sm bg-orange-400/30 border border-orange-400/50" />Μετά</span>
-              </div>
-              <ResponsiveContainer width="100%" height={160}>
-                <LineChart data={contextChartData} margin={{ top: 4, right: 8, left: 0, bottom: 0 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#ffffff18" />
-                  {/* Κοινός άξονας χρόνου με το GSM chart από κάτω */}
-                  <XAxis
-                    dataKey="t"
-                    type="number"
-                    scale="time"
-                    domain={ctxDomain ? [ctxDomain.start, ctxDomain.end] : ["dataMin", "dataMax"]}
-                    allowDataOverflow
-                    tickFormatter={ctxTimeTick}
-                    tick={{ fontSize: 9, fill: "#94a3b8" }}
-                    interval="preserveStartEnd"
-                  />
-                  <YAxis yAxisId="rsrp" domain={[-140, -60]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={32} />
-                  <YAxis yAxisId="rsrq" orientation="right" domain={[-25, 0]} tick={{ fontSize: 9, fill: "#94a3b8" }} width={28} />
-                  <RechartsTooltip
-                    contentStyle={{ backgroundColor: "#1e293b", border: "1px solid #334155", fontSize: 11 }}
-                    labelFormatter={ctxTimeTick}
-                    formatter={(val: any, name: string) => [val != null ? Number(val).toFixed(1) : "—", name]}
-                  />
-                  {/* Ζώνες πριν / κατά / μετά — σε χρόνο, ίδιες με του GSM chart */}
-                  {ctxDomain && ctxCallBounds && (
-                    <>
-                      {ctxCallBounds.start > ctxDomain.start && (
-                        <ReferenceArea yAxisId="rsrp" x1={ctxDomain.start} x2={ctxCallBounds.start} fill="#f59e0b" fillOpacity={0.25} stroke="#f59e0b" strokeOpacity={0.4} strokeWidth={1} />
-                      )}
-                      <ReferenceArea yAxisId="rsrp" x1={ctxCallBounds.start} x2={ctxCallBounds.end} fill="#3b82f6" fillOpacity={0.22} stroke="#3b82f6" strokeOpacity={0.5} strokeWidth={1} />
-                      {ctxDomain.end > ctxCallBounds.end && (
-                        <ReferenceArea yAxisId="rsrp" x1={ctxCallBounds.end} x2={ctxDomain.end} fill="#f97316" fillOpacity={0.25} stroke="#f97316" strokeOpacity={0.4} strokeWidth={1} />
-                      )}
-                    </>
-                  )}
-                  <Line yAxisId="rsrp" dataKey="RSRP" stroke="#22c55e" dot={false} strokeWidth={2} connectNulls name="RSRP" />
-                  <Line yAxisId="rsrq" dataKey="RSRQ" stroke="#e2e8f0" dot={false} strokeWidth={1} connectNulls name="RSRQ" />
-                </LineChart>
-              </ResponsiveContainer>
-            </div>
-          )}
-
-          {/* SRVCC σε LTE view: το GSM σκέλος μπαίνει αμέσως μετά το LTE, με τη σειρά που
-              συμβαίνει στην κλήση (LTE → handover → GSM) */}
-          {!isGSMMode && gsmContextChart}
 
           {/* Technology changes table */}
-          {contextTechnology.length > 0 && (
-            <div>
+          <div>
               <p className="text-xs text-muted-foreground mb-1">Αλλαγές τεχνολογίας</p>
               <div className="overflow-x-auto max-h-[140px] overflow-y-auto rounded border border-border/50">
                 <table className="w-full text-xs text-center">
@@ -3091,8 +2745,15 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                         row.phase === "before" ? "bg-amber-500/10 text-amber-400" :
                         row.phase === "after"  ? "bg-orange-500/10 text-orange-400" :
                         "bg-primary/10 text-primary";
+                      const isActive = isHoveredIso(row.MsgTime);
                       return (
-                        <tr key={i} className="hover:bg-muted/40 transition-colors">
+                        <tr
+                          key={i}
+                          onMouseEnter={() => hoverIso(row.MsgTime)}
+                          onMouseLeave={() => setHoveredTime(null)}
+                          style={isActive ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" } : undefined}
+                          className={`transition-colors cursor-pointer ${isActive ? "bg-cyan-500/10" : "hover:bg-muted/40"}`}
+                        >
                           <td className="px-2 py-0.5 font-mono">{new Date(row.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</td>
                           <td className="px-2 py-0.5 text-muted-foreground">{row.PrevTechnology ?? "—"}</td>
                           <td className="px-2 py-0.5 font-semibold">{row.CurrTechnology ?? "—"}</td>
@@ -3106,12 +2767,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                   </tbody>
                 </table>
               </div>
-            </div>
-          )}
-
-          {contextChartData.length === 0 && contextTechnology.length === 0 && gsmChartData.length === 0 && (
-            <p className="text-xs text-muted-foreground">Δεν βρέθηκαν δεδομένα στο παράθυρο ±10 δευτ.</p>
-          )}
+          </div>
         </div>
       )}
 
@@ -3121,6 +2777,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
         l3Data={l3Data}
         l3DataBSide={l3DataBSide}
         asideLocation={deviceInfo?.fileInfo.ASideLocation}
+        onHoverTime={setHoveredTime}
       />
 
       {/* ── Scanner / Device Info ── */}

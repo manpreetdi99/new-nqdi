@@ -41,6 +41,14 @@ interface SessionOverviewProps {
   /** Όρια κλήσης σε epoch ms — σχεδιάζονται ως κάθετες διακεκομμένες γραμμές. */
   callStart?: number | null;
   callEnd?: number | null;
+  /**
+   * Κοινός cursor με το διάγραμμα από κάτω. Όταν δίνεται onHoverTime, το overview
+   * γίνεται controlled: δεν κρατά δικό του cursor, αλλά αναφέρει τον χρόνο που
+   * δείχνει το ποντίκι και σχεδιάζει ό,τι του δώσει πίσω το hoverTime — έτσι η ίδια
+   * κάθετη γραμμή ακολουθεί και τις δύο απεικονίσεις.
+   */
+  hoverTime?: number | null;
+  onHoverTime?: (time: number | null) => void;
 }
 
 const TICK_COUNT = 8;
@@ -67,9 +75,12 @@ export function SessionOverview({
   padRight = 36,
   callStart,
   callEnd,
+  hoverTime,
+  onHoverTime,
 }: SessionOverviewProps) {
-  const [cursor, setCursor] = useState<{ percent: number; time: number } | null>(null);
+  const [internalCursor, setInternalCursor] = useState<number | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);
+  const controlled = onHoverTime != null;
 
   // epoch ms → ποσοστό πλάτους. Binary search στο πλησιέστερο δείγμα και γραμμική
   // παρεμβολή ανάμεσα στα δύο γειτονικά index, ώστε να ταιριάζει με τον X άξονα του chart.
@@ -115,6 +126,13 @@ export function SessionOverview({
 
   if (times.length < 2 || lanes.every((lane) => lane.segments.length === 0)) return null;
 
+  // Ο cursor έρχεται είτε από το ποντίκι πάνω στο ίδιο το overview (uncontrolled) είτε
+  // από οπουδήποτε αλλού στη σελίδα μέσω hoverTime (controlled).
+  const cursorTime = controlled ? (hoverTime ?? null) : internalCursor;
+  const cursor = cursorTime != null && Number.isFinite(cursorTime)
+    ? { percent: percentOf(cursorTime), time: cursorTime }
+    : null;
+
   const boundaries = [
     { t: callStart, label: "Έναρξη κλήσης" },
     { t: callEnd, label: "Λήξη κλήσης" },
@@ -129,9 +147,11 @@ export function SessionOverview({
           const rect = e.currentTarget.getBoundingClientRect();
           if (rect.width === 0) return;
           const percent = Math.min(100, Math.max(0, ((e.clientX - rect.left) / rect.width) * 100));
-          setCursor({ percent, time: timeAt(percent) });
+          const time = timeAt(percent);
+          if (controlled) onHoverTime(time);
+          else setInternalCursor(time);
         }}
-        onMouseLeave={() => setCursor(null)}
+        onMouseLeave={() => (controlled ? onHoverTime(null) : setInternalCursor(null))}
       >
         <TooltipProvider delayDuration={120}>
           {lanes.map((lane) => (
@@ -180,7 +200,7 @@ export function SessionOverview({
         ))}
 
         {/* Cursor: κάθετη γραμμή + ακριβής ώρα (ms) πάνω από τη λωρίδα */}
-        {cursor && (
+        {cursor != null && (
           <>
             <span
               className="pointer-events-none absolute inset-y-0 w-px bg-yellow-300"

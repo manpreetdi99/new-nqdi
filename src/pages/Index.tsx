@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, Fragment } from "react";
+import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp, History, Search } from "lucide-react";
@@ -315,6 +315,21 @@ const Index = () => {
   const [totalTime, setTotalTime] = useState(0);
   const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null);
   const [activeTab, setActiveTab] = useLocalStorage<string>("perf-insights-active-tab", "queries");
+
+  // Το ύψος του sticky header δημοσιεύεται ως CSS variable, ώστε ό,τι άλλο κολλάει στην
+  // κορυφή (π.χ. το καρφιτσωμένο διάγραμμα σήματος στο Call Detail) να ξεκινά ακριβώς από
+  // κάτω του αντί να μαντεύει σταθερό offset — το header ψηλώνει με τα active-filter chips.
+  const headerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const element = headerRef.current;
+    if (!element) return;
+    const publish = () =>
+      document.documentElement.style.setProperty("--app-header-height", `${Math.round(element.getBoundingClientRect().height)}px`);
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   // "Call Detail" and "Data Detail" live as a sub-navbar inside the "All Calls" tab
   const [callsSubTab, setCallsSubTab] = useState<"list" | "detail" | "data-detail">("list");
 
@@ -600,9 +615,15 @@ const Index = () => {
       ]);
 
       if (voiceResult.status === "fulfilled") {
+        const records = mapAllCallsRows(voiceResult.value);
         setAllCallsRows(voiceResult.value);
-        setCallRecords(mapAllCallsRows(voiceResult.value));
-        setSelectedCall(null);
+        setCallRecords(records);
+        // Το effect ξανατρέχει και όταν απλώς κατασταλάξουν τα locations, οπότε ένα άνευ όρων
+        // setSelectedCall(null) έκλεινε μόνο του το ανοιχτό Call Detail λίγα δευτερόλεπτα
+        // αφότου ο χρήστης το άνοιγε. Κρατάμε την επιλογή όσο η κλήση υπάρχει στα νέα
+        // αποτελέσματα — αν την έκοψαν τα φίλτρα, τότε ναι, την αφήνουμε.
+        setSelectedCall((previous) =>
+          previous ? records.find((record) => record.callId === previous.callId) ?? null : null);
       } else {
         console.error("Failed to fetch voice calls:", voiceResult.reason);
         setAllCallsRows([]);
@@ -1343,7 +1364,7 @@ const Index = () => {
         </div>
       )}
 
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
+      <header ref={headerRef} className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="w-full px-3 sm:px-6 lg:px-10 mx-auto flex items-center justify-between gap-2 py-3">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <div className="h-8 w-8 rounded-md bg-primary/10 flex items-center justify-center glow-primary">
