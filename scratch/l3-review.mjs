@@ -1,0 +1,36 @@
+﻿import { chromium } from '@playwright/test';
+const browser = await chromium.launch({ headless: true });
+try {
+const page = await browser.newPage({ viewport: { width: 1600, height: 1100 } });
+const errors = [];
+page.on('pageerror', error => {errors.push(error.message);console.log(error.message)});
+await page.goto('http://127.0.0.1:5175/scratch/l3-review.html');
+await page.getByRole('table').first().waitFor();
+const a = page.getByRole('region', {name:'Μηνύματα L3 A-side'});
+const b = page.getByRole('region', {name:'Μηνύματα L3 B-side'});
+const topIndex = locator => locator.evaluate(el => {const top=el.querySelector('thead').getBoundingClientRect().bottom;return [...el.querySelectorAll('tr[data-message-index]')].filter(r=>r.getBoundingClientRect().top<=top+1).at(-1)?.dataset.messageIndex;});
+await a.evaluate(el => {el.scrollTop=900;});
+await page.waitForTimeout(200);
+let ai=Number(await topIndex(a)), bi=Number(await topIndex(b));
+if(Math.abs(ai-bi*2)>1) throw new Error('A to B sync mismatch '+ai+','+bi);
+await b.evaluate(el => {el.scrollTop=1200;});
+await page.waitForTimeout(200);
+ai=Number(await topIndex(a)); bi=Number(await topIndex(b));
+if(Math.abs(ai-bi*2)>1) throw new Error('B to A sync mismatch '+ai+','+bi);
+await page.getByRole('switch').click();
+const before=await b.evaluate(el=>el.scrollTop);
+await a.evaluate(el=>{el.scrollTop=0;});
+await page.waitForTimeout(150);
+if(await b.evaluate(el=>el.scrollTop)!==before) throw new Error('Disabled sync moved B');
+await page.getByRole('switch').click();
+await page.getByRole('button',{name:'Επόμενο εύρημα'}).first().click();
+await page.waitForTimeout(150);
+if(await a.getByRole('button',{name:'Λεπτομέρειες RRCReject'}).getAttribute('aria-expanded')!=='true') throw new Error('Issue jump did not expand');
+if(Number(await topIndex(a))!==40) throw new Error('Issue jump did not scroll to row: '+await topIndex(a));
+await page.screenshot({path:'scratch/l3-signaling-desktop.png',fullPage:true});
+await page.setViewportSize({width:390,height:844});
+await page.screenshot({path:'scratch/l3-signaling-mobile.png',fullPage:true});
+if(await page.evaluate(()=>document.documentElement.scrollWidth>window.innerWidth)) throw new Error('Mobile page overflow');
+if(errors.length) throw new Error(errors.join('\n'));
+console.log(JSON.stringify({desktop:'passed',mobile:'passed',bidirectionalSync:'passed',disableSync:'passed',jump:'passed',errors}));
+} finally { await browser.close(); }

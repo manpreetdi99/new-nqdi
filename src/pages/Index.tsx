@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, Fragment } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp, History } from "lucide-react";
+import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp, History, Search } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import QueryEditor from "@/components/QueryEditor";
 import ResultsTable from "@/components/ResultsTable";
@@ -336,11 +336,23 @@ const Index = () => {
   const [listFiltersCollapsed, setListFiltersCollapsed] = useState(false);
   const [locationTableFilter, setLocationTableFilter] = useState<string[]>([]);
   const [selectedFileGroupIds, setSelectedFileGroupIds] = useState<string[]>([]);
+  /** Free-text search πάνω στο "All Calls" table — φιλτράρει σε Location/SessionId/
+   * Technology/Call Mode/Call Type/Call Dir/Status/Comment/CollectionName (βλ.
+   * filteredAllCallsRows). Ανεξάρτητο από τα υπόλοιπα structured filters (status/valid/
+   * location/file group) — combine με AND, ίδιο idiom με τα υπόλοιπα φίλτρα εκεί. */
+  const [allCallsSearch, setAllCallsSearch] = useState("");
 
   useEffect(() => {
     if (activeTab === "calls" && callsSubTab === "list" && lastClickedRowId) {
       setTimeout(() => {
-        const el = document.getElementById(lastClickedRowId);
+        // Το ίδιο id υπάρχει 2 φορές στο DOM ταυτόχρονα (mobile card list "sm:hidden" +
+        // desktop table "hidden sm:block" — CSS κρύβει το ένα ανάλογα με το breakpoint,
+        // δεν το αφαιρεί). getElementById γυρνάει πάντα το πρώτο match στο DOM (το mobile),
+        // που σε desktop viewport είναι display:none → scrollIntoView πάνω του δεν κάνει
+        // τίποτα, οπότε το "Πίσω" έδειχνε πάντα την αρχή της λίστας αντί για τη γραμμή.
+        // Διαλέγουμε εδώ ρητά το αντίγραφο που είναι πραγματικά ορατό/laid out.
+        const matches = document.querySelectorAll(`[id="${CSS.escape(lastClickedRowId)}"]`);
+        const el = Array.from(matches).find((node) => (node as HTMLElement).offsetParent !== null) as HTMLElement | undefined;
         if (el) {
           el.scrollIntoView({ behavior: "auto", block: "center" });
         }
@@ -902,6 +914,8 @@ const Index = () => {
     return { voiceIds, dataIds };
   }, [fileGroups, selectedFileGroupIds]);
 
+  const allCallsSearchQuery = allCallsSearch.trim().toLowerCase();
+
   const filteredAllCallsRows = useMemo(() => {
     return allCallsRows.filter((row) => {
       // Filter by session valid
@@ -919,9 +933,28 @@ const Index = () => {
       // Filter by file group (time-clustered run)
       if (selectedFileGroupSessionIds && !selectedFileGroupSessionIds.voiceIds.has(row.SessionId)) return false;
 
+      // Free-text search across the columns shown in the table
+      if (allCallsSearchQuery) {
+        const haystack = [
+          row.Location,
+          row.SessionId,
+          row.technology,
+          row.callMode,
+          row.callType,
+          row.callDir,
+          row.status,
+          row.comment,
+          row.CollectionName,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(allCallsSearchQuery)) return false;
+      }
+
       return true;
     });
-  }, [allCallsRows, sessionValidFilter, statusFilters, selectedFileGroupSessionIds]);
+  }, [allCallsRows, sessionValidFilter, statusFilters, selectedFileGroupSessionIds, allCallsSearchQuery]);
 
   const filteredCallRecords = useMemo(() => {
     if (sessionValidFilter === "all" && statusFilters.length === 0 && selectedFileGroupIds.length === 0) return callRecords;
@@ -1902,10 +1935,37 @@ const Index = () => {
                   )}
                 </div>
 
+                <div className="border-b border-border bg-muted/10 px-3 py-2 sm:px-4">
+                  <div className="relative max-w-sm">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <input
+                      type="text"
+                      value={allCallsSearch}
+                      onChange={(e) => setAllCallsSearch(e.target.value)}
+                      placeholder="Search location, status, comment…"
+                      className="w-full rounded-md border border-border bg-background py-1.5 pl-8 pr-7 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                    />
+                    {allCallsSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setAllCallsSearch("")}
+                        aria-label="Clear search"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
                 <div className="sm:hidden">
                   {!callsLoading && filteredAllCallsRows.length === 0 && (
                     <p className="px-4 py-8 text-center text-xs text-muted-foreground">
-                      {allCallsRows.length === 0 ? "Select a collection to load calls." : "No rows match the selected filters."}
+                      {allCallsRows.length === 0
+                        ? "Select a collection to load calls."
+                        : allCallsSearch
+                          ? "No rows match your search."
+                          : "No rows match the selected filters."}
                     </p>
                   )}
 
@@ -2018,7 +2078,11 @@ const Index = () => {
                       {!callsLoading && filteredAllCallsRows.length === 0 && (
                         <tr>
                           <td colSpan={13} className="px-2 py-6 text-center text-muted-foreground">
-                            {allCallsRows.length === 0 ? "Select a collection to load calls." : "No rows match the selected filters."}
+                            {allCallsRows.length === 0
+                              ? "Select a collection to load calls."
+                              : allCallsSearch
+                                ? "No rows match your search."
+                                : "No rows match the selected filters."}
                           </td>
                         </tr>
                       )}

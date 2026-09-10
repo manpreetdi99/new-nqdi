@@ -11,9 +11,11 @@
  * -----------------------------------------------------------------------------
  */
 
-import { Fragment, useMemo, useState } from "react";
-import { Signal, ChevronRight, ArrowDown, ArrowUp, Search, X } from "lucide-react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Signal, ChevronLeft, ChevronRight, ArrowDown, ArrowUp, Search, X } from "lucide-react";
 import type { CallL3MessagesResponse, L3MessageRow } from "@/lib/api";
+import { Switch } from "@/components/ui/switch";
+import { nearestTimestampIndex, shouldSplitSignaling } from "@/lib/signalingNavigation";
 import {
   useSignallingHighlights,
   SEV_ROW_CLASS,
@@ -26,7 +28,21 @@ import {
 interface L3SignalingPanelProps {
   l3Data: CallL3MessagesResponse | null;
   l3DataBSide: CallL3MessagesResponse | null;
+  asideLocation?: string | null;
 }
+
+type Side = "A" | "B";
+type ScrollAnchor = { side: Side; timestamp: number };
+interface SignalingPaneProps extends L3SignalingPanelProps {
+  fixedSide?: Side;
+  syncTarget?: ScrollAnchor | null;
+  onTimestamp?: (side: Side, timestamp: number) => void;
+}
+
+const EMPTY_ROWS: L3MessageRow[] = [];
+const timeFormatter = new Intl.DateTimeFormat("el-GR", {
+  hour: "2-digit", minute: "2-digit", second: "2-digit", fractionalSecondDigits: 3,
+});
 
 type PhaseFilter = "all" | "before" | "during" | "after";
 type SevFilter = "all" | "issues" | Severity;
@@ -64,9 +80,8 @@ function isPagingRow(r: L3MessageRow): boolean {
 }
 
 function fmtTime(iso: string | null): string {
-  return iso
-    ? new Date(iso).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })
-    : "—";
+  const time = iso ? Date.parse(iso) : NaN;
+  return Number.isFinite(time) ? timeFormatter.format(time) : "—";
 }
 
 function fmtOffset(sec: number | null): string {
@@ -91,6 +106,7 @@ function FilterChip({
     <button
       type="button"
       disabled={disabled}
+      aria-pressed={active}
       onClick={onClick}
       className={`px-2 py-0.5 rounded-full text-[10px] font-medium border transition-colors ${
         disabled
@@ -105,18 +121,34 @@ function FilterChip({
   );
 }
 
-export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps) {
-  const [side, setSide] = useState<"A" | "B">("A");
+function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp }: SignalingPaneProps) {
+  const [selectedSide, setSide] = useState<Side>("A");
+  const side = fixedSide ?? (selectedSide === "A" && !l3Data?.callWindow && l3DataBSide?.callWindow ? "B" : selectedSide);
   const [phaseFilter, setPhaseFilter] = useState<PhaseFilter>("all");
   const [sevFilter, setSevFilter] = useState<SevFilter>("all");
   const [hidePaging, setHidePaging] = useState(false);
   const [query, setQuery] = useState("");
   const [expanded, setExpanded] = useState<number | null>(null);
+  const [pendingJump, setPendingJump] = useState<number | null>(null);
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const rowRefs = useRef(new Map<number, HTMLTableRowElement>());
+  const expectedScroll = useRef<number | null>(null);
+  const lastScrollTop = useRef(0);
+  const scrollFrame = useRef<number | null>(null);
 
   const hasBSide = !!l3DataBSide?.callWindow;
   const activeData = side === "B" ? l3DataBSide : l3Data;
-  const allRows = activeData?.l3Messages ?? [];
+  const sourceRows = activeData?.l3Messages ?? EMPTY_ROWS;
+  const allRows = useMemo(() => [...sourceRows].sort((a, b) => {
+    const ta = a.MsgTime ? Date.parse(a.MsgTime) : NaN;
+    const tb = b.MsgTime ? Date.parse(b.MsgTime) : NaN;
+    return (Number.isFinite(ta) ? ta : Infinity) - (Number.isFinite(tb) ? tb : Infinity);
+  }), [sourceRows]);
   const highlights = useSignallingHighlights(allRows);
+  const indexedRows = useMemo(() => allRows.map((r, i) => ({
+    r, i, h: highlights[i], timestamp: r.MsgTime ? Date.parse(r.MsgTime) : NaN,
+    search: `${msgLabel(r)} ${r.MsgName ?? ""} ${r.Message ?? ""} ${r.Layer ?? ""} ${r.Technology ?? ""} ${r.SIPCallId ?? ""} ${r.SIPResponse ?? ""}`.toLowerCase(),
+  })), [allRows, highlights]);
 
   /** Πλήθος ανά severity — τροφοδοτεί τα chips του toolbar. */
   const sevCounts = useMemo(() => {
@@ -128,20 +160,95 @@ export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps)
   /** Τα φιλτραρισμένα rows, κρατώντας το αρχικό index ώστε να ταιριάζει με το highlights[]. */
   const visible = useMemo(() => {
     const q = query.trim().toLowerCase();
-    return allRows
-      .map((r, i) => ({ r, i, h: highlights[i] ?? { severity: "none" as Severity, reason: "" } }))
-      .filter(({ r, h }) => {
+    return indexedRows
+      .filter(({ r, h, search }) => {
         if (phaseFilter !== "all" && r.Phase !== phaseFilter) return false;
         if (sevFilter === "issues" && h.severity === "none") return false;
         if (sevFilter !== "all" && sevFilter !== "issues" && h.severity !== sevFilter) return false;
         if (hidePaging && isPagingRow(r)) return false;
-        if (q) {
-          const hay = `${msgLabel(r)} ${r.MsgName ?? ""} ${r.Message ?? ""} ${r.Layer ?? ""} ${r.Technology ?? ""}`.toLowerCase();
-          if (!hay.includes(q)) return false;
-        }
+        if (q && !search.includes(q)) return false;
         return true;
       });
-  }, [allRows, highlights, phaseFilter, sevFilter, hidePaging, query]);
+  }, [indexedRows, phaseFilter, sevFilter, hidePaging, query]);
+
+  const timedVisible = useMemo(() => visible.filter(({ timestamp }) => Number.isFinite(timestamp)), [visible]);
+  const visibleTimes = useMemo(() => timedVisible.map(({ timestamp }) => timestamp), [timedVisible]);
+  const issues = useMemo(() => indexedRows.filter(({ h }) => h.severity === "red" || h.severity === "orange"), [indexedRows]);
+
+  const scrollToRow = useCallback((index: number) => {
+    const container = scrollRef.current;
+    const row = rowRefs.current.get(index);
+    if (!container || !row) return;
+    const headerHeight = container.querySelector("thead")?.getBoundingClientRect().height ?? 0;
+    const top = container.scrollTop + row.getBoundingClientRect().top - container.getBoundingClientRect().top - container.clientTop - headerHeight;
+    const clamped = Math.max(0, Math.min(top, container.scrollHeight - container.clientHeight));
+    expectedScroll.current = clamped;
+    container.scrollTop = clamped;
+    lastScrollTop.current = container.scrollTop;
+  }, []);
+
+  useEffect(() => {
+    if (!syncTarget || syncTarget.side === side) return;
+    const index = nearestTimestampIndex(visibleTimes, syncTarget.timestamp);
+    if (index >= 0) scrollToRow(timedVisible[index].i);
+  }, [syncTarget, side, visibleTimes, timedVisible, scrollToRow]);
+
+  const reportScroll = () => {
+    const container = scrollRef.current;
+    if (!container || container.scrollTop === lastScrollTop.current) return;
+    lastScrollTop.current = container.scrollTop;
+    if (expectedScroll.current != null && Math.abs(container.scrollTop - expectedScroll.current) < 1) {
+      expectedScroll.current = null;
+      return;
+    }
+    expectedScroll.current = null;
+    if (!onTimestamp || scrollFrame.current != null) return;
+    scrollFrame.current = requestAnimationFrame(() => {
+      scrollFrame.current = null;
+      const headerBottom = container.querySelector("thead")?.getBoundingClientRect().bottom ?? container.getBoundingClientRect().top;
+      // Binary search row positions: expanded payloads need no fixed-height assumption.
+      let low = 0;
+      let high = timedVisible.length;
+      while (low < high) {
+        const mid = (low + high) >>> 1;
+        const top = rowRefs.current.get(timedVisible[mid].i)?.getBoundingClientRect().top ?? Infinity;
+        if (top <= headerBottom + 1) low = mid + 1;
+        else high = mid;
+      }
+      const row = timedVisible[Math.max(0, low - 1)];
+      if (row) onTimestamp(side, row.timestamp);
+    });
+  };
+
+  useEffect(() => () => {
+    if (scrollFrame.current != null) cancelAnimationFrame(scrollFrame.current);
+    scrollFrame.current = null;
+  }, [onTimestamp, side, timedVisible]);
+
+  const jumpTo = (index: number) => {
+    setPhaseFilter("all"); setSevFilter("all"); setHidePaging(false); setQuery("");
+    setExpanded(index);
+    setPendingJump(index);
+  };
+
+  useEffect(() => {
+    if (pendingJump == null) return;
+    scrollToRow(pendingJump);
+    const timestamp = indexedRows[pendingJump]?.timestamp;
+    if (Number.isFinite(timestamp)) onTimestamp?.(side, timestamp);
+    setPendingJump(null);
+  }, [pendingJump, indexedRows, onTimestamp, side, scrollToRow]);
+
+  const jumpIssue = (direction: -1 | 1) => {
+    const next = direction === 1
+      ? issues.find(({ i }) => i > (expanded ?? -1)) ?? issues[0]
+      : [...issues].reverse().find(({ i }) => i < (expanded ?? Infinity)) ?? issues[issues.length - 1];
+    if (next) jumpTo(next.i);
+  };
+  const callEnd = Date.parse(activeData?.callWindow?.CallEnd ?? "");
+  const timedRows = useMemo(() => indexedRows.filter(({ timestamp }) => Number.isFinite(timestamp)), [indexedRows]);
+  const rowTimes = useMemo(() => timedRows.map(({ timestamp }) => timestamp), [timedRows]);
+  const endIndex = nearestTimestampIndex(rowTimes, callEnd);
 
   /** Θέση κάθε μηνύματος στο timeline strip (0..1) με βάση το SecondsFromCallStart. */
   const timeline = useMemo(() => {
@@ -149,8 +256,8 @@ export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps)
       .map((r, i) => ({ i, t: r.SecondsFromCallStart, sev: highlights[i]?.severity ?? "none" }))
       .filter((p): p is { i: number; t: number; sev: Severity } => p.t != null);
     if (pts.length === 0) return null;
-    const min = Math.min(...pts.map((p) => p.t));
-    const max = Math.max(...pts.map((p) => p.t));
+    const min = pts.reduce((v, p) => Math.min(v, p.t), Infinity);
+    const max = pts.reduce((v, p) => Math.max(v, p.t), -Infinity);
     const span = max - min || 1;
     return {
       min,
@@ -161,7 +268,12 @@ export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps)
     };
   }, [allRows, highlights]);
 
-  if (!activeData || !activeData.callWindow) return null;
+  if (!activeData || !activeData.callWindow) return fixedSide ? (
+    <div className="min-w-0 rounded-lg border border-border bg-card p-3">
+      <h4 className="text-sm font-semibold">{side}-side · L3 Signaling</h4>
+      <p className="mt-2 text-xs text-muted-foreground">Δεν υπάρχουν διαθέσιμα L3 δεδομένα για {side}-side.</p>
+    </div>
+  ) : null;
 
   const hasPci = allRows.some((r) => r.PCI != null);
   const hasArfcn = allRows.some((r) => r.ARFCN != null);
@@ -171,12 +283,12 @@ export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps)
   const filtersActive = phaseFilter !== "all" || sevFilter !== "all" || hidePaging || query.trim() !== "";
 
   return (
-    <div className="bg-card border border-border rounded-lg overflow-hidden">
+    <div className="min-w-0 bg-card border border-border rounded-lg overflow-hidden">
       {/* ── Header ── */}
       <div className="flex items-center justify-between flex-wrap gap-2 px-3 py-2 border-b border-border bg-gradient-to-r from-primary/[0.07] to-transparent">
         <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
           <Signal className="h-4 w-4 text-primary" />
-          L3 Signaling
+          {fixedSide ? `${side}-side · L3 Signaling` : "L3 Signaling"}
           <span className="text-[10px] font-normal text-muted-foreground">RRC / NAS / SIP</span>
           <span
             className={`text-[10px] px-1.5 py-0.5 rounded font-semibold tracking-wide ${
@@ -203,7 +315,7 @@ export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps)
           </div>
 
           {/* A / B side */}
-          <div className="inline-flex rounded-md border border-border overflow-hidden">
+          {!fixedSide && <div className="inline-flex rounded-md border border-border overflow-hidden">
             {(["A", "B"] as const).map((s) => {
               const enabled = s === "A" || hasBSide;
               return (
@@ -211,7 +323,7 @@ export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps)
                   key={s}
                   type="button"
                   disabled={!enabled}
-                  onClick={() => enabled && setSide(s)}
+                  onClick={() => { if (enabled) { setSide(s); setExpanded(null); setPendingJump(null); } }}
                   className={`px-2 py-1 text-[10px] font-medium ${s === "B" ? "border-l border-border" : ""} ${
                     side === s
                       ? "bg-primary text-primary-foreground"
@@ -224,7 +336,7 @@ export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps)
                 </button>
               );
             })}
-          </div>
+          </div>}
         </div>
       </div>
 
@@ -250,7 +362,7 @@ export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps)
                   <button
                     key={t.i}
                     type="button"
-                    onClick={() => setExpanded(expanded === t.i ? null : t.i)}
+                    onClick={() => jumpTo(t.i)}
                     title={`${fmtOffset(t.t)} · ${msgLabel(allRows[t.i])}`}
                     style={{ left: `${t.pct}%` }}
                     className={`absolute top-1 bottom-1 w-[3px] -translate-x-1/2 rounded-sm transition-transform hover:scale-y-110 ${
@@ -273,6 +385,7 @@ export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps)
               <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
               <input
                 value={query}
+                aria-label={`Αναζήτηση μηνύματος ${side}-side`}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Αναζήτηση μηνύματος…"
                 className="h-6 w-44 pl-6 pr-2 rounded border border-border bg-background text-[11px] outline-none focus:border-primary/60"
@@ -355,9 +468,21 @@ export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps)
             </div>
           </div>
 
+          <div className="flex flex-wrap items-center gap-2 px-3 pb-2 text-[10px]">
+            <span className="text-muted-foreground">Ύποπτα DROP/FAIL / ABNORMAL: {issues.length}</span>
+            <button type="button" disabled={!issues.length} onClick={() => jumpIssue(-1)} className="inline-flex items-center rounded border border-border px-2 py-1 disabled:opacity-40">
+              <ChevronLeft className="h-3 w-3" /> Προηγούμενο εύρημα
+            </button>
+            <button type="button" disabled={!issues.length} onClick={() => jumpIssue(1)} className="inline-flex items-center rounded border border-border px-2 py-1 disabled:opacity-40">
+              Επόμενο εύρημα <ChevronRight className="h-3 w-3" />
+            </button>
+            <button type="button" disabled={endIndex < 0} onClick={() => jumpTo(timedRows[endIndex].i)} className="rounded border border-border px-2 py-1 disabled:opacity-40">Τέλος κλήσης</button>
+            <span className="text-muted-foreground">Η μετάβαση καθαρίζει τα φίλτρα ώστε να φαίνεται το context. Οι ενδείξεις χρειάζονται επιβεβαίωση.</span>
+          </div>
+
           {/* ── Πίνακας μηνυμάτων ── */}
-          <div className="overflow-x-auto max-h-[380px] overflow-y-auto border-t border-border/60">
-            <table className="w-full text-xs">
+          <div ref={scrollRef} onScroll={reportScroll} role="region" aria-label={`Μηνύματα L3 ${side}-side`} tabIndex={0} className="relative overflow-x-auto max-h-[380px] overflow-y-auto overscroll-contain border-t border-border/60">
+            <table className="w-full text-xs" aria-label={`L3 ${side}-side`}>
               <thead className="sticky top-0 bg-muted border-b border-border z-10">
                 <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
                   <th className="w-6" />
@@ -382,6 +507,8 @@ export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps)
                   return (
                     <Fragment key={i}>
                       <tr
+                        ref={(element) => { if (element) rowRefs.current.set(i, element); else rowRefs.current.delete(i); }}
+                        data-message-index={i}
                         onClick={() => setExpanded(isOpen ? null : i)}
                         title={h.reason || undefined}
                         className={`border-b border-border/40 cursor-pointer transition-colors hover:bg-muted/50 ${
@@ -389,9 +516,9 @@ export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps)
                         } ${isOpen ? "bg-muted/60" : ""} ${paging ? " opacity-50" : ""}`}
                       >
                         <td className="pl-1 align-middle">
-                          <ChevronRight
-                            className={`h-3 w-3 text-muted-foreground transition-transform ${isOpen ? "rotate-90" : ""}`}
-                          />
+                          <button type="button" aria-label={`Λεπτομέρειες ${msgLabel(r)}`} aria-expanded={isOpen} onClick={(event) => { event.stopPropagation(); setExpanded(isOpen ? null : i); }}>
+                            <ChevronRight className={`h-3 w-3 text-muted-foreground transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                          </button>
                         </td>
                         <td className={`px-2 py-1 font-medium ${PHASE_CLASS[r.Phase] ?? ""}`}>
                           <span className="inline-flex items-center gap-1">
@@ -501,6 +628,34 @@ export function L3SignalingPanel({ l3Data, l3DataBSide }: L3SignalingPanelProps)
         </>
       )}
     </div>
+  );
+}
+
+export function L3SignalingPanel({ l3Data, l3DataBSide, asideLocation }: L3SignalingPanelProps) {
+  const [syncEnabled, setSyncEnabled] = useState(true);
+  const [anchor, setAnchor] = useState<ScrollAnchor | null>(null);
+  const onTimestamp = useCallback((side: Side, timestamp: number) => setAnchor({ side, timestamp }), []);
+  const split = shouldSplitSignaling(asideLocation);
+  if (!l3Data?.callWindow && !l3DataBSide?.callWindow) return null;
+  if (!split) return <SignalingPane l3Data={l3Data} l3DataBSide={l3DataBSide} />;
+  const canSync = !!l3Data?.l3Messages.some((row) => row.MsgTime && Number.isFinite(Date.parse(row.MsgTime)))
+    && !!l3DataBSide?.l3Messages.some((row) => row.MsgTime && Number.isFinite(Date.parse(row.MsgTime)));
+  return (
+    <section className="space-y-2" aria-label="Σύγκριση L3 Signaling">
+      <div className="flex flex-wrap items-center gap-3 text-xs">
+        <label className="inline-flex items-center gap-2 cursor-pointer">
+          <Switch checked={syncEnabled} disabled={!canSync} onCheckedChange={setSyncEnabled} aria-label="Συγχρονισμός scroll βάσει timestamp" />
+          Sync scroll βάσει timestamp {syncEnabled ? "ON" : "OFF"}
+        </label>
+        <span className="text-muted-foreground">{canSync ? "A-side ↔ B-side · πλησιέστερη ορατή ώρα · ανεξάρτητα φίλτρα" : "Ο συγχρονισμός απαιτεί μηνύματα με έγκυρη ώρα και στις δύο πλευρές."}</span>
+      </div>
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+        {(["A", "B"] as const).map((side) => (
+          <SignalingPane key={side} fixedSide={side} l3Data={l3Data} l3DataBSide={l3DataBSide}
+            syncTarget={syncEnabled && canSync ? anchor : null} onTimestamp={onTimestamp} />
+        ))}
+      </div>
+    </section>
   );
 }
 

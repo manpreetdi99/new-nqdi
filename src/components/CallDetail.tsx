@@ -3116,7 +3116,12 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       )}
 
       {/* ── L3 Signaling (RRC / NAS / SIP) ── */}
-      <L3SignalingPanel l3Data={l3Data} l3DataBSide={l3DataBSide} />
+      <L3SignalingPanel
+        key={`${database}:${call.callId}`}
+        l3Data={l3Data}
+        l3DataBSide={l3DataBSide}
+        asideLocation={deviceInfo?.fileInfo.ASideLocation}
+      />
 
       {/* ── Scanner / Device Info ── */}
       {deviceInfo && (
