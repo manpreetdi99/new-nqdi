@@ -1266,6 +1266,44 @@ export async function fetchHistoricVoice(collection: string): Promise<HistoricVo
   return json.rows;
 }
 
+/**
+ * GSM voice (Mobile-to-Fixed) KPIs — βλ. backend/routers/historic.py::get_historic_voice_gsm.
+ * Ίδιο σχήμα με HistoricVoiceRow (FREE/M→M), χωρίς voltePct (χαρακτηριστικό μόνο του FREE
+ * axis) και με avgCallSetupTime αντ' αυτού (MO_CallSetupTime — μονάδα όπως είναι αποθηκευμένη
+ * στη βάση, μη επαληθευμένη).
+ */
+export interface HistoricVoiceGsmRow {
+  operator: string;
+  attempts: number;
+  cssr: number | null;
+  dcr: number | null;
+  completionRate: number | null;
+  mos: number | null;
+  avgCallSetupTime: number | null;
+}
+
+export async function fetchHistoricVoiceGsm(collection: string): Promise<HistoricVoiceGsmRow[]> {
+  const params = new URLSearchParams({ collection });
+  const json = await requestJson<{ rows: HistoricVoiceGsmRow[] }>(`/api/historic/voice_gsm?${params.toString()}`);
+  return json.rows;
+}
+
+/** YouTube/video KPIs — βλ. backend/routers/historic.py::get_historic_video. `freezingPct`
+ * είναι το "test" measure (AVERAGE(Youtube[FreezingTimePerc])) του blueprint §04/§09. */
+export interface HistoricVideoRow {
+  operator: string;
+  attempts: number;
+  successRate: number | null;
+  freezingPct: number | null;
+  avgVmos: number | null;
+}
+
+export async function fetchHistoricVideo(collection: string): Promise<HistoricVideoRow[]> {
+  const params = new URLSearchParams({ collection });
+  const json = await requestJson<{ rows: HistoricVideoRow[] }>(`/api/historic/video?${params.toString()}`);
+  return json.rows;
+}
+
 export interface HistoricDataRow {
   operator: string;
   avgThrpDlMbps: number | null;
@@ -1281,6 +1319,37 @@ export async function fetchHistoricData(collection: string): Promise<HistoricDat
   const params = new URLSearchParams({ collection });
   const json = await requestJson<{ rows: HistoricDataRow[] }>(`/api/historic/data?${params.toString()}`);
   return json.rows;
+}
+
+/**
+ * Χρονοσειρά ΟΛΩΝ των campaigns, μία γραμμή ανά Scope (π.χ. "2026H2") — βλ.
+ * backend/routers/historic.py::get_historic_trend. Ίδιο πνεύμα με τον πίνακα
+ * "Ποιότητα δεδομένων" + "Δ vs προηγούμενο scope" του §09 του blueprint: pooled
+ * KPIs ανά operator πάνω σε ΟΛΑ τα collections ενός scope, plus coverage counts και
+ * Δ vs το προηγούμενο scope που όντως έχει τιμή (π.χ. 2023H1 συγκρίνεται με 2022H1
+ * γιατί δεν έγινε καμπάνια το 2022H2).
+ */
+export interface HistoricTrendOperatorRow {
+  operator: string;
+  totalScore: number | null;
+  cssr: number | null;
+  avgThrpDlMbps: number | null;
+  deltaTotalScore: number | null;
+  deltaCssr: number | null;
+  deltaAvgThrpDlMbps: number | null;
+}
+
+export interface HistoricTrendScope {
+  scope: string;
+  collections: number | null;
+  voiceCollections: number | null;
+  capacityCollections: number | null;
+  operators: HistoricTrendOperatorRow[];
+}
+
+export async function fetchHistoricTrend(): Promise<HistoricTrendScope[]> {
+  const json = await requestJson<{ scopes: HistoricTrendScope[] }>("/api/historic/trend");
+  return json.scopes;
 }
 
 export interface RunMapResponse {

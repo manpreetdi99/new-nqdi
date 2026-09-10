@@ -1,16 +1,36 @@
 import { useEffect, useMemo, useState } from "react";
-import { ChevronDown, Database, History, Loader2, Phone, Wifi } from "lucide-react";
+import { ChevronDown, Database, History, Loader2, Phone, PhoneCall, TrendingDown, TrendingUp, Video, Wifi } from "lucide-react";
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
 
 import {
   fetchHistoricCollections,
   fetchHistoricData,
   fetchHistoricScorecard,
+  fetchHistoricTrend,
+  fetchHistoricVideo,
   fetchHistoricVoice,
+  fetchHistoricVoiceGsm,
   type HistoricBestOperator,
   type HistoricDataRow,
   type HistoricScoreRow,
+  type HistoricTrendOperatorRow,
+  type HistoricTrendScope,
+  type HistoricVideoRow,
+  type HistoricVoiceGsmRow,
   type HistoricVoiceRow,
 } from "@/lib/api";
+import { AXIS_STYLE, DEFAULTS, GRID_STYLE, LEGEND_WRAPPER_STYLE } from "@/lib/chartStyles";
 
 /**
  * Historic tab: read-only KPI snapshot από το BI data warehouse (BI_VOICE/BI_DATA),
@@ -22,12 +42,17 @@ import {
  * μοιράζεται state/queries μαζί τους.
  */
 
-// Ίδια χρώματα/σειρά operator με resolveOperator (src/lib/attachmentC.ts) — κρατάει
-// την ταυτότητα κάθε operator σταθερή σε όλη την εφαρμογή.
+// Ίδια χρώματα/σειρά operator με resolveOperator (src/lib/attachmentC.ts) — κρατάει την
+// ταυτότητα κάθε operator σταθερή σε όλη την εφαρμογή. Εξαίρεση: το NOVA εδώ είναι πιο ανοιχτό
+// (#6B7280 αντί για το #111318 του resolveOperator) γιατί εδώ τρέχει σαν stroke/fill σε
+// line/bar charts πάνω στο σκούρο --card — το σκέτο μαύρο εξαφανίζεται στο recharts SVG χωρίς
+// το λεπτό φωτεινό περίγραμμα που παίρνει το OperatorSwatch (ring) ή τα υπόλοιπα swatches/bars
+// της εφαρμογής (βλ. σχόλιο στο attachmentC.ts). Επαληθεύτηκε contrast >=3:1 έναντι του
+// --card (#15181E) με το dataviz palette validator.
 const OPERATORS = [
   { key: "COSMOTE", label: "COSMOTE", color: "#3ab54a" },
   { key: "VODAFONE", label: "VODAFONE", color: "#e60000" },
-  { key: "NOVA", label: "NOVA", color: "#111318" },
+  { key: "NOVA", label: "NOVA", color: "#6B7280" },
 ] as const;
 
 const OperatorSwatch = ({ color }: { color: string }) => (
@@ -207,6 +232,82 @@ const voiceKpiRows: Row<HistoricVoiceRow>[] = [
   },
   {
     label: "Call Attempts",
+    higherIsBetter: null,
+    value: (r) => r.attempts,
+    format: (r) => fmtCount(r.attempts),
+  },
+];
+
+/** GSM voice (Mobile-to-Fixed) — ίδιο idiom με voiceKpiRows παραπάνω, χωρίς VoLTE% (μόνο
+ * FREE/M→M axis) και με avgCallSetupTime αντ' αυτού. Βλ. HistoricVoiceGsmRow στο api.ts. */
+const voiceGsmKpiRows: Row<HistoricVoiceGsmRow>[] = [
+  {
+    label: "Call Success Rate (%)",
+    emphasis: true,
+    higherIsBetter: true,
+    value: (r) => r.cssr,
+    format: (r) => fmtPct(r.cssr),
+  },
+  {
+    label: "Dropped Call Rate (%)",
+    emphasis: true,
+    higherIsBetter: false,
+    value: (r) => r.dcr,
+    format: (r) => fmtPct(r.dcr),
+  },
+  {
+    label: "Call Completion Rate (%)",
+    higherIsBetter: true,
+    value: (r) => r.completionRate,
+    format: (r) => fmtPct(r.completionRate),
+  },
+  {
+    label: "POLQA avg (Speech quality)",
+    emphasis: true,
+    higherIsBetter: true,
+    value: (r) => r.mos,
+    format: (r) => fmtNum(r.mos, 2),
+  },
+  {
+    label: "Avg Call Setup Time",
+    higherIsBetter: false,
+    value: (r) => r.avgCallSetupTime,
+    format: (r) => fmtNum(r.avgCallSetupTime, 2),
+  },
+  {
+    label: "Call Attempts",
+    higherIsBetter: null,
+    value: (r) => r.attempts,
+    format: (r) => fmtCount(r.attempts),
+  },
+];
+
+/** YouTube/video — §04 "Data — Latency, DNS, video, interactivity" + σελίδα DATA-VIDEO (§06).
+ * freezingPct: χαμηλότερο = καλύτερο (λιγότερο freezing). */
+const videoKpiRows: Row<HistoricVideoRow>[] = [
+  {
+    label: "Success Rate (%)",
+    emphasis: true,
+    higherIsBetter: true,
+    value: (r) => r.successRate,
+    format: (r) => fmtPct(r.successRate),
+  },
+  {
+    label: "Freezing (%)",
+    emphasis: true,
+    higherIsBetter: false,
+    value: (r) => r.freezingPct,
+    format: (r) => fmtPct(r.freezingPct),
+  },
+  {
+    label: "Avg VMOS",
+    emphasis: true,
+    higherIsBetter: true,
+    value: (r) => r.avgVmos,
+    format: (r) => fmtNum(r.avgVmos, 2),
+  },
+  {
+    label: "Test Attempts",
     higherIsBetter: null,
     value: (r) => r.attempts,
     format: (r) => fmtCount(r.attempts),
@@ -479,6 +580,325 @@ const CollectionPickerGroup = ({
   );
 };
 
+/* ────────────────────────── Trend across campaigns (Scope χρονοσειρά) ──────────────────────────
+ * SQL/Python ισοδύναμο του "Ποιότητα δεδομένων" + "Δ vs προηγούμενο scope" measure folder που
+ * προστέθηκε στο μοντέλο στις 5 Σεπ 2026 (§09 του blueprint) — μία γραμμή ανά Scope (όχι ανά
+ * CollectionName), coverage counts + Δ vs το προηγούμενο ΔΙΑΘΕΣΙΜΟ scope ανά operator. Ανεξάρτητο
+ * από τον campaign picker παρακάτω· φορτώνει μία φορά, δείχνει την εικόνα πριν διαλέξεις ένα
+ * συγκεκριμένο collection. */
+
+interface TrendMetricSpec {
+  key: string;
+  label: string;
+  value: (row: HistoricTrendOperatorRow) => number | null;
+  delta: (row: HistoricTrendOperatorRow) => number | null;
+  format: (value: number) => string;
+  higherIsBetter: boolean;
+}
+
+const TREND_METRICS: TrendMetricSpec[] = [
+  {
+    key: "cssr",
+    label: "Voice Success Rate (%)",
+    value: (r) => r.cssr,
+    delta: (r) => r.deltaCssr,
+    format: (v) => fmtPct(v),
+    higherIsBetter: true,
+  },
+  {
+    key: "totalScore",
+    label: "Total Score",
+    value: (r) => r.totalScore,
+    delta: (r) => r.deltaTotalScore,
+    format: (v) => fmtNum(v, 0),
+    higherIsBetter: true,
+  },
+  {
+    key: "avgThrpDlMbps",
+    label: "Avg Throughput DL (Mbps)",
+    value: (r) => r.avgThrpDlMbps,
+    delta: (r) => r.deltaAvgThrpDlMbps,
+    format: (v) => fmtNum(v, 1),
+    higherIsBetter: true,
+  },
+];
+
+/** ▲/▼ badge δίπλα στο πιο πρόσφατο scope κάθε γραφήματος — πράσινο όταν η μεταβολή πάει προς τη
+ * σωστή κατεύθυνση για το συγκεκριμένο metric (π.χ. +success rate καλό), κόκκινο αλλιώς. Τίποτα
+ * όταν δεν υπάρχει προηγούμενο διαθέσιμο scope για σύγκριση (π.χ. το πρώτο scope της σειράς). */
+const TrendDeltaBadge = ({
+  delta,
+  higherIsBetter,
+  format,
+}: {
+  delta: number | null;
+  higherIsBetter: boolean;
+  format: (value: number) => string;
+}) => {
+  if (delta == null || Math.abs(delta) < 1e-9) return null;
+  const isGood = higherIsBetter ? delta > 0 : delta < 0;
+  const Icon = delta > 0 ? TrendingUp : TrendingDown;
+  return (
+    <span className={`inline-flex items-center gap-0.5 text-[10px] font-semibold ${isGood ? "text-emerald-500" : "text-red-500"}`}>
+      <Icon className="h-3 w-3" />
+      {delta > 0 ? "+" : "−"}
+      {format(Math.abs(delta))}
+    </span>
+  );
+};
+
+/** Ένα line chart ανά metric, X = Scope (μόνο τα χρονολογικά, βλ. §09 ScopeRank idiom — τα
+ * ορφανά/κενά scopes δεν έχουν θέση σε άξονα χρόνου) — ίδιο σχήμα με τις σελίδες "Comparison
+ * Voice/Data/GRADES" (24-36) του blueprint: γραμμή ανά operator πάνω σε χρονοσειρά Scope. Reuse
+ * του υπάρχοντος chartStyles.ts (AXIS_STYLE/GRID_STYLE/LEGEND_WRAPPER_STYLE/DEFAULTS) ώστε να
+ * μοιάζει με τα υπόλοιπα charts της εφαρμογής (SummaryTab/ResultCharts/BenchmarkCharts). */
+const TrendLineChart = ({
+  metric,
+  scopes,
+  operatorKeys,
+}: {
+  metric: TrendMetricSpec;
+  scopes: HistoricTrendScope[];
+  operatorKeys: (typeof OPERATORS)[number][];
+}) => {
+  const chronological = useMemo(() => scopes.filter((s) => /^\d{4}H[12]$/.test(s.scope)), [scopes]);
+
+  const data = useMemo(
+    () =>
+      chronological.map((s) => {
+        const row: Record<string, string | number | null> = { scope: s.scope };
+        operatorKeys.forEach((op) => {
+          const opRow = s.operators.find((o) => o.operator === op.key);
+          row[op.key] = opRow ? metric.value(opRow) : null;
+        });
+        return row;
+      }),
+    [chronological, metric, operatorKeys],
+  );
+
+  const latest = chronological[chronological.length - 1];
+
+  const ChartTooltip = ({ active, payload, label }: { active?: boolean; payload?: { color: string; value: number | null }[]; label?: string }) => {
+    if (!active || !payload?.length) return null;
+    return (
+      <div className="rounded-md border border-border bg-popover px-3 py-2 text-xs shadow-lg">
+        <p className="mb-1 font-mono font-semibold text-foreground">{label}</p>
+        {payload.map((entry, i) => {
+          const op = operatorKeys[i];
+          return (
+            <p key={op?.key ?? i} className="flex items-center gap-1.5 font-mono" style={{ color: entry.color }}>
+              <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: entry.color }} />
+              {op?.label}: {entry.value == null ? "—" : metric.format(entry.value)}
+            </p>
+          );
+        })}
+      </div>
+    );
+  };
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-3">
+      <div className="mb-1 flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+        <h3 className="text-sm font-bold text-foreground">{metric.label}</h3>
+        {latest && (
+          <div className="flex flex-wrap items-center gap-2.5">
+            {operatorKeys.map((op) => {
+              const row = latest.operators.find((o) => o.operator === op.key);
+              const delta = row ? metric.delta(row) : null;
+              return (
+                <span key={op.key} className="inline-flex items-center gap-1">
+                  <OperatorSwatch color={op.color} />
+                  <TrendDeltaBadge delta={delta} higherIsBetter={metric.higherIsBetter} format={metric.format} />
+                </span>
+              );
+            })}
+          </div>
+        )}
+      </div>
+      <ResponsiveContainer width="100%" height={220}>
+        <LineChart data={data} margin={{ top: 6, right: 12, left: 0, bottom: 0 }}>
+          <CartesianGrid {...GRID_STYLE} vertical={false} />
+          <XAxis dataKey="scope" {...AXIS_STYLE} />
+          <YAxis {...AXIS_STYLE} width={52} tickFormatter={(v: number) => metric.format(v)} />
+          <Tooltip content={<ChartTooltip />} />
+          <Legend wrapperStyle={LEGEND_WRAPPER_STYLE} formatter={(value: string) => <span className="text-foreground">{value}</span>} />
+          {operatorKeys.map((op) => (
+            <Line
+              key={op.key}
+              type="monotone"
+              dataKey={op.key}
+              name={op.label}
+              stroke={op.color}
+              strokeWidth={DEFAULTS.strokeWidth}
+              dot={false}
+              activeDot={{ r: 5 }}
+              connectNulls
+            />
+          ))}
+        </LineChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
+
+const HistoricTrendSection = () => {
+  const [scopes, setScopes] = useState<HistoricTrendScope[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+
+    fetchHistoricTrend()
+      .then((data) => {
+        if (!cancelled) setScopes(data);
+      })
+      .catch((err) => {
+        if (!cancelled) setError(err instanceof Error ? err.message : "Failed to load trend");
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const operatorKeys = useMemo(() => {
+    const seen = new Set<string>();
+    scopes.forEach((s) => s.operators.forEach((o) => seen.add(o.operator)));
+    return OPERATORS.filter((op) => seen.has(op.key));
+  }, [scopes]);
+
+  // Τα ορφανά/κενά scopes μπαίνουν στο τέλος από το backend (βλ. ordered_scopes στο
+  // historic.py) — χρειάζεται ρητό φιλτράρισμα εδώ, αλλιώς το "latest" badge δείχνει
+  // ένα ορφανό αντί για το πραγματικό πιο πρόσφατο εξάμηνο.
+  const chronologicalScopes = useMemo(() => scopes.filter((s) => /^\d{4}H[12]$/.test(s.scope)), [scopes]);
+  const latestScope = chronologicalScopes[chronologicalScopes.length - 1];
+  const orphanCount = scopes.length - chronologicalScopes.length;
+
+  if (loading && scopes.length === 0) {
+    return (
+      <div className="flex items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-card py-10 text-sm text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" /> Loading trend…
+      </div>
+    );
+  }
+
+  if (error && scopes.length === 0) {
+    return (
+      <div className="rounded-lg border border-red-500/40 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+        Failed to load trend: {error}
+      </div>
+    );
+  }
+
+  if (scopes.length === 0 || operatorKeys.length === 0) return null;
+
+  return (
+    <section className="overflow-hidden rounded-xl border-2 border-border bg-card shadow-sm">
+      <header className="flex flex-wrap items-center gap-3 border-b-2 border-border bg-muted/30 px-4 py-3.5">
+        <span className="flex h-9 w-9 items-center justify-center rounded-lg bg-primary/15">
+          <TrendingUp className="h-5 w-5 text-primary" />
+        </span>
+        <div className="min-w-0">
+          <h2 className="text-lg font-bold tracking-tight text-foreground">Trend across campaigns</h2>
+          <p className="text-[11px] text-muted-foreground">
+            Pooled ανά Scope · {scopes.length.toLocaleString("en-US")} semi-annual campaigns
+            {orphanCount > 0 ? ` (${orphanCount} χωρίς αναγνωρίσιμο scope — εξαιρέθηκαν από τα γραφήματα)` : ""} · Δ = vs προηγούμενο
+            διαθέσιμο scope
+          </p>
+        </div>
+        {latestScope && (
+          <div className="ml-auto flex flex-wrap gap-3 rounded-lg border border-border/70 bg-muted/40 px-3 py-1.5 text-[11px] text-muted-foreground">
+            <span>
+              <b className="text-foreground">{fmtCount(latestScope.collections)}</b> collections
+            </span>
+            <span>
+              <b className="text-foreground">{fmtCount(latestScope.voiceCollections)}</b> voice
+            </span>
+            <span>
+              <b className="text-foreground">{fmtCount(latestScope.capacityCollections)}</b> capacity
+            </span>
+            <span className="text-foreground/70">(latest: {latestScope.scope})</span>
+          </div>
+        )}
+      </header>
+
+      <div className="grid grid-cols-1 gap-3 p-3 lg:grid-cols-3">
+        {TREND_METRICS.map((metric) => (
+          <TrendLineChart key={metric.key} metric={metric} scopes={scopes} operatorKeys={operatorKeys} />
+        ))}
+      </div>
+    </section>
+  );
+};
+
+/* ────────────────────────── Scorecard grouped bar (GRADES page, §06) ──────────────────────────
+ * Η σελίδα "GRADES" του blueprint (πίνακας σελίδων, #02) είναι το ίδιο το προϊόν του report —
+ * gauges/column charts πάνω σε Visuals Total/Voice/Data Score ανά operator. Grouped bar εδώ αντί
+ * για 3 gauges (βλ. §07 stack: ECharts καλύπτει bar/column εγγενώς, gauges όχι πάντα 1:1) — ίδιο
+ * μήνυμα, απλούστερο component, reuse του recharts που ήδη υπάρχει στο project. */
+const SCORE_BAR_METRICS: { key: keyof HistoricScoreRow; label: string }[] = [
+  { key: "totalScore", label: "Total Score" },
+  { key: "totalVoice", label: "Voice Score" },
+  { key: "totalData", label: "Data Score" },
+];
+
+const ScorecardBarChart = ({ scores }: { scores: HistoricScoreRow[] }) => {
+  const byOperator = useMemo(() => new Map(scores.map((row) => [row.operator, row])), [scores]);
+  const operatorKeys = OPERATORS.filter((op) => byOperator.has(op.key));
+
+  if (operatorKeys.length === 0) return null;
+
+  const data = SCORE_BAR_METRICS.map(({ key, label }) => {
+    const row: Record<string, string | number | null> = { metric: label };
+    operatorKeys.forEach((op) => {
+      const score = byOperator.get(op.key);
+      row[op.key] = score ? (score[key] as number | null) : null;
+    });
+    return row;
+  });
+
+  const ChartTooltip = ({ active, payload, label }: { active?: boolean; payload?: { color: string; value: number | null }[]; label?: string }) => {
+    if (!active || !payload?.length) return null;
+    return (
+      <div className="rounded-md border border-border bg-popover px-3 py-2 text-xs shadow-lg">
+        <p className="mb-1 font-semibold text-foreground">{label}</p>
+        {payload.map((entry, i) => {
+          const op = operatorKeys[i];
+          return (
+            <p key={op?.key ?? i} className="flex items-center gap-1.5 font-mono" style={{ color: entry.color }}>
+              <span className="inline-block h-1.5 w-1.5 shrink-0 rounded-full" style={{ backgroundColor: entry.color }} />
+              {op?.label}: {entry.value == null ? "—" : fmtNum(entry.value, 0)}
+            </p>
+          );
+        })}
+      </div>
+    );
+  };
+
+  return (
+    <div className="rounded-lg border border-border bg-card p-3">
+      <ResponsiveContainer width="100%" height={200}>
+        <BarChart data={data} margin={{ top: 6, right: 12, left: 0, bottom: 0 }}>
+          <CartesianGrid {...GRID_STYLE} vertical={false} />
+          <XAxis dataKey="metric" {...AXIS_STYLE} />
+          <YAxis {...AXIS_STYLE} width={44} />
+          <Tooltip content={<ChartTooltip />} cursor={{ fill: "hsl(var(--muted))", opacity: 0.3 }} />
+          <Legend wrapperStyle={LEGEND_WRAPPER_STYLE} formatter={(value: string) => <span className="text-foreground">{value}</span>} />
+          {operatorKeys.map((op) => (
+            <Bar key={op.key} dataKey={op.key} name={op.label} fill={op.color} fillOpacity={DEFAULTS.barFillOpacity} radius={[3, 3, 0, 0]} maxBarSize={48} />
+          ))}
+        </BarChart>
+      </ResponsiveContainer>
+    </div>
+  );
+};
+
 /* ────────────────────────── Historic tab ────────────────────────── */
 
 const HistoricTab = () => {
@@ -490,6 +910,8 @@ const HistoricTab = () => {
   const [scores, setScores] = useState<HistoricScoreRow[]>([]);
   const [winners, setWinners] = useState<HistoricBestOperator[]>([]);
   const [voiceRows, setVoiceRows] = useState<HistoricVoiceRow[]>([]);
+  const [voiceGsmRows, setVoiceGsmRows] = useState<HistoricVoiceGsmRow[]>([]);
+  const [videoRows, setVideoRows] = useState<HistoricVideoRow[]>([]);
   const [dataRows, setDataRows] = useState<HistoricDataRow[]>([]);
   const [snapshotLoading, setSnapshotLoading] = useState(false);
   const [snapshotError, setSnapshotError] = useState<string | null>(null);
@@ -522,6 +944,8 @@ const HistoricTab = () => {
       setScores([]);
       setWinners([]);
       setVoiceRows([]);
+      setVoiceGsmRows([]);
+      setVideoRows([]);
       setDataRows([]);
       return;
     }
@@ -533,8 +957,10 @@ const HistoricTab = () => {
     Promise.allSettled([
       fetchHistoricScorecard(selectedCollection),
       fetchHistoricVoice(selectedCollection),
+      fetchHistoricVoiceGsm(selectedCollection),
+      fetchHistoricVideo(selectedCollection),
       fetchHistoricData(selectedCollection),
-    ]).then(([scorecardResult, voiceResult, dataResult]) => {
+    ]).then(([scorecardResult, voiceResult, voiceGsmResult, videoResult, dataResult]) => {
       if (cancelled) return;
 
       if (scorecardResult.status === "fulfilled") {
@@ -551,14 +977,29 @@ const HistoricTab = () => {
         setVoiceRows([]);
       }
 
+      if (voiceGsmResult.status === "fulfilled") {
+        setVoiceGsmRows(voiceGsmResult.value);
+      } else {
+        setVoiceGsmRows([]);
+      }
+
+      if (videoResult.status === "fulfilled") {
+        setVideoRows(videoResult.value);
+      } else {
+        setVideoRows([]);
+      }
+
       if (dataResult.status === "fulfilled") {
         setDataRows(dataResult.value);
       } else {
         setDataRows([]);
       }
 
-      if (scorecardResult.status === "rejected" && voiceResult.status === "rejected" && dataResult.status === "rejected") {
-        const reason = scorecardResult.reason;
+      const allRejected = [scorecardResult, voiceResult, voiceGsmResult, videoResult, dataResult].every(
+        (r) => r.status === "rejected",
+      );
+      if (allRejected) {
+        const reason = scorecardResult.status === "rejected" ? scorecardResult.reason : undefined;
         setSnapshotError(reason instanceof Error ? reason.message : "Failed to load campaign data");
       }
 
@@ -570,7 +1011,8 @@ const HistoricTab = () => {
     };
   }, [selectedCollection]);
 
-  const hasData = scores.length > 0 || voiceRows.length > 0 || dataRows.length > 0;
+  const hasData =
+    scores.length > 0 || voiceRows.length > 0 || voiceGsmRows.length > 0 || videoRows.length > 0 || dataRows.length > 0;
 
   return (
     <div className="space-y-4">
@@ -606,6 +1048,8 @@ const HistoricTab = () => {
         </div>
       )}
 
+      <HistoricTrendSection />
+
       {!selectedCollection && !collectionsError && (
         <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card py-24 text-center">
           <History className="h-8 w-8 text-muted-foreground" />
@@ -630,6 +1074,7 @@ const HistoricTab = () => {
 
       {selectedCollection && hasData && (
         <>
+          {scores.length > 0 && <ScorecardBarChart scores={scores} />}
           <HistoricKpiTable
             title="Scorecard"
             icon={Database}
@@ -637,8 +1082,10 @@ const HistoricTab = () => {
             data={scores}
             winnerBadge={winnerFor(winners, "TOTAL")}
           />
-          <HistoricKpiTable title="Voice KPIs" icon={Phone} rows={voiceKpiRows} data={voiceRows} />
+          <HistoricKpiTable title="Voice KPIs — Free (M→M)" icon={Phone} rows={voiceKpiRows} data={voiceRows} />
+          <HistoricKpiTable title="Voice KPIs — GSM (M→F)" icon={PhoneCall} rows={voiceGsmKpiRows} data={voiceGsmRows} />
           <HistoricKpiTable title="Data KPIs" icon={Wifi} rows={dataKpiRows} data={dataRows} />
+          <HistoricKpiTable title="Video (YouTube) KPIs" icon={Video} rows={videoKpiRows} data={videoRows} />
         </>
       )}
     </div>

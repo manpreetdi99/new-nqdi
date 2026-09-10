@@ -1,0 +1,1142 @@
+<!doctype html>
+<html lang="el">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>COSMOTE BI Blueprint</title>
+<meta name="description" content="Πλήρης τεχνική αποτύπωση του COSMOTE Benchmarking BI report v12 — πηγές, μοντέλο, measures με SQL ισοδύναμα, σελίδες και σχέδιο μεταφοράς σε full-stack.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans+Condensed:wght@500;600;700&family=Source+Sans+3:ital,wght@0,400;0,600;1,400&display=swap">
+<style>
+    :root { color-scheme: light dark; }
+    html { -webkit-text-size-adjust: 100%; }
+    body { margin: 0; }
+    img { max-width: 100%; height: auto; }
+    [hidden] { display: none !important; }
+
+:root{
+  --ground:#EFF2F1;
+  --surface:#FFFFFF;
+  --surface-2:#F7F9F8;
+  --line:#D4DCDA;
+  --line-soft:#E4EAE8;
+  --ink:#0E181B;
+  --ink-2:#33474C;
+  --muted:#647A80;
+  --accent:#0C6B7D;
+  --accent-soft:#DCEEF1;
+  --accent-ink:#08505E;
+  --sig-bad:#A6392F;
+  --sig-poor:#C4711C;
+  --sig-fair:#B69214;
+  --sig-good:#3F7D45;
+  --sig-exc:#1E6B84;
+  --code-bg:#F2F5F4;
+  --shadow:0 1px 2px rgba(14,24,27,.06), 0 8px 24px -16px rgba(14,24,27,.28);
+  --mono:"IBM Plex Mono",ui-monospace,SFMono-Regular,Menlo,monospace;
+  --disp:"IBM Plex Sans Condensed","Arial Narrow",Arial,sans-serif;
+  --body:"Source Sans 3",Segoe UI,system-ui,sans-serif;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --ground:#0A1113;
+    --surface:#111A1D;
+    --surface-2:#162126;
+    --line:#27383D;
+    --line-soft:#1C2A2E;
+    --ink:#E7EFF0;
+    --ink-2:#B4C6C9;
+    --muted:#7E969B;
+    --accent:#49BDD4;
+    --accent-soft:#12333C;
+    --accent-ink:#8FD8E7;
+    --sig-bad:#E0736A;
+    --sig-poor:#E5A051;
+    --sig-fair:#D9BE4C;
+    --sig-good:#69B471;
+    --sig-exc:#5CB2CC;
+    --code-bg:#162126;
+    --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -18px rgba(0,0,0,.9);
+  }
+}
+:root[data-theme="dark"]{
+  --ground:#0A1113;
+  --surface:#111A1D;
+  --surface-2:#162126;
+  --line:#27383D;
+  --line-soft:#1C2A2E;
+  --ink:#E7EFF0;
+  --ink-2:#B4C6C9;
+  --muted:#7E969B;
+  --accent:#49BDD4;
+  --accent-soft:#12333C;
+  --accent-ink:#8FD8E7;
+  --sig-bad:#E0736A;
+  --sig-poor:#E5A051;
+  --sig-fair:#D9BE4C;
+  --sig-good:#69B471;
+  --sig-exc:#5CB2CC;
+  --code-bg:#162126;
+  --shadow:0 1px 2px rgba(0,0,0,.4), 0 10px 28px -18px rgba(0,0,0,.9);
+}
+
+*{box-sizing:border-box}
+body{
+  background:var(--ground);
+  color:var(--ink);
+  font-family:var(--body);
+  font-size:16px;
+  line-height:1.6;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{display:grid;grid-template-columns:236px minmax(0,1fr);gap:0;min-height:100vh;max-width:1360px;margin:0 auto}
+
+/* ---------- rail ---------- */
+.rail{
+  border-right:1px solid var(--line);
+  background:var(--surface);
+  padding:26px 18px 40px;
+  position:sticky;top:0;align-self:start;max-height:100vh;overflow-y:auto;
+}
+.brand{font-family:var(--disp);font-weight:700;font-size:20px;line-height:1.15;letter-spacing:.01em;margin:0 0 2px}
+.brand span{display:block;color:var(--accent);font-size:12px;letter-spacing:.14em;text-transform:uppercase;font-weight:600;margin-bottom:6px}
+.brand-sub{color:var(--muted);font-size:13px;margin:6px 0 22px;line-height:1.45}
+.nav{display:flex;flex-direction:column;gap:2px}
+.nav button{
+  font-family:var(--body);font-size:14.5px;text-align:left;
+  background:none;border:0;border-left:2px solid transparent;
+  color:var(--ink-2);padding:8px 10px;cursor:pointer;border-radius:0 4px 4px 0;
+  display:flex;gap:9px;align-items:baseline;transition:background .13s,color .13s;
+}
+.nav button .n{font-family:var(--mono);font-size:11px;color:var(--muted);min-width:16px;font-variant-numeric:tabular-nums}
+.nav button:hover{background:var(--surface-2);color:var(--ink)}
+.nav button[aria-selected="true"]{background:var(--accent-soft);color:var(--accent-ink);border-left-color:var(--accent);font-weight:600}
+.nav button[aria-selected="true"] .n{color:var(--accent)}
+.nav button:focus-visible{outline:2px solid var(--accent);outline-offset:-2px}
+
+/* ---------- content ---------- */
+main{padding:34px 40px 90px;min-width:0}
+section[hidden]{display:none!important}
+h2{font-family:var(--disp);font-weight:700;font-size:31px;line-height:1.12;margin:0 0 6px;text-wrap:balance;letter-spacing:.005em}
+.kicker{font-family:var(--mono);font-size:11px;letter-spacing:.16em;text-transform:uppercase;color:var(--accent);margin:0 0 8px;font-weight:500}
+.lede{font-size:17.5px;color:var(--ink-2);max-width:66ch;margin:0 0 26px}
+h3{font-family:var(--disp);font-weight:600;font-size:20px;margin:34px 0 10px;letter-spacing:.01em;padding-bottom:6px;border-bottom:1px solid var(--line-soft)}
+h4{font-family:var(--disp);font-weight:600;font-size:15.5px;margin:22px 0 6px;letter-spacing:.02em}
+p{max-width:70ch;margin:0 0 12px}
+ul,ol{max-width:70ch;padding-left:20px;margin:0 0 14px}
+li{margin-bottom:5px}
+code{font-family:var(--mono);font-size:.855em;background:var(--code-bg);padding:1px 5px;border-radius:3px;border:1px solid var(--line-soft)}
+a{color:var(--accent-ink)}
+
+pre{
+  font-family:var(--mono);font-size:12.6px;line-height:1.55;
+  background:var(--code-bg);border:1px solid var(--line-soft);border-left:2px solid var(--accent);
+  padding:12px 14px;border-radius:0 5px 5px 0;overflow-x:auto;margin:0 0 12px;
+  color:var(--ink);
+}
+pre code{background:none;border:0;padding:0;font-size:inherit}
+
+/* stat strip */
+.stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(112px,1fr));gap:1px;background:var(--line);border:1px solid var(--line);margin:0 0 30px;border-radius:5px;overflow:hidden}
+.stat{background:var(--surface);padding:13px 14px}
+.stat b{display:block;font-family:var(--disp);font-size:27px;font-weight:700;line-height:1;font-variant-numeric:tabular-nums}
+.stat span{display:block;font-size:11.5px;color:var(--muted);text-transform:uppercase;letter-spacing:.07em;margin-top:5px}
+
+/* tables */
+.tw{overflow-x:auto;border:1px solid var(--line);border-radius:5px;margin:0 0 18px;background:var(--surface)}
+table{border-collapse:collapse;width:100%;font-size:14px}
+th{
+  font-family:var(--disp);font-weight:600;font-size:12px;letter-spacing:.06em;text-transform:uppercase;
+  text-align:left;color:var(--muted);padding:9px 12px;border-bottom:1px solid var(--line);
+  background:var(--surface-2);white-space:nowrap;position:sticky;top:0;
+}
+td{padding:8px 12px;border-bottom:1px solid var(--line-soft);vertical-align:top}
+tr:last-child td{border-bottom:0}
+td.m,th.m{font-family:var(--mono);font-size:12.4px}
+td.num{text-align:right;font-variant-numeric:tabular-nums;font-family:var(--mono);font-size:12.6px}
+
+/* hub diagram */
+.hub{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;margin:6px 0 8px}
+.hub-core{
+  grid-column:1/-1;background:var(--accent-soft);border:1px solid var(--accent);
+  border-radius:5px;padding:13px 15px;
+}
+.hub-core b{font-family:var(--mono);font-size:14px;color:var(--accent-ink);display:block}
+.hub-core small{color:var(--ink-2);font-size:13px;display:block;margin-top:3px}
+.node{background:var(--surface);border:1px solid var(--line);border-radius:4px;padding:9px 11px;font-size:13px}
+.node b{font-family:var(--mono);font-size:12.5px;display:block;color:var(--ink)}
+.node small{color:var(--muted);font-size:11.6px}
+
+/* measure cards */
+.mgrid{display:grid;gap:10px;margin-bottom:18px}
+.mcard{border:1px solid var(--line);border-radius:5px;background:var(--surface);overflow:hidden}
+.mcard>header{
+  padding:9px 13px;border-bottom:1px solid var(--line-soft);background:var(--surface-2);
+  display:flex;flex-wrap:wrap;gap:10px;align-items:baseline;justify-content:space-between;
+}
+.mcard>header b{font-family:var(--mono);font-size:13.2px;font-weight:600}
+.mcard>header em{font-style:normal;color:var(--muted);font-size:12.4px}
+.mbody{display:grid;grid-template-columns:1fr 1fr;gap:0}
+.mbody>div{padding:11px 13px;min-width:0}
+.mbody>div+div{border-left:1px solid var(--line-soft)}
+.mbody h5{margin:0 0 6px;font-family:var(--mono);font-size:10.5px;letter-spacing:.13em;text-transform:uppercase;color:var(--muted);font-weight:500}
+.mbody pre{margin:0;border-left-width:0;border-radius:4px;background:transparent;border:0;padding:0;font-size:12.3px}
+
+/* pipeline */
+.pipe{counter-reset:step;display:grid;gap:0;margin:4px 0 22px}
+.pipe li{
+  list-style:none;counter-increment:step;position:relative;
+  padding:12px 0 12px 46px;border-bottom:1px solid var(--line-soft);max-width:none;margin:0;
+}
+.pipe li:last-child{border-bottom:0}
+.pipe li::before{
+  content:counter(step,decimal-leading-zero);position:absolute;left:0;top:12px;
+  font-family:var(--mono);font-size:11.5px;color:var(--accent);border:1px solid var(--line);
+  background:var(--surface);width:28px;height:28px;display:grid;place-items:center;border-radius:50%;
+}
+.pipe b{font-family:var(--disp);font-size:15.5px;display:block;letter-spacing:.01em}
+.pipe span{color:var(--ink-2);font-size:14.5px}
+
+/* callouts */
+.note{border-left:2px solid var(--accent);background:var(--surface);padding:11px 14px;border-radius:0 5px 5px 0;margin:0 0 16px;font-size:14.6px;color:var(--ink-2);border-top:1px solid var(--line-soft);border-right:1px solid var(--line-soft);border-bottom:1px solid var(--line-soft)}
+.note b{color:var(--ink)}
+.warn{border-left-color:var(--sig-poor)}
+.bad{border-left-color:var(--sig-bad)}
+
+.pill{display:inline-block;font-family:var(--mono);font-size:11px;padding:1.5px 7px;border-radius:20px;border:1px solid var(--line);color:var(--muted);white-space:nowrap;background:var(--surface-2)}
+.pill.sql{color:var(--sig-exc);border-color:currentColor}
+.pill.xls{color:var(--sig-good);border-color:currentColor}
+.pill.dax{color:var(--sig-poor);border-color:currentColor}
+.pill.hidden{color:var(--sig-bad);border-color:currentColor}
+
+.ramp{display:flex;gap:0;border-radius:4px;overflow:hidden;border:1px solid var(--line);margin:2px 0 16px;font-size:11.5px;font-family:var(--mono)}
+.ramp div{flex:1;padding:6px 8px;color:#fff;text-align:center;white-space:nowrap}
+
+.two{display:grid;grid-template-columns:1fr 1fr;gap:20px}
+.foot{margin-top:44px;padding-top:16px;border-top:1px solid var(--line);color:var(--muted);font-size:13px}
+
+@media (max-width:900px){
+  .wrap{grid-template-columns:1fr}
+  .rail{position:static;max-height:none;border-right:0;border-bottom:1px solid var(--line);padding:20px 18px}
+  .nav{flex-direction:row;overflow-x:auto;gap:4px;padding-bottom:4px}
+  .nav button{white-space:nowrap;border-left:0;border-bottom:2px solid transparent;border-radius:4px 4px 0 0}
+  .nav button[aria-selected="true"]{border-left-color:transparent;border-bottom-color:var(--accent)}
+  main{padding:26px 20px 70px}
+  .mbody,.two{grid-template-columns:1fr}
+  .mbody>div+div{border-left:0;border-top:1px solid var(--line-soft)}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<aside class="rail">
+  <h1 class="brand"><span>Blueprint</span>COSMOTE Benchmarking BI</h1>
+  <p class="brand-sub">Πλήρης αποτύπωση του <code>v12.pbix</code> — μοντέλο, DAX, σελίδες και σχέδιο μεταφοράς.</p>
+  <nav class="nav" role="tablist" aria-label="Ενότητες">
+    <button role="tab" aria-selected="true" data-t="overview"><span class="n">01</span>Επισκόπηση</button>
+    <button role="tab" aria-selected="false" data-t="sources"><span class="n">02</span>Πηγές &amp; ETL</button>
+    <button role="tab" aria-selected="false" data-t="model"><span class="n">03</span>Μοντέλο δεδομένων</button>
+    <button role="tab" aria-selected="false" data-t="measures"><span class="n">04</span>Measures → SQL</button>
+    <button role="tab" aria-selected="false" data-t="scoring"><span class="n">05</span>Μηχανή βαθμολογίας</button>
+    <button role="tab" aria-selected="false" data-t="pages"><span class="n">06</span>Σελίδες &amp; visuals</button>
+    <button role="tab" aria-selected="false" data-t="stack"><span class="n">07</span>Full-stack πλάνο</button>
+    <button role="tab" aria-selected="false" data-t="traps"><span class="n">08</span>Παγίδες μεταφοράς</button>
+    <button role="tab" aria-selected="false" data-t="changelog"><span class="n">09</span>Αλλαγές στο μοντέλο</button>
+  </nav>
+</aside>
+
+<main>
+
+<!-- ══════════════ 01 ══════════════ -->
+<section id="overview">
+  <p class="kicker">01 · Επισκόπηση</p>
+  <h2>Τι είναι πραγματικά αυτό το report</h2>
+  <p class="lede">Ένα import-mode μοντέλο πάνω από τρεις βάσεις SQL Server του <code>swissqual-srvsa</code>, που ενοποιεί όλες τις μετρήσεις drive-test μιας εξαμηνιαίας καμπάνιας benchmarking και τις συγκρίνει ανά operator — Cosmote, Vodafone, Nova/Wind.</p>
+
+  <div class="stats">
+    <div class="stat"><b>36</b><span>σελίδες</span></div>
+    <div class="stat"><b>837</b><span>visuals</span></div>
+    <div class="stat"><b>42</b><span>πίνακες</span></div>
+    <div class="stat"><b>184</b><span>measures</span></div>
+    <div class="stat"><b>112</b><span>calc. columns</span></div>
+    <div class="stat"><b>31</b><span>σχέσεις</span></div>
+    <div class="stat"><b>49</b><span>bookmarks</span></div>
+    <div class="stat"><b>280 MB</b><span>DataModel</span></div>
+  </div>
+
+  <h3>Ο πυρήνας: ένα κλειδί για όλα</h3>
+  <p>Όλη η αρχιτεκτονική στηρίζεται σε ένα και μόνο συνθετικό κλειδί. Κάθε πίνακας μετρήσεων φέρνει από τη βάση μια στήλη <code>CollectionName</code> της μορφής <code>ΠΕΡΙΟΧΗ_ΠΟΛΗ_ΚΑΤΗΓΟΡΙΑ_SCOPE</code>· το Power Query τη σπάει στα τέσσερα και ένα calculated column την ξανασυνθέτει ως <code>STR_ID</code>.</p>
+
+<pre><code>"CENTRAL GREECE_LAMIA_MAJOR TOWNS_2026H1"
+        │          │          │           │
+   GreaterArea  Collection  Category    Scope
+        └──────────┴──────────┴───────────┘
+                   STR_ID  ← το μοναδικό join key όλου του μοντέλου</code></pre>
+
+  <p>Ο πίνακας <code>ALL INFO SYNCED FILTERS</code> κρατά τη λίστα των μοναδικών <code>STR_ID</code> και λειτουργεί ως <b>μοναδική διάσταση</b>: κάθε slicer της κάθε σελίδας δείχνει σε αυτόν, και το φιλτράρισμα διαχέεται 1→∞ σε όλους τους πίνακες γεγονότων ταυτόχρονα. Αυτό είναι το ένα πράγμα που πρέπει να κρατήσεις άθικτο σε οποιαδήποτε αναδόμηση.</p>
+
+  <h3>Οι τέσσερις θεματικοί άξονες</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Άξονας</th><th>Σελίδες</th><th>Βασικοί πίνακες</th><th>Τι μετράει</th></tr></thead>
+    <tbody>
+      <tr><td><b>Voice</b></td><td class="num">7</td><td class="m">MtoF_voice, MtoM_voice, Voice Technology, Voice MOS Voice Codecs</td><td>Success/Drop/Fail rate, MOS, Call Setup Time, codecs, radio tech, handovers</td></tr>
+      <tr><td><b>Data</b></td><td class="num">12</td><td class="m">Capacity, HTTP Transfer, BROWSING_500KB, Ping, OOKLA, Youtube, DNS, Interactivity, BW, NR DATA TECH</td><td>Throughput DL/UL, RTT, DNS time, VMOS, freezing, 5G usage, CA/BW</td></tr>
+      <tr><td><b>Scanner / Maps</b></td><td class="num">6</td><td class="m">Scanner LTE/GSM/UMTS/NR, Scanner5G Map 50Bin &amp; 500Bin, NR_CAP_USAGE</td><td>Κάλυψη RSRP/SINR/RSCP/EcNo, binned SS-RSRP σε 50 m &amp; 500 m</td></tr>
+      <tr><td><b>Scores</b></td><td class="num">11</td><td class="m">BI_SCORES_TOTAL, BI_BEST_OP_SCORE, 8 πίνακες παραμέτρων</td><td>Σταθμισμένη τελική βαθμολογία ανά operator, διαφορές έναντι ανταγωνιστών</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Πώς να διαβάσεις τα υπόλοιπα</h3>
+  <ol class="pipe">
+    <li><b>Πηγές &amp; ETL</b><span>Ποιοι SQL πίνακες και Excel αρχεία τροφοδοτούν το μοντέλο και τι μετασχηματισμό περνούν.</span></li>
+    <li><b>Μοντέλο</b><span>Σχήμα, σχέσεις, στήλες, groups &amp; bins — το DDL σου.</span></li>
+    <li><b>Measures</b><span>Και τα 164, ομαδοποιημένα, με SQL ισοδύναμο για κάθε ένα.</span></li>
+    <li><b>Scoring</b><span>Ο αλγόριθμος στάθμισης — το πιο δύσκολο κομμάτι της μεταφοράς.</span></li>
+    <li><b>Σελίδες</b><span>Τι visual, με ποια πεδία, σε ποια σελίδα.</span></li>
+    <li><b>Full-stack</b><span>Προτεινόμενο API + frontend, με τη λογική να ζει στη βάση.</span></li>
+    <li><b>Παγίδες</b><span>Λάθη, ορφανά και τεχνικό χρέος που δεν αξίζει να μεταφερθούν.</span></li>
+  </ol>
+</section>
+
+<!-- ══════════════ 02 ══════════════ -->
+<section id="sources" hidden>
+  <p class="kicker">02 · Πηγές &amp; ETL</p>
+  <h2>Από πού έρχονται τα δεδομένα</h2>
+  <p class="lede">Ένας SQL Server με τρεις βάσεις καλύπτει το 90% του μοντέλου. Τέσσερα Excel σε δικτυακό δίσκο <code>Z:</code> καλύπτουν τα lookup — και είναι το πρώτο πράγμα που πρέπει να μπει σε πίνακα βάσης.</p>
+
+  <h3>SQL Server · <code>swissqual-srvsa</code></h3>
+  <div class="tw"><table>
+    <thead><tr><th>Βάση</th><th>Πηγαίος πίνακας</th><th>Πίνακας μοντέλου</th><th>Query</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="6"><span class="pill sql">BI_VOICE</span></td><td class="m">BI_VOICE_MtoF</td><td class="m">MtoF_voice</td><td><code>SELECT *</code></td></tr>
+      <tr><td class="m">BI_VOICE_MtoM</td><td class="m">MtoM_voice</td><td><code>SELECT *</code></td></tr>
+      <tr><td class="m">BI_SCORES_TOTAL</td><td class="m">BI_SCORES_TOTAL</td><td><code>SELECT *</code> + custom WEIGHT</td></tr>
+      <tr><td class="m">BI_VOICE_CODEC</td><td class="m">Voice MOS Voice Codecs</td><td><code>SELECT *</code></td></tr>
+      <tr><td class="m">BI_RADIO_TECH</td><td class="m">Voice Technology</td><td><code>SELECT *</code></td></tr>
+      <tr><td class="m">BI_BEST_OP_SCORE</td><td class="m">BI_BEST_OP_SCORE</td><td><code>SELECT *</code> + LEFT JOIN GIS</td></tr>
+
+      <tr><td rowspan="12"><span class="pill sql">BI_DATA</span></td><td class="m">BI_Capacity</td><td class="m">Capacity</td><td>17 επιλεγμένες στήλες</td></tr>
+      <tr><td class="m">BI_HTTP</td><td class="m">HTTP Transfer</td><td>9 στήλες</td></tr>
+      <tr><td class="m">BI_BROWSING_500KB</td><td class="m">BROWSING_500KB</td><td>9 στήλες</td></tr>
+      <tr><td class="m">BI_PING_NEW</td><td class="m">Ping</td><td><code>SELECT *</code></td></tr>
+      <tr><td class="m">BI_DNS_NEW</td><td class="m">DNS</td><td><code>SELECT *</code></td></tr>
+      <tr><td class="m">BI_YOUTUBE</td><td class="m">Youtube</td><td>10 στήλες</td></tr>
+      <tr><td class="m">BI_OOKLA</td><td class="m">OOKLA</td><td>7 στήλες</td></tr>
+      <tr><td class="m">BI_BW</td><td class="m">BW</td><td>6 στήλες</td></tr>
+      <tr><td class="m">BI_INTERACTIVITY</td><td class="m">Interactivity</td><td><code>SELECT *</code></td></tr>
+      <tr><td class="m">BI_NR_DATA</td><td class="m">NR DATA TECH</td><td><code>SELECT *</code></td></tr>
+      <tr><td class="m">BI_5G_CAP_USAGE</td><td class="m">NR_CAP_USAGE</td><td><code>SELECT *</code></td></tr>
+      <tr><td class="m">BI_KMS_DATA_HOURS</td><td class="m">KMS_DATA_HOURS</td><td>navigation (όχι query)</td></tr>
+
+      <tr><td rowspan="6"><span class="pill sql">BI_SCANNER</span></td><td class="m">BI_SCANNER_LTE</td><td class="m">Scanner LTE</td><td><code>SELECT *</code></td></tr>
+      <tr><td class="m">BI_SCANNER_GSM</td><td class="m">Scanner GSM</td><td><code>SELECT *</code></td></tr>
+      <tr><td class="m">BI_SCANNER_UMTS</td><td class="m">Scanner UMTS</td><td><code>SELECT *</code> + split <code>OP_CH</code></td></tr>
+      <tr><td class="m">BI_SCANNER_NR</td><td class="m">Scanner NR</td><td><code>SELECT *</code></td></tr>
+      <tr><td class="m">BI_NR_SCANNER_MAP_50</td><td class="m">Scanner5G Map 50Bin</td><td><code>SELECT *</code></td></tr>
+      <tr><td class="m">BI_NR_SCANNER_MAP_500</td><td class="m">Scanner5G Map 500Bin</td><td><code>SELECT *</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Excel lookups · <code>Z:\…\COSMOTE 2026 H2\#BI SWISSQUAL\EXCEL FILES USED\</code></h3>
+  <div class="tw"><table>
+    <thead><tr><th>Αρχείο</th><th>Πίνακας</th><th>Ρόλος</th></tr></thead>
+    <tbody>
+      <tr><td class="m"><span class="pill xls">xlsx</span> detailed_devices.xlsx</td><td class="m">Detailed_Devices_v2</td><td>Ποια συσκευή χρησιμοποιήθηκε ανά collection (Free / GSM / Data). Σχέση 1:1 αμφίδρομη — δουλεύει ως φίλτρο συσκευής σε κάθε σελίδα.</td></tr>
+      <tr><td class="m"><span class="pill xls">xlsx</span> Operator_main file.xlsx</td><td class="m">Operator (for scanner)</td><td>Λίστα operators για τα scanner slicers (τα scanner tables δεν έχουν HomeOperator).</td></tr>
+      <tr><td class="m"><span class="pill xls">xlsx</span> GIS.xlsx</td><td class="m">GIS</td><td>Lat/Lon ανά GREATER AREA + COLLECTION NAME + CATEGORY· γίνεται merge στο BI_BEST_OP_SCORE.</td></tr>
+      <tr><td class="m"><span class="pill xls">xlsx</span> Bin colors.xlsx</td><td class="m">BW_MAP_Color</td><td>ColorID / BWMAPBIN / Bin Color — παλέτα χάρτη bandwidth (αχρησιμοποίητος στην v12).</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Ο καθολικός μετασχηματισμός</h3>
+  <p>Επαναλαμβάνεται σχεδόν αυτούσιος σε <b>20 queries</b>. Στη νέα υλοποίηση γίνεται μία φορά, σε επίπεδο view ή ETL job:</p>
+<pre><code>-- SQL Server ισοδύναμο του Power Query βήματος
+SELECT
+    PARSENAME(REPLACE(CollectionName,'_','.'),4) AS GreaterArea,
+    PARSENAME(REPLACE(CollectionName,'_','.'),3) AS CollectionName,
+    PARSENAME(REPLACE(CollectionName,'_','.'),2) AS Category,
+    COALESCE(PARSENAME(REPLACE(CollectionName,'_','.'),1),'2019H2') AS Scope,
+    CollectionName AS STR_ID,          -- ταυτόσημο με το concat των 4
+    *
+FROM BI_DATA.dbo.BI_Capacity;</code></pre>
+  <div class="note"><b>Προσοχή:</b> το <code>PARSENAME</code> κόβεται στα 4 μέρη — αν κάποιο CollectionName έχει παραπάνω από τρεις κάτω παύλες, χρειάζεσαι <code>STRING_SPLIT</code> με ordinal ή CLR split. Το Power Query σιωπηλά κρατάει τα 4 πρώτα.</div>
+
+  <h3>Ο πίνακας-κλειδί</h3>
+  <p><code>ALL INFO SYNCED FILTERS</code> δεν έρχεται από δικό του πίνακα — παράγεται από το <code>BI_Capacity</code>:</p>
+<pre><code>SELECT DISTINCT CollectionName, MIN(CallDate) AS StartDate
+FROM BI_Capacity
+GROUP BY CollectionName;</code></pre>
+  <div class="note warn"><b>Συνέπεια:</b> αν ένα collection υπάρχει στο voice αλλά όχι στο capacity, <b>δεν εμφανίζεται σε κανέναν slicer</b>. Στη νέα βάση φτιάξε τη διάσταση ως <code>UNION</code> όλων των fact tables, όχι μόνο του Capacity.</div>
+</section>
+
+<!-- ══════════════ 03 ══════════════ -->
+<section id="model" hidden>
+  <p class="kicker">03 · Μοντέλο δεδομένων</p>
+  <h2>Σχήμα, σχέσεις, στήλες</h2>
+  <p class="lede">Καθαρό αστέρι με μία κεντρική διάσταση. 31 σχέσεις, εκ των οποίων 22 είναι <code>*→1</code> πάνω στο <code>STR_ID</code>.</p>
+
+  <h3>Το αστέρι</h3>
+  <div class="hub">
+    <div class="hub-core">
+      <b>ALL INFO SYNCED FILTERS</b>
+      <small>GreaterArea · CollectionName · Category · Scope · <b>STR_ID</b> · StartDate · Collection Group · Common Values</small>
+    </div>
+    <div class="node"><b>MtoF_voice</b><small>62 στήλες · GSM voice</small></div>
+    <div class="node"><b>MtoM_voice</b><small>89 στήλες · Free voice</small></div>
+    <div class="node"><b>Capacity</b><small>31 στήλες · throughput</small></div>
+    <div class="node"><b>HTTP Transfer</b><small>16 στήλες</small></div>
+    <div class="node"><b>BROWSING_500KB</b><small>17 στήλες</small></div>
+    <div class="node"><b>Ping</b><small>19 στήλες</small></div>
+    <div class="node"><b>OOKLA</b><small>12 στήλες</small></div>
+    <div class="node"><b>Youtube</b><small>16 στήλες</small></div>
+    <div class="node"><b>DNS</b><small>15 στήλες</small></div>
+    <div class="node"><b>Interactivity</b><small>23 στήλες</small></div>
+    <div class="node"><b>BW</b><small>11 στήλες</small></div>
+    <div class="node"><b>NR DATA TECH</b><small>38 στήλες · 5G</small></div>
+    <div class="node"><b>NR_CAP_USAGE</b><small>19 στήλες · 5G points</small></div>
+    <div class="node"><b>Voice Technology</b><small>32 στήλες</small></div>
+    <div class="node"><b>Voice MOS Voice Codecs</b><small>35 στήλες</small></div>
+    <div class="node"><b>Scanner LTE / GSM / UMTS / NR</b><small>+ σχέση με Operator</small></div>
+    <div class="node"><b>Scanner5G Map 50Bin / 500Bin</b><small>bin centroids</small></div>
+    <div class="node"><b>BI_SCORES_TOTAL</b><small>26 στήλες · scores</small></div>
+    <div class="node"><b>BI_BEST_OP_SCORE</b><small>11 στήλες + Lat/Lon</small></div>
+    <div class="node"><b>Detailed_Devices_v2</b><small>1:1 ↔ αμφίδρομη</small></div>
+    <div class="node"><b>KMS_DATA_HOURS</b><small>1:1 ↔ αμφίδρομη</small></div>
+  </div>
+
+  <div class="note"><b>Δύο εξαιρέσεις στη φορά:</b> <code>Detailed_Devices_v2</code> και <code>KMS_DATA_HOURS</code> συνδέονται <b>1:1 με αμφίδρομο cross-filter</b>. Γι' αυτό ένα slicer συσκευής περιορίζει και τη διάσταση. Στο SQL αυτό είναι απλό <code>INNER JOIN</code> στη διάσταση όταν υπάρχει επιλογή συσκευής.</div>
+
+  <h3>Δευτερεύουσα διάσταση</h3>
+  <p><code>Operator (for scanner)</code> (μία στήλη, από Excel) → <code>*→1</code> με <code>Scanner LTE[Operator]</code>, <code>Scanner GSM[operator]</code>, <code>Scanner UMTS[Operator]</code>, <code>Scanner NR[Operator]</code>. Οι scanner πίνακες δεν έχουν <code>HomeOperator</code>, οπότε ο operator διαβάζεται από τη συχνότητα.</p>
+
+  <h3>Το μοτίβο «(groups)»</h3>
+  <p>Σε <b>κάθε</b> πίνακα γεγονότων υπάρχει calculated column <code>HomeOperator (groups)</code> με ταυτόσημο περιεχόμενο. Είναι η ενοποίηση Wind + NOVA:</p>
+<pre><code>SWITCH(TRUE,
+  ISBLANK([HomeOperator]),          "(Blank)",
+  [HomeOperator] IN {"Cosmote"},    "Cosmote",
+  [HomeOperator] IN {"NOVA","Wind"},"Nova",
+  [HomeOperator] IN {"Vodafone"},   "Vodafone",
+  [HomeOperator])</code></pre>
+  <p>Στη νέα βάση αυτό γίνεται <b>ένας πίνακας διάστασης</b> <code>dim_operator(raw_name, display_name)</code> και ένα join — όχι 14 αντίγραφα του ίδιου CASE.</p>
+
+  <h3>Ουσιαστικά groups &amp; bins που πρέπει να μεταφερθούν</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Πίνακας</th><th class="m">Στήλη</th><th>Λογική</th></tr></thead>
+    <tbody>
+      <tr><td>Capacity</td><td class="m">Calculated Throughput bins DL</td><td>Bad ≤256 · Poor 256–1000 · Fair 1000–2000 · Good 2000–10000 · Very good 10000–30000 · Excelent 30000–100000 · Superb &gt;100000 (kbps)</td></tr>
+      <tr><td>Capacity</td><td class="m">Calculated Throughput bins UL</td><td>Bad ≤128 · Poor 128–500 · Fair 500–1000 · Good 1000–5000 · Very good 5000–20000 · Excelent 20000–40000 · Superb &gt;40000</td></tr>
+      <tr><td>Capacity</td><td class="m">ca_active (groups)</td><td>1.LTE 5CA … 6.Non LTE — αριθμημένο πρόθεμα για σωστή σειρά</td></tr>
+      <tr><td>Capacity</td><td class="m">DataTechnology (groups)</td><td>1.LTE-5GNR · 2.LTE CA · 3.LTE/LTE CA · 4.LTE · 5.UMTS · 6.GSM · 7.Mixed</td></tr>
+      <tr><td>NR_CAP_USAGE</td><td class="m">RSRP_Bin</td><td>≥−85 Excellent · ≥−100 Good · ≥−110 Fair · ≥−125 Poor · &lt;−125 Bad</td></tr>
+      <tr><td>Scanner5G Map 50/500</td><td class="m">SS-RSRP_binning</td><td>A ≥−50 · B −50…−75 · C −75…−85 · D −85…−95 · E −95…−110 · F −110…−125 · G &lt;−125</td></tr>
+      <tr><td>Scanner5G Map 50/500</td><td class="m">AbsFreqSSB (groups)</td><td>630720/632064/634080 → COSMOTE N78 · 647328/649988 → NOVA N78 · 640608/643322 → VODAFONE N78</td></tr>
+      <tr><td>NR DATA TECH</td><td class="m">DL_NRARFCN (groups)</td><td>ARFCN → «&lt;Operator&gt; N1 / N28 / N78» (9 συνδυασμοί)</td></tr>
+      <tr><td>NR DATA TECH</td><td class="m">DataTechnologyReporting (groups)</td><td>1.5GNR-LTE · 2.LTE 5CCA · 3.LTE 4CCA · 4.LTE 3CCA · 5.LTE 2CCA · 6.LTE · 7.UMTS</td></tr>
+      <tr><td>MtoM_voice</td><td class="m">CallModeA</td><td>callmode «-» + LTE start → VoLTE· «-» + GSM/UMTS → CS· EPSFB → VoLTE</td></tr>
+      <tr><td>MtoF_voice</td><td class="m">Call Attempt Technology</td><td>testStartMode → GSM / LTE / UMTS</td></tr>
+      <tr><td>MtoF_voice</td><td class="m">ASideLocation (groups)</td><td>«… Free» → FREE · «… GSM» → GSM</td></tr>
+      <tr><td>MtoM_voice</td><td class="m">Cosmote VoLTE exclude(groups)</td><td>CT VoLTE Only vs CT VoLTE Exclude — ξεχωρίζει το δείγμα <code>Cosmote_VoLTE_A</code></td></tr>
+      <tr><td>BROWSING_500KB</td><td class="m">TransferStatus (groups)</td><td>«OK» → Success· 14 τιμές σφάλματος (DNS/HTTP/socket/timeout) → Fail</td></tr>
+      <tr><td>BROWSING_500KB</td><td class="m">TestName (groups)</td><td>14 sites: Alpha, Amazon, Car, Ebay, Google, Imdb, In.gr, Kepler, Microsoft, Skroutz, Yahoo, Youtube, Newton…</td></tr>
+      <tr><td>BROWSING_500KB</td><td class="m">TestName (groups) 2</td><td>Live / Static / Newton — δεύτερη ταξινόμηση των ίδιων tests</td></tr>
+      <tr><td>DNS</td><td class="m">Test Selection</td><td>24 ονόματα test → φιλική ονομασία (Capacity DL/UL, FTP, HTTPS &lt;site&gt;, Ookla, Ping 32/800…)</td></tr>
+      <tr><td>Interactivity</td><td class="m">GroupsPatternName</td><td>Constant low/medium/high/long (packet size / pps)</td></tr>
+      <tr><td>Scanner LTE</td><td class="m">EARFCN (groups)</td><td>1276–1844 → LTE1800 · 50–525 → LTE2100 · 2850–3350 → LTE2600 · 6200–6400 → LTE800</td></tr>
+      <tr><td>Όλοι</td><td class="m">Category_corr (groups)</td><td>Καθαρίζει το typo « MAKOR TOWNS» → MAJOR TOWNS</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4>Παλέτα SS-RSRP που πρέπει να αναπαραχθεί στους χάρτες</h4>
+  <div class="ramp">
+    <div style="background:var(--sig-exc)">A ≥ −50</div>
+    <div style="background:var(--sig-good)">B −50…−75</div>
+    <div style="background:var(--sig-fair)">C −75…−85</div>
+    <div style="background:var(--sig-poor)">D −85…−95</div>
+    <div style="background:var(--sig-bad)">E −95…−110</div>
+    <div style="background:#7A2E28">F −110…−125</div>
+    <div style="background:var(--muted)">G &lt; −125</div>
+  </div>
+</section>
+
+<!-- ══════════════ 04 ══════════════ -->
+<section id="measures" hidden>
+  <p class="kicker">04 · Measures</p>
+  <h2>Και τα 164, σε SQL</h2>
+  <p class="lede">Σχεδόν όλα είναι απλά ratio ή percentile πάνω σε έναν πίνακα. Δεν χρειάζεσαι μηχανή DAX — χρειάζεσαι σωστά GROUP BY και <code>PERCENTILE_CONT</code>.</p>
+
+  <h3>Voice — Mobile to Fixed <span class="pill">MtoF_voice</span></h3>
+  <div class="mgrid">
+    <div class="mcard"><header><b>CALL ATTEMPTS_MF / SUCCESSFUL / DROPPED / FAILED</b><em>counters</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>COUNT(MtoF_voice[callStatus])
+CALCULATE(COUNTROWS(..), callStatus="COMPLETED")
+CALCULATE(COUNTROWS(..), callStatus="DROPPED")
+CALCULATE(COUNTROWS(..), callStatus="FAILED")</code></pre></div>
+        <div><h5>SQL</h5><pre><code>COUNT(callStatus) AS attempts,
+COUNT(*) FILTER (WHERE callStatus='COMPLETED'),
+COUNT(*) FILTER (WHERE callStatus='DROPPED'),
+COUNT(*) FILTER (WHERE callStatus='FAILED')</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>Success Rate_MF(%) · AFR_MF(%) · DCR_MF(%)</b><em>ratios</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>DIVIDE([SUCCESSFUL],[CALL ATTEMPTS])
+DIVIDE([FAILED],[CALL ATTEMPTS])
+DIVIDE([DROPPED],[TOTTAL CALLS])
+-- TOTTAL = COMPLETED + DROPPED</code></pre></div>
+        <div><h5>SQL</h5><pre><code>succ::float/NULLIF(attempts,0)
+fail::float/NULLIF(attempts,0)
+drop::float/NULLIF(compl+drop,0)</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>P'90_CST_mtof · P'10_MOS_mtof · LowMosP</b><em>percentiles</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>PERCENTILE.INC(MO_CallSetupTime, 0.9)
+PERCENTILE.INC(MOSValue, 0.1)
+COUNT([lowMOs]) / COUNT([callStatus])</code></pre></div>
+        <div><h5>SQL</h5><pre><code>PERCENTILE_CONT(0.9) WITHIN GROUP
+  (ORDER BY MO_CallSetupTime)
+PERCENTILE_CONT(0.1) WITHIN GROUP
+  (ORDER BY MOSValue)
+COUNT(lowMOs)::float/COUNT(callStatus)</code></pre></div>
+      </div></div>
+  </div>
+
+  <h3>Voice — Mobile to Mobile <span class="pill">MtoM_voice</span></h3>
+  <div class="mgrid">
+    <div class="mcard"><header><b>CALL ATTEMPTS · SUCCESSCALLS · FAILEDCALLS · DROPPED CALLS · TOTAL CALLS</b><em>ίδιο μοτίβο, lower-case τιμές</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>callStatus = "COMPLETED" | "failed"
+          | "dropped"  | "Completed"</code></pre></div>
+        <div><h5>SQL</h5><pre><code>-- χρησιμοποίησε UPPER(callStatus)
+-- το DAX είναι case-insensitive,
+-- η Postgres δεν είναι.</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>Intra_Succ_Rate · Inter_Suc_rate</b><em>handover success</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>DIVIDE(SUM([sucIntraHO]),
+  CALCULATE(SUM([numIntraHo]),
+    NOT ISBLANK([sucIntraHO])))
+-- σχόλιο στο μοντέλο: "Intra HO are
+-- named wrongly so the measures are correct"</code></pre></div>
+        <div><h5>SQL</h5><pre><code>SUM(sucIntraHO)::float /
+NULLIF(SUM(CASE WHEN sucIntraHO IS NOT NULL
+           THEN numIntraHo END),0)</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>P'10_MOS · P'90 MOS · P'90_CST · P'90_CST_11000 · LowMosPMtM</b><em>percentiles</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>PERCENTILE.INC(MOSValue, 0.1 | 0.9)
+PERCENTILE.INC(MO_CallSetupTime, 0.9)
+PERCENTILE.INC(MO_CallSetupTime_11000, 0.9)
+COUNT([lowmosfree])/COUNT([callStatus])</code></pre></div>
+        <div><h5>SQL</h5><pre><code>PERCENTILE_CONT(p) WITHIN GROUP (ORDER BY …)
+-- _11000 = εναλλακτικό KPI id για CST</code></pre></div>
+      </div></div>
+  </div>
+
+  <h3>Data — Throughput &amp; transfers</h3>
+  <div class="tw"><table>
+    <thead><tr><th class="m">Measure</th><th>Πίνακας</th><th>Λογική</th><th>SQL</th></tr></thead>
+    <tbody>
+      <tr><td class="m">CapacityAttempts</td><td>Capacity</td><td>COUNT(TaskStatus)</td><td class="m">COUNT(TaskStatus)</td></tr>
+      <tr><td class="m">CapacitySuccessfulTests</td><td>Capacity</td><td>TaskStatus = 'Success'</td><td class="m">COUNT(*) FILTER (WHERE TaskStatus='Success')</td></tr>
+      <tr><td class="m">CapacitySuccessRate</td><td>Capacity</td><td>succ / attempts</td><td class="m">succ::float/NULLIF(att,0)</td></tr>
+      <tr><td class="m">AvgThrpDL_P'90 / P'10</td><td>Capacity</td><td>PERCENTILE.INC(AvgThrpDL, .9/.1) ÷ 1000</td><td class="m">PERCENTILE_CONT(.9) … /1000</td></tr>
+      <tr><td class="m">AvgThrpUL_P'90 / P'10</td><td>Capacity</td><td>ίδιο για AvgThrpUL</td><td class="m">PERCENTILE_CONT(.9) … /1000</td></tr>
+      <tr><td class="m">MaxAvgThrpDL / UL</td><td>Capacity</td><td>MAX ÷ 1000 → Mbps</td><td class="m">MAX(AvgThrpDL)/1000.0</td></tr>
+      <tr><td class="m">HTTP_attempts / _successful_Tests</td><td>HTTP Transfer</td><td>TaskStatus = 'SUCCESS'</td><td class="m">COUNT(*) FILTER (…)</td></tr>
+      <tr><td class="m">HTTPsuccessRate</td><td>HTTP Transfer</td><td>succ / attempts</td><td class="m">succ::float/NULLIF(att,0)</td></tr>
+      <tr><td class="m">Avg_ThrpDL_P'10 / P'90</td><td>HTTP Transfer</td><td>PERCENTILE.INC(AvgThrp) ÷ 1000</td><td class="m">PERCENTILE_CONT … /1000</td></tr>
+      <tr><td class="m">Transfer_timeDL/UL_P10' / P90'</td><td>HTTP Transfer</td><td>PERCENTILE.INC(Duration, .1/.9)</td><td class="m">PERCENTILE_CONT … ORDER BY Duration</td></tr>
+      <tr><td class="m">MaxAvgThrp</td><td>HTTP Transfer</td><td>MAX(AvgThrp) ÷ 1000</td><td class="m">MAX(AvgThrp)/1000.0</td></tr>
+      <tr><td class="m">browing attempts_500kb</td><td>BROWSING_500KB</td><td>COUNT(TransferStatus (groups))</td><td class="m">COUNT(transfer_status_grp)</td></tr>
+      <tr><td class="m">BrowsingSuccessfulTests_500</td><td>BROWSING_500KB</td><td>group = 'success'</td><td class="m">COUNT(*) FILTER (WHERE grp='Success')</td></tr>
+      <tr><td class="m">Success Rate_500</td><td>BROWSING_500KB</td><td>succ / attempts</td><td class="m">succ::float/NULLIF(att,0)</td></tr>
+      <tr><td class="m">5/10/15/20/25/30 BWcount</td><td>BW</td><td>COUNTROWS όπου TotalBwN = n</td><td class="m">COUNT(*) FILTER (WHERE TotalBwN=n)</td></tr>
+      <tr><td class="m">5/10/15/20/25/30 BWperc</td><td>BW</td><td>BWcount ÷ totalBWcount</td><td class="m">cnt::float/NULLIF(total,0)</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Data — Latency, DNS, video, interactivity</h3>
+  <div class="mgrid">
+    <div class="mcard"><header><b>Weighted Average RTT</b><em>Ping · και οι 3 παραλλαγές</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>DIVIDE(
+  SUMX(Ping, Ping[AvgRTT] * Ping[SuccessTests]),
+  SUM(Ping[SuccessTests]))
+
+-- LTE_5G:  [1.LTE-5GNR] × [1.Count_LTE_5GNR_Success]
+-- LTE:     [2.LTE]      × [2.Count_LTE_Success]</code></pre></div>
+        <div><h5>SQL</h5><pre><code>SUM(AvgRTT * SuccessTests)::float
+  / NULLIF(SUM(SuccessTests),0)</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>PingSuccessRate</b><em>Ping</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>DIVIDE(SUM([SuccessTests]),
+       SUM([TotalPingAttempts]))</code></pre></div>
+        <div><h5>SQL</h5><pre><code>SUM(SuccessTests)::float
+  / NULLIF(SUM(TotalPingAttempts),0)</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>Weighted Average DNS_TIME · SuccessFull_Tests · Failed_Tests</b><em>DNS</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>DIVIDE(SUMX(DNS,[Avg_DNS_TIME]*[SuccessDNSTests]),
+       SUM([SuccessDNSTests]))
+DIVIDE(SUM(Succ),SUM(Total))
+DIVIDE(SUM(Total)-SUM(Succ),SUM(Total))</code></pre></div>
+        <div><h5>SQL</h5><pre><code>SUM(Avg_DNS_TIME*SuccessDNSTests)::float
+  / NULLIF(SUM(SuccessDNSTests),0)
+SUM(SuccessDNSTests)::float/NULLIF(SUM(TotalDNSAttempts),0)
+1 - παραπάνω</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>YT_attempts · YT_SussessTests · YT_successRate · test (Freezing %)</b><em>Youtube</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>COUNT([State])
+CALCULATE(COUNTROWS(..), State="completed")
+DIVIDE(succ, att)
+AVERAGE(Youtube[FreezingTimePerc])   -- "test"</code></pre></div>
+        <div><h5>SQL</h5><pre><code>COUNT(State)
+COUNT(*) FILTER (WHERE State='completed')
+AVG(FreezingTimePerc)</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>Delta Freezing%</b><em>Youtube · time intelligence χωρίς ημερολόγιο</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>VAR cur = MAX('ALL INFO…'[ScopeRank])
+VAR prev = cur - 1
+RETURN [test]@cur - [test]@prev</code></pre></div>
+        <div><h5>SQL</h5><pre><code>-- window function πάνω σε ranked scope
+AVG(FreezingTimePerc) - LAG(AVG(...))
+  OVER (PARTITION BY operator ORDER BY scope_rank)</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>Weighted Avg INT RTT / Delay / PacketLostRate / Thrp_Kbps</b><em>Interactivity — 4 measures, ίδιο σχήμα</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>DIVIDE(SUMX(Interactivity, [X] * [Succ_Count]),
+       SUM([Succ_Count]))
+-- X ∈ AVGRTT, AVGDelay,
+--      AVGPacketsLostRate, AvgThroughputKbps</code></pre></div>
+        <div><h5>SQL</h5><pre><code>SUM(x * Succ_Count)::float
+  / NULLIF(SUM(Succ_Count),0)</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>Success_Rate_Interactivity</b><em>Interactivity</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>DIVIDE(SUM([Succ_Count]),
+       SUM([Succ_Count]) + SUM([Fail_Count]))</code></pre></div>
+        <div><h5>SQL</h5><pre><code>SUM(succ)::float / NULLIF(SUM(succ)+SUM(fail),0)</code></pre></div>
+      </div></div>
+  </div>
+
+  <h3>5G — NR usage &amp; scanner</h3>
+  <div class="mgrid">
+    <div class="mcard"><header><b>CM_N78 · VD_N78 · NV_N78 · CM_N1 · CM_N28 · VD_N1 · NV_N1</b><em>NR DATA TECH · διάρκεια ανά ζώνη</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>CALCULATE(SUM([Duration]),
+  [DL_NRARFCN (groups)] = "Cosmote N78")
+-- NV_* καλύπτει "Wind N78" || "Nova N78"</code></pre></div>
+        <div><h5>SQL</h5><pre><code>SUM(Duration) FILTER (
+  WHERE nrarfcn_grp = 'Cosmote N78')</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>Total_CM_NR · Total_VD_NR · Total_NV_NR</b><em>παρονομαστές — προσοχή, τρεις διαφορετικές στήλες</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>Total_CM_NR: ASideLocation = "Cosmote Data"
+Total_VD_NR: ASideLocation = "Vodafone Data"
+Total_NV_NR: [Home Operator1]  = "Nova"   ⚠</code></pre></div>
+        <div><h5>SQL</h5><pre><code>-- κανονικοποίησε και τα τρία
+SUM(Duration) FILTER (WHERE operator = :op)</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>CM/VD/NV_N78 Usage (%)</b><em>ποσοστό χρόνου σε N78</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>DIVIDE([CM_N78], [Total_CM_NR], 0)</code></pre></div>
+        <div><h5>SQL</h5><pre><code>dur_n78::float / NULLIF(dur_total,0)</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>CM_LTE · VD_LTE · NV_LTE</b><em>μη-5G χρόνος — τρία διαφορετικά κριτήρια ⚠</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>CM_LTE: DataTechnologyReporting(grp) &lt;&gt; "1.5GNR-LTE"
+VD_LTE: ISBLANK(DL_NRARFCN)
+NV_LTE: ISBLANK(DL_NRARFCN) &amp;&amp; ASideLocation in
+        {"Wind Data","Nova Data"}</code></pre></div>
+        <div><h5>SQL</h5><pre><code>-- διάλεξε ΕΝΑ κριτήριο για όλους:
+SUM(Duration) FILTER (WHERE dl_nrarfcn IS NULL)</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>Total_Binned_Samples · %_Samples_per_Bin</b><em>Scanner5G Map 50Bin / 500Bin</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>COUNTROWS('Scanner5G Map 50Bin')
+DIVIDE([Total], CALCULATE([Total],
+  REMOVEFILTERS([SS-RSRP_binning])))</code></pre></div>
+        <div><h5>SQL</h5><pre><code>COUNT(*) OVER (PARTITION BY … , bin)::float
+  / COUNT(*) OVER (PARTITION BY …)</code></pre></div>
+      </div></div>
+    <div class="mcard"><header><b>SSRSRP · %ssrsrp_usage</b><em>NR_CAP_USAGE / 500Bin</em></header>
+      <div class="mbody">
+        <div><h5>DAX</h5><pre><code>COUNTROWS(NR_CAP_USAGE)
+DIVIDE([Total_Binned_Samples_500],
+  CALCULATE(…, REMOVEFILTERS(bin)))</code></pre></div>
+        <div><h5>SQL</h5><pre><code>COUNT(*)  /  window count χωρίς το bin</code></pre></div>
+      </div></div>
+  </div>
+
+  <h3>Λοιπά</h3>
+  <div class="tw"><table>
+    <thead><tr><th class="m">Measure</th><th>Πίνακας</th><th>Ορισμός</th></tr></thead>
+    <tbody>
+      <tr><td class="m">Total_Hours_Minutes</td><td>KMS_DATA_HOURS</td><td><code>ROUNDDOWN(SUM(Minutes)/60,0) &amp; ":" &amp; MOD(SUM(Minutes),60)</code> — ώρες οδήγησης ως κείμενο</td></tr>
+      <tr><td class="m">Data_Transferred_GBs</td><td>KMS_DATA_HOURS</td><td>calc. column: <code>MBs × 0.0009765625</code> (÷1024)</td></tr>
+      <tr><td class="m">min_StartDate · StartWeek</td><td>MtoM_voice</td><td><code>MAX(StartDate)</code> (παρά το όνομα) και <code>WEEKNUM()</code> πάνω σε αυτό</td></tr>
+      <tr><td class="m">test · testVODA</td><td>Youtube / BI_SCORES_TOTAL</td><td>δοκιμαστικά — το <code>test</code> ωστόσο <b>χρησιμοποιείται</b> ως Freezing %</td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ══════════════ 05 ══════════════ -->
+<section id="scoring" hidden>
+  <p class="kicker">05 · Μηχανή βαθμολογίας</p>
+  <h2>Ο αλγόριθμος που παράγει τους βαθμούς</h2>
+  <p class="lede">Το πιο ενδιαφέρον και το πιο εύθραυστο κομμάτι. Οκτώ πίνακες παραμέτρων «what-if» τροφοδοτούν μια αλυσίδα σταθμίσεων που καταλήγει σε έναν αριθμό ανά operator.</p>
+
+  <h3>Είσοδοι</h3>
+  <p>Ο <code>BI_SCORES_TOTAL</code> έρχεται έτοιμος από τη βάση με ένα row ανά <b>operator × collection × category × scope</b> και περιέχει τα υπο-σκορ:</p>
+  <div class="tw"><table>
+    <thead><tr><th>Ομάδα</th><th class="m">Στήλες</th></tr></thead>
+    <tbody>
+      <tr><td>Voice</td><td class="m">VOICE_SCORE_GSM, SUB_SCORE_GSM, VOICE_SCORE_FREE, SUB_SCORE_FREE</td></tr>
+      <tr><td>Data</td><td class="m">SCORE_Browsing/SUB_SCORE_Browsing, SCORE_HTTP/SUB_SCORE_HTTP, SCORE_CAP/SUB_SCORE_CAP, SCORE_Ping/SUB_SCORE_Ping, SCORE_YT/SUB_SCORE_YT</td></tr>
+      <tr><td>Σύνολα</td><td class="m">TOTAL_VOICE, TOTAL_DATA, TOTAL_SCORE</td></tr>
+      <tr><td>Κλειδιά</td><td class="m">OPERATOR, GREATER AREA, COLLECTION NAME, CATEGORY, SCOPE, STR_ID</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4>Το <code>WEIGHT</code> ανά κατηγορία περιοχής (custom column στο Power Query)</h4>
+  <div class="tw"><table>
+    <thead><tr><th>CATEGORY</th><th class="num">WEIGHT</th></tr></thead>
+    <tbody>
+      <tr><td>MAJOR CITIES</td><td class="num">85</td></tr>
+      <tr><td>MOTORWAYS</td><td class="num">65</td></tr>
+      <tr><td>MAJOR TOWNS</td><td class="num">65</td></tr>
+      <tr><td>MAIN ROADS</td><td class="num">50</td></tr>
+      <tr><td>SUBURBS</td><td class="num">50</td></tr>
+      <tr><td>άλλο (π.χ. TOURISTIC AREAS)</td><td class="num">75</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Οι 8 παράμετροι</h3>
+  <p>Κάθε ένας είναι ένας πίνακας <code>GENERATESERIES(0, 100, 1)</code> με ένα slicer πάνω του και ένα measure <code>SELECTEDVALUE()</code>. Είναι δηλαδή <b>μεταβλητές UI, όχι δεδομένα</b>:</p>
+  <div class="tw"><table>
+    <thead><tr><th>Παράμετρος</th><th class="num">Βασικοί πόντοι</th><th>Ρόλος</th></tr></thead>
+    <tbody>
+      <tr><td class="m">Voice_scores_total</td><td class="num">—</td><td>Το ποσοστό του συνολικού βάρους που πηγαίνει στο Voice (0–100)</td></tr>
+      <tr><td class="m">Voice_Scores GSM</td><td class="num">150</td><td>Βάρος GSM εντός Voice</td></tr>
+      <tr><td class="m">Voice_scores FREE</td><td class="num">250</td><td>Βάρος Free (M→M) εντός Voice</td></tr>
+      <tr><td class="m">Capacity_Scores</td><td class="num">275</td><td>Βάρος throughput εντός Data</td></tr>
+      <tr><td class="m">HTTP_Scores</td><td class="num">100</td><td>Βάρος HTTP</td></tr>
+      <tr><td class="m">Browsing_scores</td><td class="num">100</td><td>Βάρος browsing</td></tr>
+      <tr><td class="m">Youtube_Scores</td><td class="num">100</td><td>Βάρος video</td></tr>
+      <tr><td class="m">Ping_scores</td><td class="num">25</td><td>Βάρος latency</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Η αλυσίδα</h3>
+  <ol class="pipe">
+    <li><b>Διαχωρισμός Voice / Data</b><span><code>voice_total_weight = Voice_scores_total</code> · <code>Data weight = 100 − voice_total_weight</code></span></li>
+    <li><b>Correction factors</b><span>Κανονικοποιούν ώστε τα βάρη να αθροίζουν στο επιθυμητό ποσοστό:<br>
+      <code>CF_DATA = 10 × Data weight ÷ (HTTP×100 + Cap×275 + Brw×100 + YT×100 + Ping×25)</code><br>
+      <code>CF_VOICE = 10 × voice_total_weight ÷ (GSM×150 + FREE×250)</code></span></li>
+    <li><b>Τελικά βάρη</b><span><code>ping weight = 25 × Ping_val × CF_DATA</code> · <code>HTTP Weight = 100 × …</code> · <code>Capacity Weight = 275 × …</code> · <code>Browsing weight = 100 × …</code> · <code>youtube weight = 100 × …</code> · <code>voice GSM weight = 150 × GSM_val × CF_VOICE</code> · <code>voice_scores Free weight = 250 × FREE_val × CF_VOICE</code></span></li>
+    <li><b>Grades ανά υπηρεσία</b><span><code>Grade X = Σ (SUB_SCORE_X × weight_X)</code> πάνω στα φιλτραρισμένα rows</span></li>
+    <li><b>Aggr points ανά row</b><span><code>Grade HTTP + Grade Capacity + Grade Browsing + Grade ping + Grade Youtube + Grade FREE + Grade GSM</code></span></li>
+    <li><b>Τελικό σκορ</b><span><code>Visuals Total Score = Σ(WEIGHT × aggr_points) ÷ Σ(WEIGHT)</code> — σταθμισμένος μέσος ανά κατηγορία περιοχής</span></li>
+    <li><b>Διαφορές</b><span>22 measures της μορφής <code>[X]@Cosmote − [X]@Vodafone</code> και <code>[X]@Cosmote − [X]@(Wind ∪ NOVA)</code></span></li>
+  </ol>
+
+  <h3>Όλο μαζί σε SQL</h3>
+<pre><code>WITH params AS (            -- έρχονται από το UI, όχι από πίνακα
+  SELECT 60::numeric AS voice_total, 40 AS gsm, 60 AS free,
+         50 AS cap, 50 AS http, 50 AS brw, 50 AS yt, 50 AS ping
+),
+cf AS (
+  SELECT *,
+    (100 - voice_total)                                   AS data_weight,
+    10.0 * (100 - voice_total)
+      / NULLIF(http*100 + cap*275 + brw*100 + yt*100 + ping*25, 0) AS cf_data,
+    10.0 * voice_total
+      / NULLIF(gsm*150 + free*250, 0)                     AS cf_voice
+  FROM params
+),
+w AS (
+  SELECT
+    ping*25  * cf_data  AS w_ping,   http*100 * cf_data AS w_http,
+    cap*275  * cf_data  AS w_cap,    brw*100  * cf_data AS w_brw,
+    yt*100   * cf_data  AS w_yt,
+    gsm*150  * cf_voice AS w_gsm,    free*250 * cf_voice AS w_free
+  FROM cf
+),
+rows AS (
+  SELECT s.operator, s.weight,
+         s.sub_score_http*w.w_http + s.sub_score_cap*w.w_cap
+       + s.sub_score_browsing*w.w_brw + s.sub_score_ping*w.w_ping
+       + s.sub_score_yt*w.w_yt + s.sub_score_free*w.w_free
+       + s.sub_score_gsm*w.w_gsm                          AS aggr_points
+  FROM bi_scores_total s CROSS JOIN w
+  WHERE s.str_id = ANY(:selected_str_ids)
+)
+SELECT operator,
+       SUM(weight * aggr_points) / NULLIF(SUM(weight),0)  AS total_score
+FROM rows GROUP BY operator;</code></pre>
+
+  <div class="note"><b>Καλά νέα για τη μεταφορά:</b> η αλυσίδα είναι καθαρά αριθμητική και τα <code>SUB_SCORE_*</code> είναι ήδη υπολογισμένα στη βάση. Μπορείς να στείλεις μόνο τα rows στο frontend και να ξαναϋπολογίζεις το σκορ <b>τοπικά</b> καθώς ο χρήστης σέρνει τα sliders — χωρίς round-trip.</div>
+  <div class="note warn"><b>Ένα σφάλμα προς διόρθωση:</b> το <code>Voice weight GSM = 100 − Voice_scores FREE Value</code> δηλώνει ότι GSM και FREE είναι συμπληρωματικά, αλλά κανένα measure δεν το χρησιμοποιεί — τα δύο sliders είναι ανεξάρτητα. Αν θέλεις τη συμπληρωματικότητα, επίβαλέ την στο UI.</div>
+</section>
+
+<!-- ══════════════ 06 ══════════════ -->
+<section id="pages" hidden>
+  <p class="kicker">06 · Σελίδες</p>
+  <h2>Οι 36 σελίδες και τι δείχνουν</h2>
+  <p class="lede">Καμβάς 1280×720 παντού. Οι 303 από τους 837 visuals είναι slicers — το ίδιο σετ έξι φίλτρων επαναλαμβάνεται σε κάθε σελίδα και είναι συγχρονισμένο.</p>
+
+  <div class="note"><b>Το κοινό header κάθε σελίδας:</b> <code>GreaterArea</code> · <code>CollectionName</code> · <code>Category</code> · <code>Scope</code> · <code>StartDate</code> · <code>Collection Group</code> — όλα από τον <code>ALL INFO SYNCED FILTERS</code>. Συν ένα slicer συσκευής (<code>Gsm_Device</code> / <code>Free_Device</code> / <code>Data_Device</code>) ανάλογα με τον άξονα. Στη νέα εφαρμογή αυτό είναι <b>ένα global filter store</b>, όχι 300 components.</div>
+
+  <div class="tw"><table>
+    <thead><tr><th class="num">#</th><th>Σελίδα</th><th class="num">Vis</th><th>Τύποι</th><th>Βασικά πεδία</th></tr></thead>
+    <tbody>
+      <tr><td class="num">01</td><td><b>GREECE MAP</b></td><td class="num">18</td><td>azureMap, pivotTable, pieChart, 5 cards, 3 chiclet slicers</td><td class="m">BI_BEST_OP_SCORE[Lat/Lon/BEST_OPERATOR], TOTAL_SCORE, KMS/ώρες/GB</td></tr>
+      <tr><td class="num">02</td><td><b>GRADES</b></td><td class="num">40</td><td>3 gauges, 4 multiRowCards, 2 treemaps, 2 column charts, 14 slicers</td><td class="m">Visuals Total Score, Visual voice/Data Score, Diff from Vodafone/Wind, οι 8 παράμετροι</td></tr>
+      <tr><td class="num">03</td><td><b>VOICE M→F</b></td><td class="num">70</td><td>30 cards, funnel, azureMap, 100% stacked bar</td><td class="m">CALL ATTEMPTS_MF, Success/DCR/AFR_MF, MOSValue, MO_CallSetupTime, callStatus</td></tr>
+      <tr><td class="num">04</td><td><b>VOICE M→M</b></td><td class="num">82</td><td>36 cards, 2 bar charts, funnel, azureMap</td><td class="m">Success Rate (%), DCR/AFR, CallModeA, Intra/Inter_Succ_Rate, SRVCC duration</td></tr>
+      <tr><td class="num">05</td><td><b>RADIO TECH-VOICE CODECS</b></td><td class="num">22</td><td>5× 100% stacked bar</td><td class="m">Voice Technology[GSM/UMTS/LTE B*_Samples], Voice MOS Codecs[EVS/AMR_WB/AMR]</td></tr>
+      <tr><td class="num">06</td><td><b>DATA-BROWSING</b></td><td class="num">20</td><td>2 column, 2 bar, 2 donut</td><td class="m">Success Rate_500, TransferDuration, TimetoFirstByte, TimetoFirst500b</td></tr>
+      <tr><td class="num">07</td><td><b>DNS</b></td><td class="num">15</td><td>3 column, 1 stacked bar</td><td class="m">Weighted Average DNS_TIME, Min/Max_DNS_TIME, Success/Failed_Tests</td></tr>
+      <tr><td class="num">08</td><td><b>DATA-HTTP</b></td><td class="num">46</td><td>18 cards, 4 column, 2 donut</td><td class="m">AvgThrp, Duration, HTTPsuccessRate, MaxAvgThrp · φιλτραρισμένο σε Direction</td></tr>
+      <tr><td class="num">09</td><td><b>DATA-PING/OOKLA</b></td><td class="num">23</td><td>3 funnels, 2 clustered column, 2 bar, 2 donut</td><td class="m">Weighted Average RTT (+LTE / LTE-5G), PingSuccessRate, OOKLA Throughput/Latency</td></tr>
+      <tr><td class="num">10</td><td><b>DATA-INTERACTIVITY</b></td><td class="num">19</td><td>4 column, 1 donut</td><td class="m">Weighted Avg INT RTT/Delay/PacketLostRate/Thrp, QoEScore, Success_Rate</td></tr>
+      <tr><td class="num">11</td><td><b>DATA-CAPACITY</b></td><td class="num">47</td><td>18 cards, 2 donut, 2 stacked bar, 2 column</td><td class="m">CapacitySuccessRate, AvgThrpDL/UL, MaxAvgThrpDL/UL, ca_active (groups)</td></tr>
+      <tr><td class="num">12</td><td><b>DATA-VIDEO</b></td><td class="num">18</td><td>3 gauges, pie, donut, bar, column</td><td class="m">YT_successRate, test (Freezing%), Vmos, TimeToFirstPicturePlayer, AVGres</td></tr>
+      <tr><td class="num">13</td><td><b>DATA-MAP</b></td><td class="num">29</td><td>azureMap, pivotTable, 2 column, stacked bar</td><td class="m">Capacity[TestEndLat/Long], AvgThrpDL, Calculated Throughput bins DL, testAvgRSRP/SINR</td></tr>
+      <tr><td class="num">14</td><td><b>DATA-BANDWIDTH</b></td><td class="num">16</td><td>3 pie, 2 scatter, 1 column</td><td class="m">BW[TotalBwN/TotalThp], Capacity[AvgThrpDL vs testAvgSINR]</td></tr>
+      <tr><td class="num">15</td><td><b>DATA-MAP NR</b></td><td class="num">16</td><td>azureMap, 3 pivotTables</td><td class="m">NR_CAP_USAGE[lat/lon/RSRP_Bin/ThroughputDL/UL/NR_SINR]</td></tr>
+      <tr><td class="num">16</td><td><b>NR DATA TECH</b></td><td class="num">17</td><td>6 pie, 1 stacked bar</td><td class="m">CM/VD/NV × N78/N1/N28/LTE, Duration</td></tr>
+      <tr><td class="num">17</td><td><b>NR DATA TECH/CA/BW</b></td><td class="num">13</td><td>2 stacked bar, 1 column</td><td class="m">NR Usage BandList (groups), NR Usage BW MHz, Duration</td></tr>
+      <tr><td class="num">18</td><td><b>NR SCANNER MAP 50m</b></td><td class="num">21</td><td>3 azureMaps, 3 pivotTables</td><td class="m">Scanner5G Map 50Bin[BinCenterLat/Long, SS-RSRP_binning, %_Samples_per_Bin]</td></tr>
+      <tr><td class="num">19</td><td><b>NR SCANNER MAP 500m</b></td><td class="num">21</td><td>3 azureMaps, 3 pivotTables</td><td class="m">…500Bin — ίδιο σχήμα σε πλέγμα 500 m</td></tr>
+      <tr><td class="num">20</td><td><b>SCANNER 4G-5G</b></td><td class="num">16</td><td>4× 100% stacked column</td><td class="m">Scanner LTE/NR[No coverage/Poor/Fair/Good/Excelent × RSRP &amp; SINR]</td></tr>
+      <tr><td class="num">21</td><td><b>MAP BOOKMARK M→F</b> <span class="pill hidden">κρυφή</span></td><td class="num">13</td><td>azureMap + tableEx (drill-through)</td><td class="m">MtoF_voice: lat/long, cell IDs, BCCH, RxLev, RxQual</td></tr>
+      <tr><td class="num">22</td><td><b>MAP BOOKMARK M→M</b> <span class="pill hidden">κρυφή</span></td><td class="num">10</td><td>azureMap + tableEx</td><td class="m">MtoM_voice: lat/long, PCI, EARFCN, RSRP, SINR, RSCP, EcNo</td></tr>
+      <tr><td class="num">23</td><td><b>DATA-MAP-UL</b> <span class="pill hidden">κρυφή</span></td><td class="num">28</td><td>azureMap, pivotTable, 2 column</td><td class="m">όπως η DATA-MAP αλλά με <code>AvgThrpUL</code> και bins UL</td></tr>
+      <tr><td class="num">24</td><td><b>Comparison Voice GSM</b></td><td class="num">15</td><td>5 line charts</td><td class="m">Success/DCR/AFR_MF, MOSValue, CST — άξονας X: <code>MtoF_voice[Scope]</code></td></tr>
+      <tr><td class="num">25</td><td><b>Monthly Comparison Voice GSM</b></td><td class="num">12</td><td>3 line charts</td><td class="m">ίδια KPIs, άξονας X: ημερολογιακή ιεραρχία</td></tr>
+      <tr><td class="num">26</td><td><b>Comparison Voice Free</b></td><td class="num">11</td><td>3 line charts</td><td class="m">DCR(%), Success Rate (%), AFR(%) ανά Scope</td></tr>
+      <tr><td class="num">27</td><td><b>Comparison Voice Free (MOS)</b></td><td class="num">11</td><td>2 line charts</td><td class="m">AVG(MOSValue) ανά Scope</td></tr>
+      <tr><td class="num">28</td><td><b>Comparison Voice Free (CST)</b></td><td class="num">12</td><td>4 line charts</td><td class="m">MO_CallSetupTime &amp; _11000 ανά Scope</td></tr>
+      <tr><td class="num">29</td><td><b>Monthly Comparison Voice FREE</b></td><td class="num">12</td><td>3 line charts</td><td class="m">Success Rate, MOS, CST ανά μήνα</td></tr>
+      <tr><td class="num">30</td><td><b>Comparison Data</b></td><td class="num">16</td><td>6 line charts</td><td class="m">AvgThrpDL/UL, OOKLA Throughput, RTT, Vmos ανά Scope</td></tr>
+      <tr><td class="num">31</td><td><b>Comparison Data 2</b></td><td class="num">14</td><td>6 line charts</td><td class="m">Success Rate_500, TransferDuration, HTTP Duration, N78 Usage % × 3 operators</td></tr>
+      <tr><td class="num">32</td><td><b>Monthly Comparison Data</b></td><td class="num">16</td><td>6 line charts</td><td class="m">τα ίδια ανά μήνα</td></tr>
+      <tr><td class="num">33</td><td><b>Comparison Voice GRADES</b></td><td class="num">23</td><td>3 line, 2 treemaps, multiRowCard, 13 slicers</td><td class="m">Visual voice score, Visual Grade Free/GSM ανά SCOPE</td></tr>
+      <tr><td class="num">34</td><td><b>Comparison Voice GRADES Difference</b></td><td class="num">23</td><td>3 clustered column</td><td class="m">Diff Voice/FREE/GSM Grade × Voda &amp; NOVA</td></tr>
+      <tr><td class="num">35</td><td><b>Comparison Data GRADES</b></td><td class="num">26</td><td>6 line charts</td><td class="m">Visual Data Score, yt/HTTP/Browsing/ping/capacity score</td></tr>
+      <tr><td class="num">36</td><td><b>Comparison Data GRADES Difference</b></td><td class="num">26</td><td>6 clustered column</td><td class="m">Diff Data/HTTP/YT/Ping/Browsing/CAP Grade × Voda &amp; NOVA</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Κατανομή τύπων visual</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Τύπος</th><th class="num">Πλήθος</th><th>Αντιστοιχία σε web</th></tr></thead>
+    <tbody>
+      <tr><td class="m">slicer</td><td class="num">303</td><td>Ένα global filter panel· multi-select combobox + date range</td></tr>
+      <tr><td class="m">card / multiRowCard</td><td class="num">121</td><td>KPI tiles — απλά <code>div</code></td></tr>
+      <tr><td class="m">image / textbox / shape</td><td class="num">203</td><td>Στατικό chrome — δεν μεταφέρεται· γίνεται layout</td></tr>
+      <tr><td class="m">lineChart</td><td class="num">47</td><td>ECharts line / visx</td></tr>
+      <tr><td class="m">clustered &amp; plain columnChart</td><td class="num">40</td><td>grouped bar</td></tr>
+      <tr><td class="m">100% stacked bar / column</td><td class="num">19</td><td>normalized stacked bar</td></tr>
+      <tr><td class="m">azureMap</td><td class="num">14</td><td>MapLibre GL + deck.gl ScatterplotLayer / GridLayer</td></tr>
+      <tr><td class="m">pivotTable / tableEx</td><td class="num">14</td><td>AG Grid ή TanStack Table με pivot</td></tr>
+      <tr><td class="m">pie / donut / treemap / funnel / gauge</td><td class="num">42</td><td>ECharts — όλα υποστηρίζονται native</td></tr>
+      <tr><td class="m">scatterChart</td><td class="num">2</td><td>scatter με regression (SINR vs throughput)</td></tr>
+      <tr><td class="m">custom visuals</td><td class="num">14 πακέτα</td><td>ChicletSlicer, GlobeMap, LinearGauge, Timeline, choropleth, drilldownCartogram, kpiTicker, barchartrace, Visio — <b>μόνο ο ChicletSlicer χρησιμοποιείται ενεργά (3×)</b></td></tr>
+    </tbody>
+  </table></div>
+</section>
+
+<!-- ══════════════ 07 ══════════════ -->
+<section id="stack" hidden>
+  <p class="kicker">07 · Full-stack πλάνο</p>
+  <h2>Πώς το ξαναχτίζεις καλύτερα</h2>
+  <p class="lede">Η λογική μεταφέρεται από το DAX στη βάση. Το frontend γίνεται λεπτό: ένα filter store, ένα query layer, μια βιβλιοθήκη charts.</p>
+
+  <h3>Επίπεδα</h3>
+  <ol class="pipe">
+    <li><b>Αποθήκευση — SQL Server ή Postgres</b><span>Κράτα τους πίνακες <code>BI_*</code> ως έχουν. Πρόσθεσε: <code>dim_collection</code> (η αντικατάσταση του ALL INFO SYNCED FILTERS, ως UNION όλων των fact tables), <code>dim_operator</code>, <code>dim_category_weight</code>, και τα 4 Excel ως κανονικούς πίνακες. Ένα <code>collection_id INT</code> surrogate key αντί για το string <code>STR_ID</code> κάνει τα joins πολλαπλάσια πιο γρήγορα.</span></li>
+    <li><b>Προϋπολογισμένα aggregates</b><span>Κάθε σελίδα ζητά ουσιαστικά «KPI × operator × collection × scope». Φτιάξε ένα materialized view ανά άξονα (<code>mv_voice_kpi</code>, <code>mv_data_kpi</code>, <code>mv_scanner_kpi</code>) με τα counters και τα percentiles ήδη υπολογισμένα ανά <code>collection_id × operator</code>. Το 90% των 837 visuals σερβίρεται από αυτά χωρίς να αγγίξεις τα raw rows.</span></li>
+    <li><b>API — FastAPI</b><span>Λίγα, γενικά endpoints αντί για ένα ανά chart:<br>
+      <code>GET /api/dimensions</code> → τιμές για τα slicers<br>
+      <code>POST /api/kpi</code> → <code>{axis, metrics[], groupBy[], filters{}}</code> → rows<br>
+      <code>POST /api/scores</code> → τα <code>SUB_SCORE_*</code> + WEIGHT· η στάθμιση γίνεται client-side<br>
+      <code>POST /api/geo</code> → GeoJSON ή Arrow για τους χάρτες<br>
+      <code>GET /api/drill</code> → raw rows για τα δύο drill-through tables</span></li>
+    <li><b>Μεταφορά μεγάλου όγκου</b><span>Οι χάρτες στέλνουν δεκάδες χιλιάδες σημεία. Χρησιμοποίησε <b>Apache Arrow</b> ή Parquet αντί για JSON — <code>pyarrow</code> στο FastAPI, <code>apache-arrow</code> στο React. Για τα binned scanner data (50 m/500 m) στείλε ήδη aggregated bins, ποτέ raw samples.</span></li>
+    <li><b>Κατάσταση φίλτρων — το κρίσιμο</b><span>Ένα <code>zustand</code> (ή Redux) store με το σχήμα των slicers: <code>{greaterArea[], collection[], category[], scope[], dateRange, device, operators[]}</code>. Κάθε chart είναι selector πάνω σε αυτό. Αυτό αντικαθιστά ολόκληρο τον μηχανισμό sync slicers του Power BI.</span></li>
+    <li><b>Charts — ECharts</b><span>Καλύπτει line, bar, stacked, pie, donut, treemap, funnel, gauge, scatter — δηλαδή όλα εκτός των χαρτών, με ένα configuration API. Εναλλακτικά visx αν θέλεις πλήρη έλεγχο.</span></li>
+    <li><b>Χάρτες — MapLibre GL + deck.gl</b><span><code>ScatterplotLayer</code> για τα drive-test points (χρωματισμός από το throughput bin), <code>GridCellLayer</code>/<code>H3HexagonLayer</code> για τα 50 m &amp; 500 m scanner bins, <code>IconLayer</code> για το best-operator map. Δωρεάν αντικαταστάτης του Azure Maps, με καλύτερη απόδοση σε &gt;100k σημεία.</span></li>
+    <li><b>Πίνακες — AG Grid ή TanStack Table</b><span>Για τα 12 pivotTables και τα 2 drill-through tables. Το AG Grid Enterprise κάνει pivot native· το TanStack θέλει να στείλεις ήδη pivoted rows από το API.</span></li>
+  </ol>
+
+  <h3>Παράδειγμα endpoint</h3>
+<pre><code># FastAPI — ένα endpoint καλύπτει δεκάδες charts
+class KpiRequest(BaseModel):
+    axis: Literal["voice_mtof","voice_mtom","capacity","http",
+                  "browsing","ping","dns","youtube","interactivity","nr"]
+    metrics: list[str]                 # ["success_rate","p90_cst"]
+    group_by: list[str] = ["operator"] # + "scope" | "category" | "collection"
+    filters: FilterState
+
+@router.post("/api/kpi")
+def kpi(req: KpiRequest, db = Depends(get_db)):
+    sql = build_kpi_sql(req)           # whitelist metric → SQL fragment
+    return db.execute(sql, req.filters.as_params()).mappings().all()</code></pre>
+
+  <div class="note"><b>Μην χτίσεις γενικό DAX engine.</b> Ένα λεξικό <code>{metric_name: sql_fragment}</code> με whitelist καλύπτει και τα 164 measures και είναι ασφαλές έναντι injection. Το ξαναχρησιμοποιείς σε κάθε endpoint.</div>
+
+  <h3>Τι κερδίζεις</h3>
+  <div class="two">
+    <div>
+      <h4>Απόδοση</h4>
+      <ul>
+        <li>280 MB μοντέλου → μηδέν· τα δεδομένα μένουν στη βάση</li>
+        <li>Το refresh γίνεται incremental, όχι πλήρες</li>
+        <li>Οι χάρτες με deck.gl αντέχουν 10× περισσότερα σημεία από τον azureMap</li>
+      </ul>
+    </div>
+    <div>
+      <h4>Συντηρησιμότητα</h4>
+      <ul>
+        <li>Ένα <code>HomeOperator</code> mapping αντί για 14 αντίγραφα</li>
+        <li>Ένα filter component αντί για 303 slicers</li>
+        <li>Οι μετρικές σε version control, με tests</li>
+        <li>Νέο scope = νέα γραμμή, όχι νέο .pbix</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>Σειρά υλοποίησης</h3>
+  <ol>
+    <li><b>Διάσταση + filter store.</b> Χωρίς αυτά τίποτα δεν συγχρονίζεται. Ξεκίνα από το <code>dim_collection</code> και το global filter panel.</li>
+    <li><b>Ένας άξονας από άκρη σε άκρη</b> — προτείνω το Capacity: έχει throughput, success rate, bins, χάρτη και είναι ο πιο βαρύς. Αν δουλέψει αυτός, δουλεύουν όλοι.</li>
+    <li><b>Η σελίδα GRADES.</b> Είναι το προϊόν του report· μόλις παίξουν τα sliders και το σκορ, έχεις παραδώσει την αξία.</li>
+    <li><b>Οι υπόλοιποι άξονες</b> — μηχανική επανάληψη πάνω στο ίδιο pattern.</li>
+    <li><b>Οι χάρτες τελευταίοι</b> — είναι το πιο εντυπωσιακό αλλά και το λιγότερο κρίσιμο κομμάτι.</li>
+  </ol>
+</section>
+
+<!-- ══════════════ 08 ══════════════ -->
+<section id="traps" hidden>
+  <p class="kicker">08 · Παγίδες</p>
+  <h2>Τι να μη μεταφέρεις</h2>
+  <p class="lede">Το αρχείο έχει δώδεκα χρόνια ιστορίας πάνω του. Αυτά είναι όσα εντόπισα και δεν αξίζει να ταξιδέψουν στη νέα υλοποίηση.</p>
+
+  <div class="note"><b>Ενημέρωση 5 Σεπ 2026:</b> τα σημεία με την ένδειξη <span class="pill xls">διορθώθηκε</span> έχουν ήδη επιδιορθωθεί στο ζωντανό μοντέλο — δες την ενότητα 09.</div>
+
+  <h3>Κρίσιμα</h3>
+  <div class="note bad"><b>Δύο auto-groups που έστελναν το 44% των δεδομένων στο «Other».</b> <span class="pill xls">διορθώθηκε</span> Τα <code>Capacity[AvgThrpDL (BINS)]</code> (706.875 χαρακτήρες DAX) και <code>Capacity[AvgThrpUL (groups)]</code> (713.961) απαριθμούσαν <b>κάθε ξεχωριστή τιμή float</b> του throughput. Επειδή παρήχθησαν από παλιό στιγμιότυπο, κάθε νεότερη μέτρηση έπεφτε στο <code>"Other"</code>: <b>324.566 από τις 360.951 μη-κενές γραμμές DL</b> και 324.761 από τις 361.915 UL. Τα τρία visuals που τα χρησιμοποιούν (DATA-MAP, DATA-MAP-UL, DATA-MAP NR) έδειχναν σχεδόν όλη την κατανομή ως μία μπάρα «Other».</div>
+
+  <div class="note"><b>Τα υπόλοιπα groups είναι υγιή.</b> Έλεγξα τα άλλα δεκαπέντε: <code>AbsFreqSSB (groups)</code> 1,6% σε «Other» (άλλοι φορείς — αναμενόμενο), <code>DL_NRARFCN (groups)</code> 476 γραμμές στις 4,9 εκατ., <code>DataTechnology (groups)</code> και <code>ca_active (groups)</code> μηδέν αταξινόμητα. Μόνο το <code>CollectionName (groups)</code> είναι επίσης μπαγιάτικο (572.867 γραμμές fall-through) αλλά δεν χρησιμοποιείται πουθενά.</div>
+
+  <div class="note bad"><b>Ορφανές αναφορές σε visuals.</b> Δεκατέσσερα visuals δείχνουν σε πίνακες που <b>δεν υπάρχουν πια στο μοντέλο</b> — εμφανίζονται ως <code>?</code> στην ανάλυση τύπων: <code>MEASUREMENT_INFO</code>, <code>SCOPES VOICE TOTAL</code>, <code>SCOPES DATA TRANSFER</code>, <code>SCOPES ping</code>, <code>SCOPES BROWSING</code>, <code>SCOPES YT</code>, <code>FTP Transfer</code>, <code>Browsing</code>, <code>BI_SCORES</code>, <code>DATA_TECHNOLOGY</code>, <code>BW_MAP</code>, <code>CALL_SESSIONS</code>, <code>BI_FIRST_OP_SCORE</code>. Είναι σπασμένα από παλιότερες εκδόσεις — μην τα αναπαράγεις χωρίς να ρωτήσεις τι έδειχναν.</div>
+
+  <div class="note bad"><b>Ένα measure ήταν σπασμένο.</b> <span class="pill xls">διορθώθηκε</span> Το <code>Delta Freezing%</code> αναφερόταν στη στήλη <code>'ALL INFO SYNCED FILTERS'[ScopeRank]</code>, που <b>δεν υπήρχε στο μοντέλο</b>. Οποιοδήποτε visual το χρησιμοποιούσε θα έριχνε <code>Column 'ScopeRank' cannot be found</code>. Ήταν αχρησιμοποίητο, οπότε το σφάλμα ήταν σιωπηλό.</div>
+
+  <div class="note warn"><b>Η διάσταση χτίζεται μόνο από το Capacity.</b> Ήδη σημειωμένο στην ενότητα ETL, αλλά αξίζει επανάληψη: collections που δεν έχουν capacity tests γίνονται αόρατα σε όλο το report.</div>
+
+  <h4>34 ορφανά κλειδιά — τι πραγματικά λείπει</h4>
+  <p>Μέτρησα τα <code>STR_ID</code> κάθε πίνακα που δεν βρίσκουν αντιστοιχία στη διάσταση. Οι γραμμές τους προσαρτώνται στο κενό μέλος και δεν φιλτράρονται από κανέναν slicer:</p>
+  <div class="tw"><table>
+    <thead><tr><th>Ορφανό κλειδί</th><th>Πού εμφανίζεται</th><th>Αιτία</th></tr></thead>
+    <tbody>
+      <tr><td class="m">IPI_IGOUMENITSA-SYVOTA-PARGA_MAIN ROADS_2025H2</td><td>Scanner NR, Scanner5G Map 50Bin &amp; 500Bin</td><td><b>Τρέχον δεδομένο.</b> Οι 5G scanner χάρτες αυτής της διαδρομής δεν εμφανίζονται πουθενά.</td></tr>
+      <tr><td class="m">PEL_PATRA_MAJOR CITIES_2020H1</td><td>BI_SCORES_TOTAL, BI_BEST_OP_SCORE, MtoF, MtoM, Voice Technology, Voice MOS Codecs</td><td>Ιστορικό scope χωρίς capacity δεδομένα</td></tr>
+      <tr><td class="m">CMA_THESSALONIKH-KILKIS_MAIN ROADS_2019H2</td><td>BI_SCORES_TOTAL, BI_BEST_OP_SCORE, Voice Technology, Detailed_Devices_v2</td><td>Ιστορικό scope</td></tr>
+      <tr><td class="m">PEL_PYRGOS-TRIPOLI_TOURISTIC AREAS_2021H1 / _2022H1</td><td>BI_SCORES_TOTAL, BI_BEST_OP_SCORE</td><td>Ιστορικά scopes</td></tr>
+      <tr><td class="m">CMA_POLYGYROS_MAJOR TOWNS_2023H1<br>CMA_THERMI-POLYGYROS_TOURISTIC AREAS_2023H1</td><td>Scanner GSM, Scanner UMTS, BW</td><td>Scanner-only διαδρομές</td></tr>
+      <tr><td class="m">bg-gr_scanner__2019H2 · gr-bg_scanner__2019H2</td><td>Scanner GSM, LTE, NR</td><td>Διπλή κάτω παύλα → κενή κατηγορία</td></tr>
+      <tr><td class="m">CRE_AGIOS NIKOLAOS_ MAJOR TOWNS_2019H2</td><td>Scanner GSM, LTE, UMTS</td><td>Κενό διάστημα πριν το «MAJOR»</td></tr>
+      <tr><td class="m">SAL_THESSALONIKI_2024H1_</td><td>NR_CAP_USAGE</td><td>Μόνο 3 μέρη + κενό τέταρτο</td></tr>
+      <tr><td class="m">ROA_WEST_ROA_SUBURBS</td><td>Scanner NR</td><td>Λάθος δομή — το scope είναι «SUBURBS»</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Σφάλματα λογικής</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Στοιχείο</th><th>Πρόβλημα</th></tr></thead>
+    <tbody>
+      <tr><td class="m">Transfer_timeDL_P10' / Transfer_timeUL_P10' <span class="pill xls">διορθώθηκε</span></td><td>Ταυτόσημα — και τα δύο <code>PERCENTILE.INC(Duration, 0.1)</code>. Ίδιο και για τα P90'. Ο διαχωρισμός DL/UL γινόταν μόνο με φίλτρο <code>Direction</code> στο visual, όχι στο measure.</td></tr>
+      <tr><td class="m">Avg_ThrpUL_P'10 / P'90 <span class="pill xls">διορθώθηκε</span></td><td>Χρησιμοποιούσαν <code>AvgThrp</code> χωρίς φίλτρο, δηλαδή έδιναν το ίδιο νούμερο με τα DL. Μετά τη διόρθωση: DL P90 = 148,14 Mbps, UL P90 = 38,89 Mbps.</td></tr>
+      <tr><td class="m">min_StartDate <span class="pill xls">διορθώθηκε</span></td><td>Υπολόγιζε <code>MAX(StartDate)</code>. Το <code>StartWeek</code> που το χρησιμοποιεί επέστρεφε την <b>τελευταία</b> εβδομάδα.</td></tr>
+      <tr><td class="m">CM_LTE / VD_LTE / NV_LTE <span class="pill xls">διορθώθηκε</span></td><td>Τρία διαφορετικά κριτήρια για το ίδιο πράγμα. Το Cosmote χρησιμοποιούσε <code>DataTechnologyReporting</code> και έβγαινε <b>+4,2%</b> έναντι του κοινού κριτηρίου <code>ISBLANK(DL_NRARFCN)</code> που είχαν οι άλλοι δύο.</td></tr>
+      <tr><td class="m">Total_NV_NR</td><td>Φιλτράρει σε <code>Home Operator1</code> ενώ τα CM/VD σε <code>ASideLocation</code> — αλλά το <code>Home Operator1</code> παράγεται ακριβώς από το <code>ASideLocation</code>, άρα είναι ισοδύναμα. Δεν είναι σφάλμα.</td></tr>
+      <tr><td class="m">NV_LTE <span class="pill xls">διορθώθηκε</span></td><td>Είχε άγκιστρα <code>{…}</code> γύρω από έκφραση OR — table constructor εκεί που ήθελε παρενθέσεις.</td></tr>
+      <tr><td class="m">numIntraHo / numInterHO</td><td>Μετονομάστηκαν αντεστραμμένα στο Power Query· το DAX το «διορθώνει» με σχόλιο. Καθάρισέ το στην πηγή.</td></tr>
+      <tr><td class="m">10BWperc / 20BWperc <span class="pill xls">διορθώθηκε</span></td><td>Format string <code>"0"</code> αντί για ποσοστό — εμφανίζονταν ως 0 ενώ οι πραγματικές τιμές είναι 15,15% και 12,21%.</td></tr>
+      <tr><td class="m">Voice weight GSM</td><td>Ορίζεται αλλά δεν χρησιμοποιείται πουθενά.</td></tr>
+      <tr><td class="m">"Excelent"</td><td>Ορθογραφικό σε 12 στήλες των scanner πινάκων. Διόρθωσέ το στη νέα σχήμα — αλλά με mapping, γιατί έρχεται από τη βάση.</td></tr>
+      <tr><td class="m">" MAKOR TOWNS", " MAJOR TOWNS"</td><td>Typo και leading space στην πηγή· καθαρίζονται με <code>Category_corr (groups)</code> σε 4 πίνακες αλλά όχι σε όλους.</td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Τεχνικό χρέος</h3>
+  <ul>
+    <li><b>3 auto date tables</b> (<code>DateTableTemplate_*</code>, <code>LocalDateTable_*</code> ×2) — ενεργοποιημένο auto date/time. Στη νέα βάση φτιάξε <b>ένα</b> ρητό ημερολόγιο.</li>
+    <li><b>2 διπλοί πίνακες</b>: <code>Table1</code> και <code>Detailed_Devices_v2 (2)</code>, και οι δύο από το <code>detailed_devices.xlsx</code>, χωρίς σχέσεις και χωρίς χρήση.</li>
+    <li><b>11 από τα 14 custom visuals είναι αχρησιμοποίητα</b> αλλά μεταφέρονται στο αρχείο — GlobeMap μόνο του είναι ~1 MB, το multipleAxesChart ~5,9 MB. Είναι ~10 MB νεκρού βάρους.</li>
+    <li><b>Hardcoded «Cosmote» / «Vodafone» / «Wind»/«NOVA»</b> σε 22 Diff measures και σε 14 group columns. Στη νέα υλοποίηση αυτό γίνεται παράμετρος: <code>reference_operator</code> vs <code>competitors[]</code>.</li>
+    <li><b>Το fallback scope «2019H2»</b> γράφεται όποτε το CollectionName δεν έχει 4ο μέρος — σε 20 queries. Είναι sentinel, όχι πραγματική τιμή.</li>
+    <li><b>Απόλυτο μονοπάτι <code>Z:\</code></b> στα 4 Excel. Σπάει σε κάθε μηχάνημα που δεν έχει το ίδιο mapped drive.</li>
+    <li><b>49 bookmarks</b> ελέγχουν την εναλλαγή των κρυφών σελίδων (MAP BOOKMARK M→F/M→M, DATA-MAP-UL). Στο web αυτό είναι απλά routing.</li>
+  </ul>
+
+  <div class="note"><b>Θετικό εύρημα:</b> τα <code>SUB_SCORE_*</code> υπολογίζονται ήδη στη βάση, όχι στο DAX. Ο πιο περίπλοκος επιχειρησιακός κανόνας — πώς μια μέτρηση γίνεται βαθμός — είναι ήδη έξω από το Power BI και μεταφέρεται αυτούσιος.</div>
+
+  <p class="foot">Αποτυπώθηκε από το <code>COSMOTE BENCHMARKING BI REPORT v12.pbix</code> (4 Σεπ 2026) μέσω του Power BI modeling MCP σε ζωντανό μοντέλο και ανάλυσης του PBIR report definition.</p>
+</section>
+
+<!-- ══════════════ 09 ══════════════ -->
+<section id="changelog" hidden>
+  <p class="kicker">09 · Αλλαγές στο μοντέλο</p>
+  <h2>Τι εφαρμόστηκε στις 5 Σεπ 2026</h2>
+  <p class="lede">Γραμμένο απευθείας στο ζωντανό μοντέλο του Power BI Desktop μέσω XMLA. Δεκατέσσερις διορθώσεις, μία νέα στήλη, είκοσι νέα measures — και ένα recalculate.</p>
+
+  <div class="note warn"><b>Χρειάζεται αποθήκευση.</b> Οι αλλαγές ζουν στο ανοιχτό session του Power BI Desktop. Κάνε <b>Save</b> στο <code>.pbix</code> για να διατηρηθούν.</div>
+
+  <h3>Διορθώσεις που αλλάζουν νούμερα</h3>
+  <div class="tw"><table>
+    <thead><tr><th>Αντικείμενο</th><th>Πριν</th><th>Μετά</th></tr></thead>
+    <tbody>
+      <tr><td class="m">Capacity[AvgThrpDL (BINS)]</td><td>324.566 γραμμές στο «Other» (90% των μη-κενών)</td><td>Ρητή κλίμακα 256 / 1.000 / 2.000 / 10.000 / 30.000 / 100.000 kbps· μηδέν αταξινόμητα</td></tr>
+      <tr><td class="m">Capacity[AvgThrpUL (groups)]</td><td>324.761 γραμμές στο «Other»</td><td>Ρητή κλίμακα 128 / 500 / 1.000 / 5.000 / 20.000 / 40.000 kbps</td></tr>
+      <tr><td class="m">Avg_ThrpUL_P'10 · Avg_ThrpUL_P'90</td><td>Ίδια τιμή με τα DL</td><td><code>Direction = "Uplink"</code>· P90 = 38,89 Mbps έναντι 148,14 του DL</td></tr>
+      <tr><td class="m">Avg_ThrpDL_P'10 · Avg_ThrpDL_P'90</td><td>Χωρίς φίλτρο κατεύθυνσης</td><td><code>Direction = "Downlink"</code></td></tr>
+      <tr><td class="m">Transfer_timeDL/UL_P10' · P90'</td><td>Και τα τέσσερα ταυτόσημα</td><td>Ξεχωριστά ανά κατεύθυνση· DL P90 = 9,97 s, UL P90 = 10,01 s</td></tr>
+      <tr><td class="m">CM_LTE</td><td>1.218.369.048 (κριτήριο DataTechnologyReporting)</td><td>1.168.924.884 — κοινό κριτήριο <code>ISBLANK(DL_NRARFCN)</code> με VD/NV</td></tr>
+      <tr><td class="m">NV_LTE</td><td>Άγκιστρα <code>{}</code> γύρω από OR</td><td>Καθαρή σύνταξη με <code>Home Operator1 = "Nova"</code></td></tr>
+      <tr><td class="m">min_StartDate</td><td><code>MAX(StartDate)</code></td><td><code>MIN(StartDate)</code> → 5 Αυγ 2019</td></tr>
+      <tr><td class="m">10BWperc · 20BWperc</td><td>Εμφανίζονταν ως 0 (format <code>"0"</code>)</td><td>15,15% και 12,21%</td></tr>
+      <tr><td class="m">Delta Freezing%</td><td>Σφάλμα: <code>ScopeRank cannot be found</code></td><td>Λειτουργεί· συγκρίνει με το προηγούμενο <b>διαθέσιμο</b> scope, κρατώντας τα γεωγραφικά φίλτρα</td></tr>
+    </tbody>
+  </table></div>
+
+  <h4>Μορφοποίηση</h4>
+  <p>Είκοσι τρία measures είχαν κενό format string και εμφάνιζαν δεκαπέντε δεκαδικά: όλα τα percentile (MOS, CST, throughput), τα weighted averages (RTT, DNS, interactivity) και τα scores πήραν <code>0.00</code>· τα <code>SuccessFull_Tests</code> και <code>Failed_Tests</code> του DNS πήραν ποσοστό.</p>
+
+  <h3>Νέα στήλη</h3>
+  <div class="mgrid">
+    <div class="mcard"><header><b>'ALL INFO SYNCED FILTERS'[ScopeRank]</b><em>Int64 · calculated column</em></header>
+      <div class="mbody">
+        <div><h5>Ορισμός</h5><pre><code>VAR s = 'ALL INFO SYNCED FILTERS'[Scope]
+VAR y = IFERROR ( VALUE ( LEFT ( s, 4 ) ), BLANK () )
+VAR h = IF ( RIGHT ( s, 1 ) = "2", 2, 1 )
+RETURN
+    IF ( ISBLANK ( y ), BLANK (), y * 2 + h - 1 )</code></pre></div>
+        <div><h5>Τιμές</h5><pre><code>2019H2 → 4039     2024H1 → 4048
+2020H1 → 4040     2024H2 → 4049
+2020H2 → 4041     2025H1 → 4050
+2021H1 → 4042     2025H2 → 4051
+2021H2 → 4043     2026H1 → 4052
+2022H1 → 4044     2026H2 → 4053
+2023H1 → 4046  ← το 4045 (2022H2) λείπει,
+2023H2 → 4047     δεν έγινε καμπάνια</code></pre></div>
+      </div></div>
+  </div>
+  <div class="note"><b>Γιατί έχει σημασία το κενό:</b> επειδή το 2022H2 δεν υπάρχει, ένα «προηγούμενο = τρέχον − 1» θα έδινε κενό στο 2023H1. Όλα τα νέα delta measures ψάχνουν το <b>μέγιστο ScopeRank μικρότερο του τρέχοντος</b>, οπότε το 2023H1 συγκρίνεται σωστά με το 2022H1.</div>
+
+  <h3>Είκοσι νέα measures</h3>
+
+  <h4>Φάκελος «Δ vs προηγούμενο scope» — 9 measures</h4>
+  <p>Το report είχε συγκρίσεις μόνο <b>έναντι ανταγωνιστών</b>. Αυτά δίνουν τη σύγκριση <b>έναντι της προηγούμενης καμπάνιας</b>, στα ίδια collections:</p>
+  <div class="tw"><table>
+    <thead><tr><th>Πίνακας</th><th class="m">Measure</th><th>Μετράει</th></tr></thead>
+    <tbody>
+      <tr><td rowspan="4">MtoM_voice</td><td class="m">Δ Success Rate (%) vs prev scope</td><td>Μεταβολή success rate· θετικό = βελτίωση</td></tr>
+      <tr><td class="m">Δ DCR(%) vs prev scope</td><td>Μεταβολή drop rate· θετικό = χειροτέρευση</td></tr>
+      <tr><td class="m">Δ MOS vs prev scope</td><td>Μεταβολή μέσου MOS</td></tr>
+      <tr><td class="m">Δ CST vs prev scope</td><td>Μεταβολή μέσου call setup time</td></tr>
+      <tr><td rowspan="2">MtoF_voice</td><td class="m">Δ Success Rate MF(%) vs prev scope</td><td>Το ίδιο για GSM κλήσεις</td></tr>
+      <tr><td class="m">Δ MOS MF vs prev scope</td><td>Μεταβολή MOS στο M→F</td></tr>
+      <tr><td rowspan="2">Capacity</td><td class="m">Δ AvgThrpDL Mbps vs prev scope</td><td>Μεταβολή μέσου throughput DL</td></tr>
+      <tr><td class="m">Δ AvgThrpUL Mbps vs prev scope</td><td>Μεταβολή μέσου throughput UL</td></tr>
+      <tr><td>BI_SCORES_TOTAL</td><td class="m">Δ Visuals Total Score vs prev scope</td><td>Μεταβολή τελικής βαθμολογίας ανά operator</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><b>Χρήση:</b> βάλε <code>'ALL INFO SYNCED FILTERS'[Scope]</code> στον άξονα και <code>HomeOperator (groups)</code> στα series. Το measure αφαιρεί μόνο το φίλτρο scope — γεωγραφία, κατηγορία και συσκευή παραμένουν.</div>
+
+  <h4>Φάκελος «Ποιότητα δεδομένων» — 11 measures</h4>
+  <p>Σχεδιασμένα για ένα table visual που δείχνει τι λείπει πριν παρουσιάσεις νούμερα:</p>
+  <div class="tw"><table>
+    <thead><tr><th class="m">Measure</th><th>Ορισμός</th></tr></thead>
+    <tbody>
+      <tr><td class="m">Selected Collections</td><td><code>COUNTROWS('ALL INFO SYNCED FILTERS')</code></td></tr>
+      <tr><td class="m">Coll w/ Voice M2M · M2F · Capacity · HTTP · Browsing · NR Data · 5G Scanner Map</td><td><code>DISTINCTCOUNT(&lt;fact&gt;[STR_ID])</code> — πόσα collections έχουν όντως δεδομένα σε κάθε άξονα</td></tr>
+      <tr><td class="m">Coverage 5G Scanner (%)</td><td>Ποσοστό των επιλεγμένων collections με 5G scanner map</td></tr>
+      <tr><td class="m">Voice Sample Warning</td><td>Κείμενο «⚠ n κλήσεις» όταν <code>[CALL ATTEMPTS] &lt; 30</code></td></tr>
+      <tr><td class="m">Capacity Sample Warning</td><td>Κείμενο «⚠ n tests» όταν <code>[CapacityAttempts] &lt; 30</code></td></tr>
+    </tbody>
+  </table></div>
+
+  <h3>Το table visual που φτιάχνεις σε ένα λεπτό</h3>
+  <p>Table visual · Rows: <code>'ALL INFO SYNCED FILTERS'[Scope]</code> · Values: τα παρακάτω. Αυτό ακριβώς βγήκε από το μοντέλο μετά τις αλλαγές:</p>
+  <div class="tw"><table>
+    <thead><tr><th>Scope</th><th class="num">Collections</th><th class="num">M→M</th><th class="num">Capacity</th><th class="num">5G Map</th><th class="num">Cov 5G</th><th class="num">SR M→M</th><th class="num">Δ SR</th><th class="num">Δ DL Mbps</th></tr></thead>
+    <tbody>
+      <tr><td class="m">(κενό — ορφανά)</td><td class="num">—</td><td class="num">1</td><td class="num">—</td><td class="num">1</td><td class="num">—</td><td class="num">97,38%</td><td class="num">—</td><td class="num">—</td></tr>
+      <tr><td>2019H2</td><td class="num">141</td><td class="num">141</td><td class="num">141</td><td class="num">—</td><td class="num">—</td><td class="num">95,33%</td><td class="num">—</td><td class="num">—</td></tr>
+      <tr><td>2020H1</td><td class="num">39</td><td class="num">38</td><td class="num">39</td><td class="num">—</td><td class="num">—</td><td class="num">95,95%</td><td class="num">+0,62%</td><td class="num">+0,57</td></tr>
+      <tr><td>2020H2</td><td class="num">152</td><td class="num">152</td><td class="num">152</td><td class="num">—</td><td class="num">—</td><td class="num">93,45%</td><td class="num">−2,50%</td><td class="num">+0,77</td></tr>
+      <tr><td>2021H1</td><td class="num">169</td><td class="num">169</td><td class="num">169</td><td class="num">—</td><td class="num">—</td><td class="num">96,92%</td><td class="num">+3,46%</td><td class="num">+15,15</td></tr>
+      <tr><td>2021H2</td><td class="num">148</td><td class="num">148</td><td class="num">148</td><td class="num">—</td><td class="num">—</td><td class="num">96,13%</td><td class="num">−0,79%</td><td class="num">+12,43</td></tr>
+      <tr><td>2022H1</td><td class="num">167</td><td class="num">167</td><td class="num">167</td><td class="num">—</td><td class="num">—</td><td class="num">95,81%</td><td class="num">−0,32%</td><td class="num">+10,37</td></tr>
+      <tr><td>2023H1</td><td class="num">184</td><td class="num">184</td><td class="num">184</td><td class="num">—</td><td class="num">—</td><td class="num">95,60%</td><td class="num">−0,21%</td><td class="num">+28,53</td></tr>
+      <tr><td>2023H2</td><td class="num">149</td><td class="num">149</td><td class="num">149</td><td class="num">—</td><td class="num">—</td><td class="num">94,87%</td><td class="num">−0,74%</td><td class="num">+13,79</td></tr>
+      <tr><td>2024H1</td><td class="num">169</td><td class="num">169</td><td class="num">169</td><td class="num">—</td><td class="num">—</td><td class="num">95,70%</td><td class="num">+0,83%</td><td class="num">+14,19</td></tr>
+      <tr><td>2024H2</td><td class="num">120</td><td class="num">120</td><td class="num">120</td><td class="num">—</td><td class="num">—</td><td class="num">95,19%</td><td class="num">−0,51%</td><td class="num">+12,68</td></tr>
+      <tr><td>2025H1</td><td class="num">148</td><td class="num">148</td><td class="num">148</td><td class="num">—</td><td class="num">—</td><td class="num">95,87%</td><td class="num">+0,69%</td><td class="num">+54,77</td></tr>
+      <tr><td>2025H2</td><td class="num">140</td><td class="num">140</td><td class="num">140</td><td class="num">76</td><td class="num">54,3%</td><td class="num">95,09%</td><td class="num">−0,79%</td><td class="num">+17,40</td></tr>
+      <tr><td>2026H1</td><td class="num">155</td><td class="num">155</td><td class="num">155</td><td class="num">155</td><td class="num">100%</td><td class="num">96,21%</td><td class="num">+1,13%</td><td class="num">+17,79</td></tr>
+      <tr><td>2026H2</td><td class="num">67</td><td class="num">67</td><td class="num">67</td><td class="num">67</td><td class="num">100%</td><td class="num">97,82%</td><td class="num">+1,61%</td><td class="num">+0,49</td></tr>
+    </tbody>
+  </table></div>
+  <div class="note"><b>Τι φαίνεται αμέσως:</b> η γραμμή «κενό» απομονώνει τα ορφανά κλειδιά. Το 2025H2 έχει 5G scanner map μόνο στο 54% των διαδρομών. Το 2020H1 έχει 39 collections αλλά 38 με voice — το ορφανό <code>PEL_PATRA</code>. Και το throughput DL ανέβηκε +54,8 Mbps στο 2025H1, τη μεγαλύτερη μεταβολή της σειράς.</div>
+
+  <h3>Τι ΔΕΝ άλλαξα</h3>
+  <ul>
+    <li><b>Τα visuals.</b> Το modeling MCP διαχειρίζεται μόνο το semantic model — οι σελίδες και τα visuals ζουν στο report definition και θέλουν Power BI Desktop.</li>
+    <li><b>Τα ορφανά κλειδιά.</b> Διορθώνονται στην πηγή (SQL / CollectionName), όχι στο μοντέλο. Τα νέα coverage measures τα κάνουν ορατά.</li>
+    <li><b>Τα δύο <code>GroupingDesignState</code> annotations</b> των 1,49 MB στις διορθωμένες στήλες. Παρέμειναν ώστε να μη σπάσουν οι αναφορές <code>GroupRef</code> των visuals. <b>Μην ανοίξεις τον editor ομάδων σε αυτές τις δύο στήλες</b> — θα ξαναγράψει την παλιά λογική. Μόνιμη λύση: άλλαξε τα 3 visuals ώστε να δείχνουν στα <code>Calculated Throughput bins DL/UL</code> και σβήσε τις στήλες.</li>
+    <li><b>Τα 10 νεκρά measures</b> — δεν χρησιμοποιούνται ούτε σε visual ούτε ως εξάρτηση: <code>StartWeek</code>, <code>P'90 MOS</code>, <code>Transfer_timeDL/UL_P10'</code>, <code>Transfer_timeDL/UL_P90'</code>, <code>Voice weight GSM</code>, <code>testVODA</code>, <code>%ssrsrp_usage</code>, <code>Delta Freezing%</code>. Τα διόρθωσα αντί να τα σβήσω, γιατί τα περισσότερα αξίζουν να μπουν σε visual.</li>
+    <li><b>Οι διπλοί πίνακες</b> <code>Table1</code> και <code>Detailed_Devices_v2 (2)</code> και τα 11 αχρησιμοποίητα custom visuals.</li>
+  </ul>
+
+  <p class="foot">Εφαρμόστηκε 5 Σεπ 2026 μέσω XMLA στο ζωντανό instance <code>localhost:49900</code>. Επαληθεύτηκε με DAX: κανένα measure σε κατάσταση σφάλματος, μηδέν αταξινόμητες γραμμές στα διορθωμένα bins.</p>
+</section>
+
+</main>
+</div>
+
+<script>
+(function(){
+  var tabs = Array.prototype.slice.call(document.querySelectorAll('.nav button'));
+  var panels = {};
+  tabs.forEach(function(t){ panels[t.dataset.t] = document.getElementById(t.dataset.t); });
+  function show(id){
+    tabs.forEach(function(t){
+      var on = t.dataset.t === id;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      panels[t.dataset.t].hidden = !on;
+    });
+    window.scrollTo({top:0, behavior:'instant'});
+  }
+  tabs.forEach(function(t){
+    t.addEventListener('click', function(){ show(t.dataset.t); });
+    t.addEventListener('keydown', function(e){
+      var i = tabs.indexOf(t), n = null;
+      if(e.key === 'ArrowDown' || e.key === 'ArrowRight') n = tabs[(i+1)%tabs.length];
+      if(e.key === 'ArrowUp'   || e.key === 'ArrowLeft')  n = tabs[(i-1+tabs.length)%tabs.length];
+      if(n){ e.preventDefault(); n.focus(); show(n.dataset.t); }
+    });
+  });
+})();
+</script>
+</body>
+</html>
