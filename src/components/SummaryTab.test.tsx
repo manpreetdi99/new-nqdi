@@ -3,6 +3,8 @@ import { fireEvent, render, screen } from "@testing-library/react";
 
 import SummaryTab, { type SummaryLoading } from "./SummaryTab";
 import type { AllCallsRow, DataCallRow, TechnologyMixRow } from "@/lib/api";
+import { buildServingBandTechTable } from "@/lib/attachmentC";
+import { buildServingPieSlices } from "@/lib/servingPies";
 
 const call = (overrides: Partial<AllCallsRow>): AllCallsRow => ({
   Location: "Cosmote Free A",
@@ -456,5 +458,44 @@ describe("SummaryTab", () => {
       expect(screen.getByText(/Δεν υπάρχουν δεδομένα/)).toBeInTheDocument();
       expect(screen.queryByText(/sources/)).not.toBeInTheDocument();
     });
+  });
+});
+
+describe("serving band/technology pies", () => {
+  const colorOf = (location: string, rows: Parameters<typeof buildServingBandTechTable>[0], name: string) => {
+    const shares = buildServingBandTechTable(rows).byOperator.get(location)!;
+    return buildServingPieSlices(shares).techSlices.find((slice) => slice.name === name)?.color;
+  };
+
+  it("keeps a technology's colour identical across operators, whatever else has samples", () => {
+    // Ο ένας operator έχει 5G SA, ο άλλος όχι. Με positional χρώματα το "LTE-5GNR"
+    // μετακινούνταν στην πρώτη θέση του δεύτερου pie και γινόταν πράσινο, ενώ στο πρώτο
+    // pie πράσινο ήταν το "5G NR CA" — δύο διαφορετικές τεχνολογίες, ίδιο χρώμα.
+    const withSa = [
+      { location: "Cosmote Data A", kind: "TECH" as const, code: "5G NR CA", samples: 30 },
+      { location: "Cosmote Data A", kind: "TECH" as const, code: "5G NR", samples: 40 },
+      { location: "Cosmote Data A", kind: "TECH" as const, code: "LTE-5GNR", samples: 20 },
+      { location: "Cosmote Data A", kind: "TECH" as const, code: "LTE", samples: 10 },
+    ];
+    const withoutSa = [
+      { location: "Vodafone Data A", kind: "TECH" as const, code: "LTE-5GNR", samples: 70 },
+      { location: "Vodafone Data A", kind: "TECH" as const, code: "LTE", samples: 30 },
+    ];
+
+    expect(colorOf("COSMOTE", withSa, "LTE-5GNR")).toBe(colorOf("VODAFONE", withoutSa, "LTE-5GNR"));
+    expect(colorOf("COSMOTE", withSa, "LTE")).toBe(colorOf("VODAFONE", withoutSa, "LTE"));
+    // …και το χρώμα του "5G NR CA" δεν ανακυκλώνεται σε άλλη τεχνολογία του ίδιου pie.
+    expect(colorOf("COSMOTE", withSa, "5G NR CA")).not.toBe(colorOf("COSMOTE", withSa, "LTE-5GNR"));
+  });
+
+  it("paints every slice of one pie a different colour", () => {
+    const rows = ["5G NR CA", "5G NR", "LTE-5GNR", "LTE CA", "LTE"].map((code) => ({
+      location: "Cosmote Data A", kind: "TECH" as const, code, samples: 20,
+    }));
+    const shares = buildServingBandTechTable(rows).byOperator.get("COSMOTE")!;
+    const colors = buildServingPieSlices(shares).techSlices.map((slice) => slice.color);
+
+    expect(colors).toHaveLength(5);
+    expect(new Set(colors).size).toBe(5);
   });
 });

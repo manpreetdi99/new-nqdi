@@ -1940,6 +1940,13 @@ export const SERVING_BAND_TECH_METRICS: ServingBandTechMetricDef[] = [
   { ord: 1, label: "Serving Band (per Time) NR28 (%)", kind: "BAND", code: "NR28" },
   { ord: 2, label: "Serving Band (per Time) NR1 (%)", kind: "BAND", code: "NR1" },
   { ord: 3, label: "Serving Band (per Time) NR78 (%)", kind: "BAND", code: "NR78" },
+  // 5G SA: δεν υπάρχουν στο reference SQL (γράφτηκε πριν μπει SA στο δίκτυο), αλλά η
+  // Technology.CurrTechnology τα επιστρέφει — χωρίς αυτά τα samples τους έπεφταν εκτός
+  // κάθε γραμμής και μόνο φούσκωναν τον παρονομαστή. Κρατούν ord εκτός της αρίθμησης
+  // της reference (17/18) ώστε η αντιστοίχιση των υπόλοιπων γραμμών με το εξωτερικό
+  // report να μείνει ακέραιη· η σειρά εμφάνισης είναι η θέση τους εδώ, όχι το ord.
+  { ord: 17, label: "Serving Technology (per Time) 5G NR CA (%)", kind: "TECH", code: "5G NR CA" },
+  { ord: 18, label: "Serving Technology (per Time) 5G NR (%)", kind: "TECH", code: "5G NR" },
   { ord: 5, label: "Serving Technology (per Time) LTE-5GNR (%)", kind: "TECH", code: "LTE-5GNR" },
   { ord: 6, label: "Serving Technology (per Time) LTE CA (%)", kind: "TECH", code: "LTE CA" },
   { ord: 7, label: "Serving Technology (per Time) LTE (%)", kind: "TECH", code: "LTE" },
@@ -1980,7 +1987,8 @@ const servingBandTechSharesFor = (bandCounts: Map<string, number>, techCounts: M
 /**
  * Ίδιο σχήμα με buildTechnologyMixTable, πάνω στα (location, kind, code, samples)
  * counts του /api/serving_band_tech: αθροίζει ανά operator (resolveOperator στο
- * location) και υπολογίζει τα 16 σταθερά ποσοστά ανά operator + σύνολο.
+ * location) και υπολογίζει τα σταθερά ποσοστά του SERVING_BAND_TECH_METRICS ανά
+ * operator + σύνολο.
  */
 export const buildServingBandTechTable = (
   rows: ServingBandTechRow[],
