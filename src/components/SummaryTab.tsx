@@ -5,7 +5,7 @@ import { Cell as PieCell, Legend as PieLegend, Pie, PieChart, ResponsiveContaine
 import { Skeleton } from "@/components/ui/skeleton";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import type { AllCallsRow, CellBandCountRow, DataCallRow, ServingBandTechRow, SrvccRow, TechnologyMixRow } from "@/lib/api";
-import { CHART_PALETTE } from "@/lib/chartStyles";
+import { buildServingPieSlices, type PieSlice } from "@/lib/servingPies";
 import {
   BAD_QUALITY_MOS,
   buildDataSections,
@@ -261,21 +261,11 @@ const TechnologyMixBar = ({ mix }: { mix: TechnologyShare[] }) => {
 
 /* ────────────────────────── Serving Band / Tech — 2 pies (5G mix + total tech mix) ────────────────────────── */
 
-interface PieSlice {
-  name: string;
-  value: number;
-  pct: number;
-  color: string;
-}
-
-const pieSliceName = (label: string): string =>
-  label.replace(/^Serving (Band|Technology) \(per Time\) /, "").replace(/ \(%\)$/, "");
-
 /**
  * Το ποσοστό ζωγραφίζεται ΜΕΣΑ στη φέτα (όχι έξω με connector line) — έτσι μένει
  * εγγυημένα μέσα στα όρια του ίδιου του pie, που ήδη χωράει στο container: καμία
  * πιθανότητα να κοπεί στην άκρη του chart, όσο στενή κι αν είναι η στήλη.
- * Λευκό fill (σταθερά μεσαία/σκούρα χρώματα στο PIE_PALETTE, βλ. παρακάτω) + λεπτό
+ * Λευκό fill (σταθερά μεσαία/σκούρα χρώματα στο PIE_PALETTE, βλ. lib/servingPies) + λεπτό
  * σκούρο περίγραμμα (paintOrder stroke) για αντίθεση ανεξαρτήτως χρώματος φέτας.
  * Πολύ μικρές φέτες (<6%) δεν παίρνουν label — δεν χωράει κείμενο, μένει στο legend.
  */
@@ -344,40 +334,6 @@ const MiniPie = ({ title, slices }: { title: string; slices: PieSlice[] }) => {
       </ResponsiveContainer>
     </div>
   );
-};
-
-/**
- * CHART_PALETTE χωρίς το amber (index 2) — αποτυγχάνει το lightness-band check του
- * dataviz validator (βλ. `node scripts/validate_palette.js`). Το "LTE"/"LTE CA" με
- * τα δύο μπλε του technologyColor() επίσης αποτυγχάνουν το normal-vision floor
- * (ΔE 13.9 < 15, δύσκολο να ξεχωρίσουν ακόμα και με πλήρη έγχρωμη όραση) — γι' αυτό
- * τα δύο pies εδώ παίρνουν χρώμα θέσης (fixed order πάνω στο SERVING_BAND_TECH_METRICS),
- * ΟΧΙ το semantic technologyColor.
- */
-const PIE_PALETTE = CHART_PALETTE.filter((_, index) => index !== 2);
-const NO_DATA_COLOR = "#64748b";
-
-/** Φτιάχνει τα (μη-μηδενικά) BAND/TECH slices ενός operator, σταθερή σειρά χρωμάτων (βλ. PIE_PALETTE). */
-const buildServingPieSlices = (shares: ServingBandTechShare[]): { bandSlices: PieSlice[]; techSlices: PieSlice[] } => {
-  const bandSlices: PieSlice[] = shares
-    .filter((share) => share.kind === "BAND" && share.samples > 0)
-    .map((share, index) => ({
-      name: pieSliceName(share.label),
-      value: share.samples,
-      pct: share.pct ?? 0,
-      color: PIE_PALETTE[index % PIE_PALETTE.length],
-    }));
-
-  let techColorIndex = 0;
-  const techSlices: PieSlice[] = shares
-    .filter((share) => share.kind === "TECH" && share.samples > 0)
-    .map((share) => {
-      const name = pieSliceName(share.label);
-      const color = name === "No data transfer" ? NO_DATA_COLOR : PIE_PALETTE[techColorIndex++ % PIE_PALETTE.length];
-      return { name, value: share.samples, pct: share.pct ?? 0, color };
-    });
-
-  return { bandSlices, techSlices };
 };
 
 /** Μία στήλη operator: τα 2 pies του (5G band mix / total tech mix) το ένα κάτω απ' το άλλο. */

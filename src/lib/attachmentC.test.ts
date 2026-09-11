@@ -1350,6 +1350,30 @@ describe("technology mix", () => {
     expect(table.total.find((s) => s.label.includes("Serving Technology (per Time) LTE (%)"))?.pct).toBeCloseTo(25 / 120, 12);
   });
 
+  it("buildServingBandTechTable counts the 5G SA technologies (5G NR / 5G NR CA)", () => {
+    // Πριν μπουν στο SERVING_BAND_TECH_METRICS, τα SA samples δεν έβγαιναν σε καμία
+    // γραμμή αλλά μετρούσαν στον παρονομαστή — τα ποσοστά του pie δεν άθροιζαν 100%.
+    const rows = [
+      { location: "Cosmote Data A", kind: "TECH" as const, code: "5G NR", samples: 50 },
+      { location: "Cosmote Data A", kind: "TECH" as const, code: "5G NR CA", samples: 30 },
+      { location: "Cosmote Data A", kind: "TECH" as const, code: "LTE", samples: 20 },
+    ];
+
+    const table = buildServingBandTechTable(rows);
+    const cosmote = table.byOperator.get("COSMOTE")!;
+
+    expect(cosmote.find((s) => s.label.includes("5G NR ("))?.pct).toBeCloseTo(50 / 100, 12);
+    expect(cosmote.find((s) => s.label.includes("5G NR CA ("))?.pct).toBeCloseTo(30 / 100, 12);
+    // Το "5G NR" δεν κλέβει τα samples του "5G NR CA" (ούτε ανάποδα) — ξεχωριστά codes.
+    expect(cosmote.find((s) => s.label.includes("5G NR ("))?.samples).toBe(50);
+
+    // Με όλα τα codes καλυμμένα, οι TECH γραμμές αθροίζουν ακριβώς 100%.
+    const techSum = cosmote
+      .filter((s) => s.kind === "TECH")
+      .reduce((sum, s) => sum + (s.pct ?? 0), 0);
+    expect(techSum).toBeCloseTo(1, 12);
+  });
+
   it("buildServingBandTechTable ignores zero/negative-sample and blank-code rows", () => {
     const rows = [
       { location: "Cosmote Data A", kind: "TECH" as const, code: "LTE", samples: 0 },
