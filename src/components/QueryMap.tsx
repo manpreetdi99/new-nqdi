@@ -212,9 +212,11 @@ const COLOR_SCHEMES: Record<string, ColorScheme> = {
     label: "DATA Technology – (LTE/5G)",
     suggestCol: "technology_data",
     categories: [
+      { value: "5G NR CA", color: "#045231" },
+      { value: "5G NR", color: "#002d80" },
       { value: "LTE-5G NR", color: "#800080" },
-      { value: "LTE CA",    color: "#00FF00" },
-      { value: "LTE",       color: "#FF0080" },
+      { value: "LTE CA",    color: "#ff0000" },
+      { value: "LTE",       color: "#e5ff00" },
     ],
     defaultColor: "#808080",
   },
@@ -1128,7 +1130,7 @@ OUTER APPLY (
 WHERE s.Valid = 1 AND ti.Valid = 1
   AND fl.CollectionName = '{collection}'
   AND fl.ASideLocation  = '{location}'
-  AND ti.TestName IN ('Capacity DL','FTP DL','HTTP TRANSFER (DL)')   -- <<< Test Data Server DL
+  --AND ti.TestName IN ('Capacity DL','FTP DL','HTTP TRANSFER (DL)')   -- <<< Test Data Server DL
   AND p.Latitude  IS NOT NULL AND p.Latitude  <> 0
   AND p.Longitude IS NOT NULL AND p.Longitude <> 0
 ORDER BY p.MsgTime`,
