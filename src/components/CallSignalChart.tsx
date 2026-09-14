@@ -17,7 +17,7 @@
 
 import { useMemo, useState, type ReactNode } from "react";
 import {
-  CartesianGrid, Legend, Line, LineChart, ReferenceArea, ReferenceLine,
+  CartesianGrid, Line, LineChart, ReferenceArea, ReferenceLine,
   ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis,
 } from "recharts";
 import { Activity, Pin, PinOff } from "lucide-react";
@@ -41,6 +41,12 @@ export interface SignalEvent {
 interface CallSignalChartProps {
   /** Ποιο δίκτυο ορίζει τον άξονα ποιότητας και τα κατώφλια. */
   network: SignalNetwork;
+  /**
+   * Το πεδίο Technology της κλήσης, όπως είναι περασμένο στη βάση: "LTE", "GSM",
+   * "GSM/LTE", "LTE/5G NR". Κρίνει αν οι NR σειρές ξεκινούν ανοιχτές — σε κλήση
+   * περασμένη σκέτα ως LTE μένουν κλειστές (βλ. nrShownByDefault).
+   */
+  technology?: string | null;
   samples: SignalSample[];
   domain: { start: number; end: number } | null;
   /** Όρια κλήσης σε epoch ms — σκιάζουν το «κατά» και χωρίζουν πριν/μετά. */
@@ -71,6 +77,17 @@ const STRENGTH_SERIES = [
   { key: "NrRSRP", name: "SS-RSRP", color: "#a855f7" },
 ] as const;
 
+/**
+ * Σειρές ποιότητας — κάθε μία με δικό της checkbox, όπως και οι σειρές ισχύος. Το
+ * SS-RSRQ έχει ΞΕΧΩΡΙΣΤΟ χρώμα από το RSRQ: πέφτουν στον ίδιο άξονα dB και με το ίδιο
+ * κίτρινο ήταν αδύνατο να ξεχωρίσουν όταν είναι και τα δύο ανοιχτά (EN-DC).
+ */
+const QUALITY_SERIES = [
+  { key: "RSRQ", name: "RSRQ", color: "hsl(45, 93%, 58%)" },
+  { key: "RxQual", name: "RxQual", color: "hsl(45, 93%, 58%)" },
+  { key: "NrRSRQ", name: "SS-RSRQ", color: "#f472b6" },
+] as const;
+
 const SCANNER_SERIES = [
   { key: "ScannerStrength", name: "Scanner", dash: "4 3" },
   { key: "BestScannerStrength", name: "Best scanner", dash: "2 2" },
@@ -91,14 +108,30 @@ function clock(ms: number, withMillis = false): string {
 }
 
 export function CallSignalChart({
-  network, samples, domain, callBounds, overviewTimes, overviewLanes, events,
+  network, technology, samples, domain, callBounds, overviewTimes, overviewLanes, events,
   hoveredTime, onHoverTime, pinned, onPinnedChange, controls, subtitle,
 }: CallSignalChartProps) {
-  const [showStrength, setShowStrength] = useState(true);
-  const [showQuality, setShowQuality] = useState(true);
+  // Κάθε σειρά (RSRP / SS-RSRP / RSRQ / SS-RSRQ …) έχει δικό της checkbox. Κρατάμε ΜΟΝΟ
+  // όσες πείραξε ρητά ο χρήστης· οι υπόλοιπες ακολουθούν την προεπιλογή, ώστε μια σειρά
+  // που εμφανίζεται αργότερα (π.χ. SS-RSRP όταν ανοίξει EN-DC) να μη θέλει αρχικοποίηση.
+  const [seriesOverride, setSeriesOverride] = useState<Record<string, boolean>>({});
   const [showScanner, setShowScanner] = useState(false);
   const [showBScanner, setShowBScanner] = useState(false);
   const [showEvents, setShowEvents] = useState(true);
+
+  /**
+   * Άγγιξε η κλήση 5G NR; Σε μια κλήση περασμένη σκέτα ως "LTE" το EN-DC μπορεί να δίνει
+   * SS-RSRP/SS-RSRQ δείγματα, αλλά δεν είναι αυτό που κοιτά ο αναλυτής — οι δύο επιπλέον
+   * καμπύλες φορτώνουν το διάγραμμα. Μένουν διαθέσιμες με ένα κλικ.
+   */
+  const callTouchesNr = network === "NR"
+    || (technology ?? "").toUpperCase().split(/[^A-Z0-9]+/).some((token) => token === "NR" || token === "5G");
+  const shownByDefault = (key: string) =>
+    callTouchesNr || (key !== "NrRSRP" && key !== "NrRSRQ");
+
+  const isShown = (key: string) => seriesOverride[key] ?? shownByDefault(key);
+  const setShown = (key: string, shown: boolean) =>
+    setSeriesOverride((prev) => ({ ...prev, [key]: shown }));
 
   const times = useMemo(() => samples.map((s) => s.t), [samples]);
   const highlightIndex = hoveredTime != null ? nearestIndex(times, hoveredTime) : -1;
@@ -116,8 +149,18 @@ export function CallSignalChart({
   }, [samples]);
 
   const isGsmQuality = network === "GSM";
-  const qualityKeys = isGsmQuality ? (["RxQual"] as const) : (["RSRQ", "NrRSRQ"] as const);
-  const hasQuality = qualityKeys.some((key) => present.has(key));
+  const qualityKeys: readonly string[] = isGsmQuality ? ["RxQual"] : ["RSRQ", "NrRSRQ"];
+  // Η "βασική" σειρά του δικτύου δείχνει checkbox ακόμη κι όταν λείπουν δείγματα (απλώς
+  // απενεργοποιημένο) — οι NR σειρές μπαίνουν μόνο όταν όντως υπάρχουν, ώστε μια LTE
+  // κλήση χωρίς EN-DC να μη γεμίζει με νεκρά SS-RSRP/SS-RSRQ κουτάκια.
+  const primaryStrengthKey = isGsmQuality ? "RxLev" : network === "NR" ? "NrRSRP" : "RSRP";
+  const primaryQualityKey = isGsmQuality ? "RxQual" : network === "NR" ? "NrRSRQ" : "RSRQ";
+  const strengthSeries = STRENGTH_SERIES.filter(
+    (series) => present.has(series.key) || series.key === primaryStrengthKey,
+  ).map((series) => ({ ...series, missing: !present.has(series.key) }));
+  const qualitySeries = QUALITY_SERIES.filter(
+    (series) => qualityKeys.includes(series.key) && (present.has(series.key) || series.key === primaryQualityKey),
+  ).map((series) => ({ ...series, missing: !present.has(series.key) }));
   const hasScanner = present.has("ScannerStrength");
   const hasBestScanner = present.has("BestScannerStrength");
 
@@ -127,15 +170,23 @@ export function CallSignalChart({
   );
 
   // Τα κατώφλια εμφανίζονται μόνο με ΜΙΑ ενεργή σειρά, αλλιώς το διάγραμμα γεμίζει γραμμές.
-  const activeSeriesCount = [showStrength, showQuality && hasQuality, showScanner && hasScanner, showBScanner && hasBestScanner].filter(Boolean).length;
-  const showStrengthAxis = showStrength || (showScanner && hasScanner) || (showBScanner && hasBestScanner);
-  const showQualityAxis = showQuality && hasQuality;
+  const visibleStrength = strengthSeries.filter((series) => !series.missing && isShown(series.key));
+  const visibleQuality = qualitySeries.filter((series) => !series.missing && isShown(series.key));
+  const activeSeriesCount =
+    visibleStrength.length +
+    visibleQuality.length +
+    [showScanner && hasScanner, showBScanner && hasBestScanner].filter(Boolean).length;
+  const showStrengthAxis = visibleStrength.length > 0 || (showScanner && hasScanner) || (showBScanner && hasBestScanner);
+  const showQualityAxis = visibleQuality.length > 0;
   const showStrengthThresholds = activeSeriesCount === 1 && showStrengthAxis;
   const showQualityThresholds = activeSeriesCount === 1 && showQualityAxis;
 
   const eventsVisible = showEvents && laidOutEvents.length > 0;
   const topMargin = eventsVisible ? EVENT_LANES * LANE_HEIGHT + 6 : 4;
-  const plotHeight = (pinned ? 150 : 230) + topMargin;
+  // Ύψος καμπύλης: το recharts Legend έχει αφαιρεθεί (διπλότυπο των checkbox από πάνω),
+  // οπότε αυτά τα px είναι όλα καμπύλη — μικρότερο συνολικό block, ίδια ή μεγαλύτερη
+  // ορατή καμπύλη, ώστε να χωρούν διάγραμμα + πίνακες L3 μαζί στην οθόνη.
+  const plotHeight = (pinned ? 180 : 250) + topMargin;
   // Το overview και το overlay των events πρέπει να πέφτουν πάνω στο ίδιο plot area με
   // την καμπύλη, οπότε ακολουθούν το πλάτος των αξόνων που όντως σχεδιάζονται.
   const padLeft = showStrengthAxis ? STRENGTH_AXIS_WIDTH : 0;
@@ -160,15 +211,16 @@ export function CallSignalChart({
   return (
     <div className="rounded-lg border border-border bg-card">
       {/* ── Κεφαλίδα: τίτλος, επιλογείς, σειρές ── */}
-      <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b border-border bg-gradient-to-r from-primary/[0.07] to-transparent">
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-            <Activity className="h-4 w-4 text-primary" />
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1 px-3 py-1 border-b border-border bg-gradient-to-r from-primary/[0.07] to-transparent">
+        {/* Τίτλος και υπότιτλος στην ΙΔΙΑ γραμμή — ο υπότιτλος από κάτω κόστιζε μια ολόκληρη σειρά */}
+        <div className="flex min-w-0 flex-wrap items-baseline gap-x-2">
+          <h3 className="text-[13px] font-semibold text-foreground flex items-center gap-1.5">
+            <Activity className="h-3.5 w-3.5 text-primary" />
             Σήμα κλήσης · {strengthLabel} / {qualityLabel}
           </h3>
-          {subtitle && <p className="text-[10px] text-muted-foreground mt-0.5">{subtitle}</p>}
+          {subtitle && <p className="text-[10px] text-muted-foreground">{subtitle}</p>}
         </div>
-        <div className="flex flex-wrap items-center gap-2">
+        <div className="flex flex-wrap items-center gap-1.5">
           {controls}
           <button
             type="button"
@@ -186,15 +238,23 @@ export function CallSignalChart({
       </div>
 
       {/* ── Σειρές & ζώνες ── */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-3 py-1.5 text-[10px] border-b border-border/60">
-        <label className="inline-flex items-center gap-1 cursor-pointer">
-          <input type="checkbox" checked={showStrength} onChange={(e) => setShowStrength(e.target.checked)} className="h-3 w-3" />
-          {strengthLabel}
-        </label>
-        <label className={`inline-flex items-center gap-1 ${hasQuality ? "cursor-pointer" : "opacity-40"}`}>
-          <input type="checkbox" disabled={!hasQuality} checked={showQuality && hasQuality} onChange={(e) => setShowQuality(e.target.checked)} className="h-3 w-3" />
-          {qualityLabel}
-        </label>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1 text-[10px] border-b border-border/60">
+        {[...strengthSeries, ...qualitySeries].map((series) => (
+          <label
+            key={series.key}
+            className={`inline-flex items-center gap-1 ${series.missing ? "opacity-40" : "cursor-pointer"}`}
+          >
+            <input
+              type="checkbox"
+              disabled={series.missing}
+              checked={!series.missing && isShown(series.key)}
+              onChange={(e) => setShown(series.key, e.target.checked)}
+              className="h-3 w-3"
+              style={{ accentColor: series.color }}
+            />
+            {series.name}
+          </label>
+        ))}
         {hasScanner && (
           <label
             className="inline-flex items-center gap-1 cursor-pointer"
@@ -223,37 +283,23 @@ export function CallSignalChart({
             Signaling events ({laidOutEvents.length})
           </label>
         )}
-        <span className="ml-auto flex items-center gap-2 text-muted-foreground">
+        <span className="ml-auto flex flex-wrap items-center gap-x-2 gap-y-0.5 text-muted-foreground">
           <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 rounded-sm bg-amber-400/30 border border-amber-400/50" />Πριν</span>
           <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 rounded-sm bg-primary/20 border border-primary/40" />Κατά</span>
           <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 rounded-sm bg-orange-400/30 border border-orange-400/50" />Μετά</span>
+          {/* Το υπόμνημα του Session Overview ανέβηκε εδώ· η λεζάντα κάτω από τις λωρίδες
+              έτρωγε μια ακόμη σειρά χωρίς να προσθέτει πληροφορία. */}
+          {overviewLanes.length > 0 && (
+            <span className="flex items-center gap-1 border-l border-border/60 pl-2" title="Session Overview · 1η λωρίδα: IDLE / CALL · 2η λωρίδα: τεχνολογία / band">
+              <span className="inline-block w-3 h-2 rounded-sm" style={{ backgroundColor: "#4b5563" }} />IDLE
+              <span className="ml-1 inline-block w-3 h-2 rounded-sm" style={{ backgroundColor: "#dc2626" }} />CALL
+            </span>
+          )}
         </span>
       </div>
 
-      {/* ── Session Overview: ίδιο domain, ίδιο plot area ── */}
-      {overviewLanes.length > 0 && (
-        <div className="px-3 pt-1">
-          <div className="mb-0.5 flex flex-wrap items-center gap-2 text-[10px]">
-            <span className="text-muted-foreground">Session Overview</span>
-            <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 rounded-sm" style={{ backgroundColor: "#4b5563" }} />IDLE</span>
-            <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 rounded-sm" style={{ backgroundColor: "#dc2626" }} />CALL</span>
-            <span className="text-muted-foreground">· 2η λωρίδα: τεχνολογία / band</span>
-          </div>
-          <SessionOverview
-            times={overviewTimes}
-            lanes={overviewLanes}
-            callStart={callBounds?.start ?? null}
-            callEnd={callBounds?.end ?? null}
-            padLeft={padLeft}
-            padRight={padRight}
-            hoverTime={hoveredTime}
-            onHoverTime={onHoverTime}
-          />
-        </div>
-      )}
-
       {/* ── Καμπύλη ── */}
-      <div className="relative px-3 pb-2" style={{ height: plotHeight }}>
+      <div className="relative px-3 pb-1" style={{ height: plotHeight }}>
         <ResponsiveContainer width="100%" height="100%">
           <LineChart
             data={samples}
@@ -327,9 +373,7 @@ export function CallSignalChart({
               labelFormatter={(value: number) => clock(value, true)}
               formatter={(value: number | string, name: string) => [value != null ? Number(value).toFixed(1) : "—", name]}
             />
-            <Legend wrapperStyle={{ fontSize: 10 }} />
-
-            {showStrength && STRENGTH_SERIES.filter((series) => present.has(series.key)).map((series) => (
+            {visibleStrength.map((series) => (
               <Line
                 key={series.key}
                 yAxisId="strength"
@@ -352,21 +396,21 @@ export function CallSignalChart({
             {showBScanner && hasBestScanner && (
               <Line yAxisId="strength" type="monotone" dataKey="BestScannerStrength" stroke="hsl(280, 65%, 60%)" strokeDasharray={SCANNER_SERIES[1].dash} dot={false} activeDot={false} strokeWidth={2} connectNulls name="Best scanner" />
             )}
-            {showQualityAxis && qualityKeys.filter((key) => present.has(key)).map((key) => (
+            {visibleQuality.map((series) => (
               <Line
-                key={key}
+                key={series.key}
                 yAxisId={qualityAxisId}
                 type="monotone"
-                dataKey={key}
-                stroke="hsl(45, 93%, 58%)"
+                dataKey={series.key}
+                stroke={series.color}
                 strokeWidth={1.5}
                 connectNulls
-                name={key === "RxQual" ? "RxQual" : key === "NrRSRQ" ? "SS-RSRQ" : "RSRQ"}
+                name={series.name}
                 activeDot={false}
                 dot={(props: { index?: number; cx?: number; cy?: number }) =>
                   props.index === highlightIndex && props.cx != null && props.cy != null
-                    ? <circle key={key} cx={props.cx} cy={props.cy} r={4.5} fill="hsl(45, 93%, 58%)" stroke="white" strokeWidth={1.5} />
-                    : <g key={`${key}-${props.index}`} />}
+                    ? <circle key={series.key} cx={props.cx} cy={props.cy} r={4.5} fill={series.color} stroke="white" strokeWidth={1.5} />
+                    : <g key={`${series.key}-${props.index}`} />}
               />
             ))}
 
@@ -423,6 +467,24 @@ export function CallSignalChart({
           </TooltipProvider>
         )}
       </div>
+
+      {/* ── Session Overview: κάτω από την καμπύλη, στο ίδιο domain και plot area ── */}
+      {overviewLanes.length > 0 && (
+        <div className="px-3 pb-1.5" title="Session Overview · 1η λωρίδα: IDLE / CALL · 2η λωρίδα: τεχνολογία / band">
+          <SessionOverview
+            times={overviewTimes}
+            lanes={overviewLanes}
+            callStart={callBounds?.start ?? null}
+            callEnd={callBounds?.end ?? null}
+            padLeft={padLeft}
+            padRight={padRight}
+            hoverTime={hoveredTime}
+            onHoverTime={onHoverTime}
+            compact
+            showTicks={false}
+          />
+        </div>
+      )}
     </div>
   );
 }

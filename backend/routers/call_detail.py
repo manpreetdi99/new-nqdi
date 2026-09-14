@@ -747,6 +747,346 @@ def get_call_srvcc_detail(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/call_csfb_detail")
+def get_call_csfb_detail(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """CSFB (CS Fallback) events and A/B technology context for one paired call.
+
+    Το CSFB ανάλογο του /api/call_srvcc_detail: το UE είναι σε LTE, η κλήση δεν
+    μπορεί να γίνει VoLTE, οπότε το δίκτυο το ρίχνει σε 2G/3G (redirect ή
+    PS handover), η κλήση στήνεται εκεί και στο τέλος το UE γυρίζει σε LTE.
+
+    Το ResultsKPI είναι και εδώ η αυθεντική πηγή — μια ολόκληρη οικογένεια
+    "Voice(LTE CSFB)" KPIs, ένα ανά φάση της μετάβασης:
+
+      * 10181 -> Radio Redirect            (RRCConnectionRelease με redirect)
+      * 10180 -> Radio Fallback Delay      (redirect -> camp στο 2G/3G)
+      * 10182 -> Technology Change Delay   (συνολική αλλαγή τεχνολογίας)
+      * 10175 -> Telephony Fallback Delay  (ESR -> πρώτο CS μήνυμα)
+      * 10171 -> Telephony CS Fallback Delay
+      * 10178 -> Telephony Service         (ESR -> έτοιμη CS υπηρεσία)
+      * 10170 / 10184 -> Telephony / Telephony Service AB
+      * 30180 -> Telephony Return Delay    (επιστροφή σε LTE, κοινό με SRVCC)
+
+    ErrorCode 0 -> success· οτιδήποτε άλλο είναι αποτυχία με το μήνυμα να
+    διαβάζεται από το DmnError (108003 Timeout, 108005 End Trigger missing, ...)
+    αντί για hardcoded λίστα.
+
+    Προσοχή στο ποιες πλευρές μετράνε ως CSFB: τα 10171/30180 εμφανίζονται και σε
+    SRVCC σκέλη (το 30180 λέγεται κυριολεκτικά "CSFB/SRVCC") και το 10184 είναι
+    μέτρηση του ζευγαριού που γράφεται στο A ακόμη κι όταν έπεσε σε 2G μόνο το B.
+    Γι' αυτό μια πλευρά περνά ως CSFB μόνο αν έχει τουλάχιστον ένα από τα "core"
+    KPIs (10170/10175/10178/10180/10181/10182) — χωρίς αυτό εμφανίζονταν άδεια
+    CSFB events χωρίς target cell στην πλευρά που δεν έπεσε ποτέ σε 2G.
+
+    Δεν αρκεί το callmode της κλήσης για να ξέρεις αν υπάρχει CSFB: στα δεδομένα,
+    τα περισσότερα CSFB σκέλη κρέμονται από ζευγάρι που είναι περασμένο VoLTE/CS/
+    SRVCC (το ένα κινητό μιλάει VoLTE και το άλλο πέφτει σε 2G), γι' αυτό το
+    endpoint καλείται για κάθε κλήση και απλώς γυρίζει άδειο όταν δεν υπάρχει.
+    """
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        # ── 1. Μία σύνοψη ανά πλευρά: χρόνοι, διάρκειες φάσεων, source/target cell ──
+        cursor.execute("""
+            DECLARE @sid BIGINT = TRY_CONVERT(BIGINT, ?);
+
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE
+                        WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                        ELSE CA.SessionId
+                    END AS ASessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = @sid OR CA.SessionIdA = @sid
+                ORDER BY CASE WHEN CA.SessionId = @sid THEN 0 ELSE 1 END
+            ),
+            paired_sessions AS (
+                SELECT DISTINCT
+                    CA.SessionId,
+                    CASE
+                        WHEN CA.SessionId = PR.ASessionId THEN 'A'
+                        ELSE COALESCE(NULLIF(CA.Side, ''), 'B')
+                    END AS Side,
+                    CA.FileId
+                FROM CallAnalysis CA
+                CROSS JOIN pair_root PR
+                WHERE CA.SessionId = PR.ASessionId
+                   OR CA.SessionIdA = PR.ASessionId
+            ),
+            -- DISTINCT: το ResultsKPI κρατά το ίδιο KPI/MsgId δύο φορές σε αρκετές
+            -- κλήσεις, οπότε χωρίς αυτό κάθε φάση μετριόταν διπλή.
+            kpi AS (
+                SELECT DISTINCT
+                    PS.Side, PS.FileId, PS.SessionId,
+                    RK.KPIId, RK.MsgId, RK.StartTime, RK.EndTime, RK.ErrorCode,
+                    RK.Duration AS DurationMs
+                FROM paired_sessions PS
+                INNER JOIN ResultsKPI RK ON RK.SessionId = PS.SessionId
+                WHERE RK.KPIId IN (10170, 10171, 10175, 10178, 10180, 10181, 10182, 10184, 30180)
+            ),
+            anchors AS (
+                SELECT
+                    Side, FileId, SessionId,
+                    -- Το 30180 (επιστροφή σε LTE) είναι ΜΕΤΑ την κλήση, οπότε μένει
+                    -- έξω από τα όρια της ίδιας της πτώσης σε 2G/3G.
+                    MIN(CASE WHEN KPIId <> 30180 THEN StartTime END) AS FallbackStart,
+                    MAX(CASE WHEN KPIId <> 30180 THEN COALESCE(EndTime, StartTime) END) AS FallbackEnd,
+                    MAX(CASE WHEN KPIId = 10181 THEN COALESCE(EndTime, StartTime) END) AS RedirectTime,
+                    MIN(CASE WHEN KPIId = 30180 THEN StartTime END) AS ReturnStart,
+                    MAX(CASE WHEN KPIId = 30180 THEN COALESCE(EndTime, StartTime) END) AS ReturnEnd,
+                    MAX(CASE WHEN KPIId = 10181 THEN DurationMs END) AS RadioRedirectMs,
+                    MAX(CASE WHEN KPIId = 10180 THEN DurationMs END) AS RadioFallbackMs,
+                    MAX(CASE WHEN KPIId = 10182 THEN DurationMs END) AS TechChangeMs,
+                    MAX(CASE WHEN KPIId = 10175 THEN DurationMs END) AS TelephonyFallbackMs,
+                    MAX(CASE WHEN KPIId = 10171 THEN DurationMs END) AS CsFallbackDelayMs,
+                    MAX(CASE WHEN KPIId = 10178 THEN DurationMs END) AS TelephonyServiceMs,
+                    MAX(CASE WHEN KPIId = 30180 THEN DurationMs END) AS ReturnDelayMs,
+                    MAX(CASE WHEN KPIId = 10178 THEN ErrorCode END) AS ServiceErrorCode,
+                    MAX(CASE WHEN KPIId = 10175 THEN ErrorCode END) AS FallbackErrorCode,
+                    COUNT(CASE WHEN KPIId IN (10170, 10175, 10178, 10180, 10181, 10182) THEN 1 END) AS CoreKpis
+                FROM kpi
+                GROUP BY Side, FileId, SessionId
+            )
+            SELECT
+                A.Side,
+                A.SessionId,
+                A.FallbackStart,
+                A.FallbackEnd,
+                A.RedirectTime,
+                A.ReturnStart,
+                A.ReturnEnd,
+                A.RadioRedirectMs,
+                A.RadioFallbackMs,
+                A.TechChangeMs,
+                A.TelephonyFallbackMs,
+                A.CsFallbackDelayMs,
+                A.TelephonyServiceMs,
+                A.ReturnDelayMs,
+                COALESCE(A.ServiceErrorCode, A.FallbackErrorCode) AS ErrorCode,
+                ERR.msg AS ErrorMessage,
+                CASE
+                    WHEN COALESCE(A.ServiceErrorCode, A.FallbackErrorCode) = 0 THEN 'Success'
+                    WHEN COALESCE(A.ServiceErrorCode, A.FallbackErrorCode) IS NULL THEN 'Unknown'
+                    ELSE 'Fail'
+                END AS Status,
+                -- Πόσο έμεινε το UE χωρίς serving cell: από την αρχή του fallback μέχρι
+                -- να φανεί η πρώτη 2G/3G κυψέλη στο NetworkInfo.
+                DATEDIFF(MILLISECOND, A.FallbackStart, TGT.MsgTime) AS RadioGapMs,
+
+                SRC.MsgTime AS SourceTime,
+                SRC.Technology AS SourceTechnology,
+                SRC.RFBand AS SourceRFBand,
+                SRC.CGI AS SourceCGI,
+                SRC.CID AS SourceCellId,
+                SRC.LAC AS SourceLAC,
+                SRC.BCCH AS SourceEARFCN,
+                SRC.Operator AS SourceOperator,
+
+                TGT.MsgTime AS TargetTime,
+                TGT.Technology AS TargetTechnology,
+                TGT.RFBand AS TargetRFBand,
+                TGT.CGI AS TargetCGI,
+                TGT.CID AS TargetCellId,
+                TGT.LAC AS TargetLAC,
+                TGT.RAC AS TargetRAC,
+                TGT.BCCH AS TargetBCCH,
+                TGT.BSIC AS TargetBSIC,
+                TGT.Operator AS TargetOperator,
+
+                RET.MsgTime AS ReturnTime,
+                RET.Technology AS ReturnTechnology,
+                RET.CGI AS ReturnCGI,
+
+                LTE.FullDate AS SourceRadioTime,
+                LTE.EARFCN AS SourceRadioEARFCN,
+                LTE.PhyCellId AS SourcePCI,
+                LTE.CGI AS SourceRadioCGI,
+                ROUND(LTE.RSRP, 2) AS SourceRSRP,
+                ROUND(LTE.RSRQ, 2) AS SourceRSRQ,
+                ROUND(LTE.SINR, 2) AS SourceSINR,
+
+                GSM.FullDate AS TargetRadioTime,
+                GSM.band AS TargetRadioBand,
+                GSM.CGI AS TargetRadioCGI,
+                ROUND(GSM.RxLevSub, 2) AS TargetRxLev,
+                ROUND(GSM.RxQualSub, 2) AS TargetRxQual
+            FROM anchors A
+            LEFT JOIN DmnError ERR
+                   ON ERR.code = COALESCE(A.ServiceErrorCode, A.FallbackErrorCode)
+                  AND ERR.type = 0
+            OUTER APPLY (
+                SELECT TOP (1)
+                    NI.MsgTime, NI.Technology, NI.RFBand, NI.CGI, NI.CID,
+                    NI.LAC, NI.BCCH, NI.Operator
+                FROM NetworkInfo NI
+                WHERE NI.FileId = A.FileId
+                  AND NI.MsgTime <= A.FallbackStart
+                ORDER BY NI.MsgTime DESC
+            ) SRC
+            -- Target = η πρώτη 2G/3G κυψέλη μετά την αρχή του fallback. Το "πρώτο
+            -- NetworkInfo μετά το τέλος του KPI" (όπως στο SRVCC) δεν δουλεύει εδώ:
+            -- σε αποτυχημένα fallback το 10178 τελειώνει αφού το UE έχει ήδη γυρίσει
+            -- σε LTE, οπότε έδειχνε LTE ως "target".
+            OUTER APPLY (
+                SELECT TOP (1)
+                    NI.MsgTime, NI.Technology, NI.RFBand, NI.CGI, NI.CID,
+                    NI.LAC, NI.RAC, NI.BCCH, NI.BSIC, NI.Operator
+                FROM NetworkInfo NI
+                WHERE NI.FileId = A.FileId
+                  AND NI.MsgTime >= A.FallbackStart
+                  AND (NI.Technology LIKE 'GSM%' OR NI.Technology LIKE 'UMTS%' OR NI.Technology LIKE 'WCDMA%')
+                ORDER BY NI.MsgTime
+            ) TGT
+            OUTER APPLY (
+                SELECT TOP (1)
+                    NI.MsgTime, NI.Technology, NI.CGI
+                FROM NetworkInfo NI
+                WHERE NI.FileId = A.FileId
+                  AND A.ReturnStart IS NOT NULL
+                  AND NI.MsgTime >= A.ReturnStart
+                  AND (NI.Technology LIKE 'LTE%' OR NI.Technology LIKE 'NR%')
+                ORDER BY NI.MsgTime
+            ) RET
+            OUTER APPLY (
+                SELECT TOP (1)
+                    FR.FullDate, FR.EARFCN, FR.PhyCellId, FR.CGI, FR.RSRP, FR.RSRQ, FR.SINR
+                FROM FactLTERadio FR
+                WHERE FR.SessionId = A.SessionId
+                  AND FR.FullDate <= A.FallbackStart
+                ORDER BY FR.FullDate DESC
+            ) LTE
+            OUTER APPLY (
+                SELECT TOP (1)
+                    FG.FullDate, FG.band, FG.CGI, FG.RxLevSub, FG.RxQualSub
+                FROM FactGSMRadio FG
+                WHERE FG.SessionId = A.SessionId
+                  AND FG.FullDate >= A.FallbackStart
+                  AND (FG.RxLevSub IS NOT NULL OR FG.RxQualSub IS NOT NULL)
+                ORDER BY FG.FullDate
+            ) GSM
+            WHERE A.CoreKpis > 0
+            ORDER BY A.FallbackStart, A.Side;
+        """, (session_id,))
+        events = _rows(cursor)
+
+        # ── 2. Οι επιμέρους φάσεις, μία γραμμή ανά KPI, για τον πίνακα βημάτων ──
+        cursor.execute("""
+            DECLARE @sid BIGINT = TRY_CONVERT(BIGINT, ?);
+
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE
+                        WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                        ELSE CA.SessionId
+                    END AS ASessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = @sid OR CA.SessionIdA = @sid
+                ORDER BY CASE WHEN CA.SessionId = @sid THEN 0 ELSE 1 END
+            ),
+            paired_sessions AS (
+                SELECT DISTINCT
+                    CA.SessionId,
+                    CASE
+                        WHEN CA.SessionId = PR.ASessionId THEN 'A'
+                        ELSE COALESCE(NULLIF(CA.Side, ''), 'B')
+                    END AS Side
+                FROM CallAnalysis CA
+                CROSS JOIN pair_root PR
+                WHERE CA.SessionId = PR.ASessionId
+                   OR CA.SessionIdA = PR.ASessionId
+            ),
+            steps AS (
+                SELECT DISTINCT
+                    PS.Side, PS.SessionId, RK.KPIId, RK.MsgId,
+                    RK.StartTime, RK.EndTime, RK.ErrorCode, RK.Duration AS DurationMs
+                FROM paired_sessions PS
+                INNER JOIN ResultsKPI RK ON RK.SessionId = PS.SessionId
+                WHERE RK.KPIId IN (10170, 10171, 10175, 10178, 10180, 10181, 10182, 10184, 30180)
+            )
+            SELECT
+                S.Side,
+                S.SessionId,
+                S.KPIId,
+                S.MsgId,
+                CASE S.KPIId
+                    WHEN 10181 THEN 'Radio Redirect'
+                    WHEN 10180 THEN 'Radio Fallback Delay'
+                    WHEN 10182 THEN 'Technology Change Delay'
+                    WHEN 10175 THEN 'Telephony Fallback Delay'
+                    WHEN 10171 THEN 'Telephony CS Fallback Delay'
+                    WHEN 10178 THEN 'Telephony Service'
+                    WHEN 10170 THEN 'Telephony'
+                    WHEN 10184 THEN 'Telephony Service AB'
+                    WHEN 30180 THEN 'Telephony Return Delay'
+                    ELSE 'KPI ' + CAST(S.KPIId AS VARCHAR(10))
+                END AS StepName,
+                CASE WHEN S.KPIId = 30180 THEN 'return' ELSE 'fallback' END AS Phase,
+                S.StartTime,
+                S.EndTime,
+                S.DurationMs,
+                S.ErrorCode,
+                ERR.msg AS ErrorMessage,
+                CASE
+                    WHEN S.ErrorCode = 0 THEN 'Success'
+                    WHEN S.ErrorCode IS NULL THEN 'Unknown'
+                    ELSE 'Fail'
+                END AS Status
+            FROM steps S
+            LEFT JOIN DmnError ERR ON ERR.code = S.ErrorCode AND ERR.type = 0
+            ORDER BY S.Side, S.StartTime, S.KPIId;
+        """, (session_id,))
+        steps = _rows(cursor)
+
+        # ── 3. Ίδιο technology context με το SRVCC, για το ίδιο διάγραμμα ──
+        cursor.execute("""
+            DECLARE @sid BIGINT = TRY_CONVERT(BIGINT, ?);
+
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE
+                        WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                        ELSE CA.SessionId
+                    END AS ASessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = @sid OR CA.SessionIdA = @sid
+                ORDER BY CASE WHEN CA.SessionId = @sid THEN 0 ELSE 1 END
+            ),
+            paired_sessions AS (
+                SELECT DISTINCT
+                    CA.SessionId,
+                    CASE
+                        WHEN CA.SessionId = PR.ASessionId THEN 'A'
+                        ELSE COALESCE(NULLIF(CA.Side, ''), 'B')
+                    END AS Side
+                FROM CallAnalysis CA
+                CROSS JOIN pair_root PR
+                WHERE CA.SessionId = PR.ASessionId
+                   OR CA.SessionIdA = PR.ASessionId
+            )
+            SELECT
+                PS.Side,
+                T.MsgTime,
+                T.SessionId,
+                T.PrevTechnology,
+                T.CurrTechnology,
+                T.Duration,
+                T.Band
+            FROM paired_sessions PS
+            INNER JOIN Technology T ON T.SessionId = PS.SessionId
+            ORDER BY T.MsgTime, PS.Side;
+        """, (session_id,))
+        technology = _rows(cursor)
+
+        conn.close()
+        return {"events": events, "steps": steps, "technology": technology}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/voice_codec")
 def get_voice_codec(
     database: str = Query(..., min_length=1),

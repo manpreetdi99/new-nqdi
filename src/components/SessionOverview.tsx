@@ -49,10 +49,18 @@ interface SessionOverviewProps {
    */
   hoverTime?: number | null;
   onHoverTime?: (time: number | null) => void;
+  /** Χαμηλότερες λωρίδες και μικρότερα γράμματα, για όταν το overview είναι συνοδευτικό. */
+  compact?: boolean;
+  /**
+   * Η δική του χρονική ράγα. Όταν το overview κάθεται ακριβώς κάτω από τον X άξονα ενός
+   * chart με το ίδιο domain, οι δύο ράγες θα ήταν η μία δίπλα στην άλλη — εκεί περνάμε false.
+   */
+  showTicks?: boolean;
 }
 
 const TICK_COUNT = 8;
 const LANE_HEIGHT = 17;
+const COMPACT_LANE_HEIGHT = 13;
 
 function formatClock(ms: number, withMillis = false): string {
   return new Date(ms).toLocaleTimeString("el-GR", {
@@ -77,10 +85,13 @@ export function SessionOverview({
   callEnd,
   hoverTime,
   onHoverTime,
+  compact = false,
+  showTicks = true,
 }: SessionOverviewProps) {
   const [internalCursor, setInternalCursor] = useState<number | null>(null);
   const trackRef = useRef<HTMLDivElement>(null);
   const controlled = onHoverTime != null;
+  const laneHeight = compact ? COMPACT_LANE_HEIGHT : LANE_HEIGHT;
 
   // epoch ms → ποσοστό πλάτους. Binary search στο πλησιέστερο δείγμα και γραμμική
   // παρεμβολή ανάμεσα στα δύο γειτονικά index, ώστε να ταιριάζει με τον X άξονα του chart.
@@ -158,7 +169,7 @@ export function SessionOverview({
             <div
               key={lane.name}
               className="relative mb-[2px] overflow-hidden rounded-sm bg-muted/30"
-              style={{ height: LANE_HEIGHT }}
+              style={{ height: laneHeight }}
             >
               {lane.segments.map((seg, i) => {
                 const left = percentOf(seg.from);
@@ -168,7 +179,7 @@ export function SessionOverview({
                   <Tooltip key={`${lane.name}-${i}-${seg.from}`}>
                     <TooltipTrigger asChild>
                       <div
-                        className="absolute inset-y-0 flex items-center justify-center overflow-hidden border-r border-black/40 text-[9px] font-semibold leading-none text-white/95"
+                        className={`absolute inset-y-0 flex items-center justify-center overflow-hidden border-r border-black/40 font-semibold leading-none text-white/95 ${compact ? "text-[8px]" : "text-[9px]"}`}
                         style={{ left: `${left}%`, width: `${width}%`, backgroundColor: seg.color }}
                       >
                         <span className="truncate px-1">{seg.label}</span>
@@ -219,8 +230,8 @@ export function SessionOverview({
         )}
       </div>
 
-      {/* Χρονική ράγα */}
-      <div className="relative mt-[1px] h-[13px]">
+      {/* Χρονική ράγα — παραλείπεται όταν υπάρχει ήδη άξονας χρόνου δίπλα */}
+      {showTicks && <div className="relative mt-[1px] h-[13px]">
         {ticks.map((tick, i) => (
           <span key={`${tick.percent}-${i}`}>
             <span className="absolute top-0 h-[3px] w-px bg-border" style={{ left: `${tick.percent}%` }} />
@@ -235,7 +246,7 @@ export function SessionOverview({
             </span>
           </span>
         ))}
-      </div>
+      </div>}
     </div>
   );
 }

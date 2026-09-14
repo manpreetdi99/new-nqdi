@@ -74,6 +74,64 @@ describe("CallSignalChart", () => {
     expect(screen.queryByLabelText("Best scanner")).not.toBeInTheDocument();
   });
 
+  it("keeps the NR series off by default on a call filed as plain LTE", () => {
+    // Το EN-DC δίνει SS-RSRP/SS-RSRQ ακόμη και σε κλήση περασμένη ως σκέτο "LTE" στο
+    // Technology. Εκεί δεν είναι το ζητούμενο, οπότε ξεκινούν κλειστές — διαθέσιμες όμως.
+    // "GSM/LTE" είναι το Technology ενός SRVCC — ούτε εκεί αφορά το NR.
+    for (const technology of ["LTE", "GSM/LTE"]) {
+      const view = renderChart({
+        technology,
+        samples: lteSamples.map((sample, i) => ({ ...sample, NrRSRP: -92 - i, NrRSRQ: -11 - i / 10 })),
+      });
+
+      expect(screen.getByLabelText("RSRP")).toBeChecked();
+      expect(screen.getByLabelText("RSRQ")).toBeChecked();
+      for (const name of ["SS-RSRP", "SS-RSRQ"]) {
+        expect(screen.getByLabelText(name)).toBeEnabled();
+        expect(screen.getByLabelText(name)).not.toBeChecked();
+      }
+
+      // Κλειστές από προεπιλογή, όχι κλειδωμένες.
+      fireEvent.click(screen.getByLabelText("SS-RSRP"));
+      expect(screen.getByLabelText("SS-RSRP")).toBeChecked();
+      view.unmount();
+    }
+  });
+
+  it("starts the NR series on when the call itself touched 5G NR", () => {
+    for (const technology of ["LTE/5G NR", "5G NR"]) {
+      const view = renderChart({
+        technology,
+        samples: lteSamples.map((sample, i) => ({ ...sample, NrRSRP: -92 - i, NrRSRQ: -11 - i / 10 })),
+      });
+      expect(screen.getByLabelText("SS-RSRP")).toBeChecked();
+      expect(screen.getByLabelText("SS-RSRQ")).toBeChecked();
+      view.unmount();
+    }
+  });
+
+  it("toggles the NR series independently of the LTE ones in EN-DC", () => {
+    // EN-DC: το κινητό δίνει LTE RSRP/RSRQ ΚΑΙ NR SS-RSRP/SS-RSRQ στο ίδιο δείγμα — το
+    // καθένα πρέπει να σβήνει μόνο του, αλλιώς δεν ξεχωρίζει ποια καμπύλη είναι ποια.
+    renderChart({
+      technology: "LTE/5G NR",
+      samples: lteSamples.map((sample, i) => ({ ...sample, NrRSRP: -92 - i, NrRSRQ: -11 - i / 10 })),
+    });
+
+    for (const name of ["RSRP", "SS-RSRP", "RSRQ", "SS-RSRQ"]) {
+      expect(screen.getByLabelText(name)).toBeEnabled();
+      expect(screen.getByLabelText(name)).toBeChecked();
+    }
+
+    fireEvent.click(screen.getByLabelText("SS-RSRP"));
+    expect(screen.getByLabelText("SS-RSRP")).not.toBeChecked();
+    expect(screen.getByLabelText("RSRP")).toBeChecked();
+
+    fireEvent.click(screen.getByLabelText("RSRQ"));
+    expect(screen.getByLabelText("RSRQ")).not.toBeChecked();
+    expect(screen.getByLabelText("SS-RSRQ")).toBeChecked();
+  });
+
   it("offers the scanner overlay once scanner readings are present", () => {
     renderChart({ samples: lteSamples.map((s, i) => ({ ...s, ScannerStrength: -102 - i })) });
     expect(screen.getByLabelText("Scanner")).toBeEnabled();

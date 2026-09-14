@@ -114,7 +114,7 @@ function FilterChip({
       disabled={disabled}
       aria-pressed={active}
       onClick={onClick}
-      className={`px-2 py-0.5 rounded-full text-[10px] font-medium border transition-colors ${
+      className={`px-2 py-0.5 rounded-full text-[9px] font-medium border transition-colors ${
         disabled
           ? "border-border/40 text-muted-foreground/40 cursor-not-allowed"
           : active
@@ -277,7 +277,7 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
   if (!activeData || !activeData.callWindow) return fixedSide ? (
     <div className="min-w-0 rounded-lg border border-border bg-card p-3">
       <h4 className="text-sm font-semibold">{side}-side · L3 Signaling</h4>
-      <p className="mt-2 text-xs text-muted-foreground">Δεν υπάρχουν διαθέσιμα L3 δεδομένα για {side}-side.</p>
+      <p className="mt-2 text-[11px] text-muted-foreground">Δεν υπάρχουν διαθέσιμα L3 δεδομένα για {side}-side.</p>
     </div>
   ) : null;
 
@@ -291,13 +291,13 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
   return (
     <div className="min-w-0 bg-card border border-border rounded-lg overflow-hidden">
       {/* ── Header ── */}
-      <div className="flex items-center justify-between flex-wrap gap-2 px-3 py-2 border-b border-border bg-gradient-to-r from-primary/[0.07] to-transparent">
-        <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-          <Signal className="h-4 w-4 text-primary" />
+      <div className="flex items-center justify-between flex-wrap gap-x-2 gap-y-1 px-3 py-1 border-b border-border bg-gradient-to-r from-primary/[0.07] to-transparent">
+        <h3 className="text-[13px] font-semibold text-foreground flex items-center gap-1.5">
+          <Signal className="h-3.5 w-3.5 text-primary" />
           {fixedSide ? `${side}-side · L3 Signaling` : "L3 Signaling"}
-          <span className="text-[10px] font-normal text-muted-foreground">RRC / NAS / SIP</span>
+          <span className="text-[9px] font-normal text-muted-foreground">RRC / NAS / SIP</span>
           <span
-            className={`text-[10px] px-1.5 py-0.5 rounded font-semibold tracking-wide ${
+            className={`text-[9px] px-1.5 py-0.5 rounded font-semibold tracking-wide ${
               activeData.callWindow.callDir === "MO" ? "bg-primary/15 text-primary" : "bg-accent/15 text-accent"
             }`}
           >
@@ -307,7 +307,7 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
 
         <div className="flex items-center gap-2">
           {/* Φάσεις — ίδιο χρωματικό λεξιλόγιο με τα charts */}
-          <div className="flex items-center gap-1.5 text-[10px]">
+          <div className="flex items-center gap-1.5 text-[9px]">
             {(["before", "during", "after"] as const).map((phase) => {
               const count = activeData.summary.byPhase[phase];
               return count > 0 ? (
@@ -330,7 +330,7 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
                   type="button"
                   disabled={!enabled}
                   onClick={() => { if (enabled) { setSide(s); setExpanded(null); setPendingJump(null); } }}
-                  className={`px-2 py-1 text-[10px] font-medium ${s === "B" ? "border-l border-border" : ""} ${
+                  className={`px-2 py-1 text-[9px] font-medium ${s === "B" ? "border-l border-border" : ""} ${
                     side === s
                       ? "bg-primary text-primary-foreground"
                       : enabled
@@ -347,15 +347,15 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
       </div>
 
       {activeData.summary.total === 0 ? (
-        <p className="text-xs text-muted-foreground px-3 py-4 text-center">
+        <p className="text-[11px] text-muted-foreground px-3 py-4 text-center">
           Δεν βρέθηκαν L3 messages στο παράθυρο ±{activeData.summary.windowBeforeSec}s.
         </p>
       ) : (
         <>
           {/* ── Timeline strip — μια ματιά στο πού «σπάει» η κλήση ── */}
           {timeline && (
-            <div className="px-3 pt-2.5">
-              <div className="relative h-7 rounded bg-muted/40 border border-border/50 overflow-hidden">
+            <div className="px-3 pt-1.5">
+              <div className="relative h-5 rounded bg-muted/40 border border-border/50 overflow-hidden">
                 {/* call start (0s) */}
                 {timeline.zeroPct >= 0 && timeline.zeroPct <= 100 && (
                   <div
@@ -371,13 +371,13 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
                     onClick={() => jumpTo(t.i)}
                     title={`${fmtOffset(t.t)} · ${msgLabel(allRows[t.i])}`}
                     style={{ left: `${t.pct}%` }}
-                    className={`absolute top-1 bottom-1 w-[3px] -translate-x-1/2 rounded-sm transition-transform hover:scale-y-110 ${
+                    className={`absolute top-0.5 bottom-0.5 w-[3px] -translate-x-1/2 rounded-sm transition-transform hover:scale-y-110 ${
                       SEV_DOT_COLOR[t.sev]
                     } ${t.sev === "none" ? "opacity-40" : ""}`}
                   />
                 ))}
               </div>
-              <div className="flex justify-between text-[9px] text-muted-foreground font-mono mt-0.5">
+              <div className="flex justify-between text-[8px] text-muted-foreground font-mono mt-0.5">
                 <span>{fmtOffset(timeline.min)}</span>
                 <span className="text-primary">| 0s = έναρξη κλήσης</span>
                 <span>{fmtOffset(timeline.max)}</span>
@@ -386,7 +386,7 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
           )}
 
           {/* ── Toolbar φίλτρων ── */}
-          <div className="flex items-center flex-wrap gap-x-3 gap-y-2 px-3 py-2">
+          <div className="flex items-center flex-wrap gap-x-2.5 gap-y-1 px-3 py-1.5">
             <div className="relative">
               <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-muted-foreground" />
               <input
@@ -394,12 +394,12 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
                 aria-label={`Αναζήτηση μηνύματος ${side}-side`}
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Αναζήτηση μηνύματος…"
-                className="h-6 w-44 pl-6 pr-2 rounded border border-border bg-background text-[11px] outline-none focus:border-primary/60"
+                className="h-6 w-36 pl-6 pr-2 rounded border border-border bg-background text-[10px] outline-none focus:border-primary/60"
               />
             </div>
 
             <div className="flex items-center gap-1">
-              <span className="text-[10px] text-muted-foreground">Φάση</span>
+              <span className="text-[9px] text-muted-foreground">Φάση</span>
               {(["all", "before", "during", "after"] as const).map((p) => (
                 <FilterChip
                   key={p}
@@ -413,7 +413,7 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
             </div>
 
             <div className="flex items-center gap-1">
-              <span className="text-[10px] text-muted-foreground">Σοβαρότητα</span>
+              <span className="text-[9px] text-muted-foreground">Σοβαρότητα</span>
               <FilterChip active={sevFilter === "all"} onClick={() => setSevFilter("all")}>όλα</FilterChip>
               <FilterChip
                 active={sevFilter === "issues"}
@@ -448,17 +448,33 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
               </FilterChip>
             </div>
 
-            <label className="flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer select-none">
+            <label className="flex items-center gap-1 text-[9px] text-muted-foreground cursor-pointer select-none">
               <input
                 type="checkbox"
                 checked={hidePaging}
                 onChange={(e) => setHidePaging(e.target.checked)}
                 className="h-3 w-3 accent-[hsl(var(--primary))]"
               />
-              Απόκρυψη paging
+              Κρύψε paging
             </label>
 
-            <div className="ml-auto flex items-center gap-2 text-[10px] text-muted-foreground font-mono">
+            {/* Πλοήγηση ευρημάτων — ήταν δική της γραμμή από κάτω· ήρθε εδώ και τα βέλη
+                έγιναν εικονίδια (η επεξήγηση ζει στα title) ώστε να κερδίσουμε δύο σειρές. */}
+            <div
+              className="flex items-center gap-1 text-[9px]"
+              title="Η μετάβαση καθαρίζει τα φίλτρα ώστε να φαίνεται το context. Οι ενδείξεις χρειάζονται επιβεβαίωση."
+            >
+              <span className="text-muted-foreground">Ευρήματα <b className="font-mono text-foreground">{issues.length}</b></span>
+              <button type="button" disabled={!issues.length} onClick={() => jumpIssue(-1)} aria-label="Προηγούμενο εύρημα" title="Προηγούμενο εύρημα (DROP/FAIL / ABNORMAL)" className="inline-flex items-center rounded border border-border px-1 py-0.5 disabled:opacity-40 hover:bg-muted/60">
+                <ChevronLeft className="h-3 w-3" />
+              </button>
+              <button type="button" disabled={!issues.length} onClick={() => jumpIssue(1)} aria-label="Επόμενο εύρημα" title="Επόμενο εύρημα (DROP/FAIL / ABNORMAL)" className="inline-flex items-center rounded border border-border px-1 py-0.5 disabled:opacity-40 hover:bg-muted/60">
+                <ChevronRight className="h-3 w-3" />
+              </button>
+              <button type="button" disabled={endIndex < 0} onClick={() => jumpTo(timedRows[endIndex].i)} aria-label="Τέλος κλήσης" title="Μετάβαση στο τέλος της κλήσης" className="rounded border border-border px-1.5 py-0.5 disabled:opacity-40 hover:bg-muted/60">τέλος</button>
+            </div>
+
+            <div className="ml-auto flex items-center gap-2 text-[9px] text-muted-foreground font-mono">
               <span>
                 {visible.length} / {allRows.length}
               </span>
@@ -474,23 +490,24 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
             </div>
           </div>
 
-          <div className="flex flex-wrap items-center gap-2 px-3 pb-2 text-[10px]">
-            <span className="text-muted-foreground">Ύποπτα DROP/FAIL / ABNORMAL: {issues.length}</span>
-            <button type="button" disabled={!issues.length} onClick={() => jumpIssue(-1)} className="inline-flex items-center rounded border border-border px-2 py-1 disabled:opacity-40">
-              <ChevronLeft className="h-3 w-3" /> Προηγούμενο εύρημα
-            </button>
-            <button type="button" disabled={!issues.length} onClick={() => jumpIssue(1)} className="inline-flex items-center rounded border border-border px-2 py-1 disabled:opacity-40">
-              Επόμενο εύρημα <ChevronRight className="h-3 w-3" />
-            </button>
-            <button type="button" disabled={endIndex < 0} onClick={() => jumpTo(timedRows[endIndex].i)} className="rounded border border-border px-2 py-1 disabled:opacity-40">Τέλος κλήσης</button>
-            <span className="text-muted-foreground">Η μετάβαση καθαρίζει τα φίλτρα ώστε να φαίνεται το context. Οι ενδείξεις χρειάζονται επιβεβαίωση.</span>
-          </div>
-
           {/* ── Πίνακας μηνυμάτων ── */}
-          <div ref={scrollRef} onScroll={reportScroll} role="region" aria-label={`Μηνύματα L3 ${side}-side`} tabIndex={0} className="relative overflow-x-auto max-h-[380px] overflow-y-auto overscroll-contain border-t border-border/60">
-            <table className="w-full text-xs" aria-label={`L3 ${side}-side`}>
+          {/* Ύψος πίνακα δεμένο στον πραγματικό διαθέσιμο χώρο αντί για σταθερά 380px: από το
+              viewport αφαιρούνται το app header, το καρφιτσωμένο διάγραμμα (μεταβλητές που
+              δημοσιεύουν τα ίδια τα components) και τα ~176px του chrome του panel — έτσι το
+              διάγραμμα και οι δύο πίνακες χωρούν μαζί, χωρίς να ξεφεύγει ο πίνακας κάτω από
+              το fold ούτε να μένει αναξιοποίητος χώρος σε ψηλή οθόνη. */}
+          <div
+            ref={scrollRef}
+            onScroll={reportScroll}
+            role="region"
+            aria-label={`Μηνύματα L3 ${side}-side`}
+            tabIndex={0}
+            style={{ maxHeight: "clamp(200px, calc(100vh - var(--app-header-height, 57px) - var(--pinned-chart-height, 0px) - 176px), 620px)" }}
+            className="relative overflow-x-auto overflow-y-auto overscroll-contain border-t border-border/60"
+          >
+            <table className="w-full text-[11px]" aria-label={`L3 ${side}-side`}>
               <thead className="sticky top-0 bg-muted border-b border-border z-10">
-                <tr className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                <tr className="text-[9px] uppercase tracking-wide text-muted-foreground">
                   <th className="w-6" />
                   <th className="px-2 py-1.5 font-semibold text-left">Φάση</th>
                   <th className="px-2 py-1.5 font-semibold text-left">Ώρα</th>
@@ -545,18 +562,18 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
                           {fmtOffset(r.SecondsFromCallStart)}
                         </td>
                         <td className="px-2 py-1">
-                          <span className={`px-1.5 py-0.5 rounded border text-[9px] font-semibold ${techClass(r.Technology)}`}>
+                          <span className={`px-1.5 py-0.5 rounded border text-[8px] font-semibold ${techClass(r.Technology)}`}>
                             {r.Technology ?? "—"}
                           </span>
                         </td>
-                        <td className="px-2 py-1 font-mono text-[10px] text-muted-foreground">{r.Layer ?? "—"}</td>
+                        <td className="px-2 py-1 font-mono text-[9px] text-muted-foreground">{r.Layer ?? "—"}</td>
                         <td className="px-2 py-1 text-center">
                           {dir === "D" ? (
-                            <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-accent" title="Downlink">
+                            <span className="inline-flex items-center gap-0.5 text-[8px] font-semibold text-accent" title="Downlink">
                               <ArrowDown className="h-3 w-3" />DL
                             </span>
                           ) : dir === "U" ? (
-                            <span className="inline-flex items-center gap-0.5 text-[9px] font-semibold text-primary" title="Uplink">
+                            <span className="inline-flex items-center gap-0.5 text-[8px] font-semibold text-primary" title="Uplink">
                               <ArrowUp className="h-3 w-3" />UL
                             </span>
                           ) : (
@@ -568,10 +585,10 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
                         </td>
                         {hasPci && <td className="px-2 py-1 font-mono text-right">{r.PCI ?? "—"}</td>}
                         {hasArfcn && <td className="px-2 py-1 font-mono text-right">{r.ARFCN ?? "—"}</td>}
-                        {hasSip && <td className="px-2 py-1 font-mono text-[10px]">{r.SIPResponse ?? "—"}</td>}
+                        {hasSip && <td className="px-2 py-1 font-mono text-[9px]">{r.SIPResponse ?? "—"}</td>}
                         <td className="px-2 py-1 text-right whitespace-nowrap">
                           {SEV_LABEL[h.severity] ? (
-                            <span className={`px-1.5 py-0.5 rounded text-[9px] font-bold ${SEV_BADGE_CLASS[h.severity]}`}>
+                            <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold ${SEV_BADGE_CLASS[h.severity]}`}>
                               {SEV_LABEL[h.severity]}
                             </span>
                           ) : h.severity !== "none" ? (
@@ -587,11 +604,11 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
                           <td colSpan={colCount} className="px-2 pb-2 pt-0">
                             <div className="rounded border border-border/60 bg-muted/30 p-2 space-y-2">
                               {h.reason && (
-                                <p className={`text-[11px] font-medium ${SEV_BADGE_CLASS[h.severity]} bg-transparent px-0`}>
+                                <p className={`text-[10px] font-medium ${SEV_BADGE_CLASS[h.severity]} bg-transparent px-0`}>
                                   ⚠ {h.reason}
                                 </p>
                               )}
-                              <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1 text-[10px]">
+                              <div className="grid grid-cols-2 md:grid-cols-4 gap-x-4 gap-y-1 text-[9px]">
                                 {([
                                   ["MsgName", r.MsgName],
                                   ["SimpleMsgName", r.SimpleMsgName],
@@ -611,7 +628,7 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
                                   ))}
                               </div>
                               {r.Message && (
-                                <pre className="text-[10px] font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto text-foreground/90 border-t border-border/50 pt-2">
+                                <pre className="text-[9px] font-mono whitespace-pre-wrap break-all max-h-48 overflow-y-auto text-foreground/90 border-t border-border/50 pt-2">
                                   {r.Message}
                                 </pre>
                               )}
@@ -625,7 +642,7 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
 
                 {visible.length === 0 && (
                   <tr>
-                    <td colSpan={colCount + 1} className="px-2 py-6 text-center text-xs text-muted-foreground">
+                    <td colSpan={colCount + 1} className="px-2 py-6 text-center text-[11px] text-muted-foreground">
                       Κανένα μήνυμα δεν ταιριάζει με τα φίλτρα.
                     </td>
                   </tr>
@@ -649,15 +666,18 @@ export function L3SignalingPanel({ l3Data, l3DataBSide, asideLocation, onHoverTi
   const canSync = !!l3Data?.l3Messages.some((row) => row.MsgTime && Number.isFinite(Date.parse(row.MsgTime)))
     && !!l3DataBSide?.l3Messages.some((row) => row.MsgTime && Number.isFinite(Date.parse(row.MsgTime)));
   return (
-    <section className="space-y-2" aria-label="Σύγκριση L3 Signaling">
-      <div className="flex flex-wrap items-center gap-3 text-xs">
-        <label className="inline-flex items-center gap-2 cursor-pointer">
+    <section className="space-y-1" aria-label="Σύγκριση L3 Signaling">
+      {/* Μία λεπτή γραμμή ελέγχου — η επεξήγηση μπαίνει σε title όταν δεν χωρά */}
+      <div className="flex flex-wrap items-center gap-2 text-[10px]">
+        <label className="inline-flex items-center gap-1.5 cursor-pointer">
           <Switch checked={syncEnabled} disabled={!canSync} onCheckedChange={setSyncEnabled} aria-label="Συγχρονισμός scroll βάσει timestamp" />
-          Sync scroll βάσει timestamp {syncEnabled ? "ON" : "OFF"}
+          Sync scroll {syncEnabled ? "ON" : "OFF"}
         </label>
-        <span className="text-muted-foreground">{canSync ? "A-side ↔ B-side · πλησιέστερη ορατή ώρα · ανεξάρτητα φίλτρα" : "Ο συγχρονισμός απαιτεί μηνύματα με έγκυρη ώρα και στις δύο πλευρές."}</span>
+        <span className="min-w-0 truncate text-muted-foreground" title={canSync ? "A-side ↔ B-side · πλησιέστερη ορατή ώρα · ανεξάρτητα φίλτρα" : undefined}>
+          {canSync ? "A-side ↔ B-side · πλησιέστερη ορατή ώρα" : "Ο συγχρονισμός απαιτεί μηνύματα με έγκυρη ώρα και στις δύο πλευρές."}
+        </span>
       </div>
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-2">
         {(["A", "B"] as const).map((side) => (
           <SignalingPane key={side} fixedSide={side} l3Data={l3Data} l3DataBSide={l3DataBSide}
             syncTarget={syncEnabled && canSync ? anchor : null} onTimestamp={onTimestamp} onHoverTime={onHoverTime} />

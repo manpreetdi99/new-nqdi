@@ -1170,6 +1170,98 @@ export async function fetchCallSrvccDetail(
   return requestJson(`/api/call_srvcc_detail?${params.toString()}`);
 }
 
+/**
+ * CSFB (CS Fallback) — το ανάλογο του SrvccEventRow: μία γραμμή ανά πλευρά που
+ * όντως έπεσε από LTE σε 2G/3G για να στηθεί η κλήση. Οι διάρκειες ανά φάση
+ * έρχονται από τα "Voice(LTE CSFB)" KPIs (βλ. /api/call_csfb_detail).
+ */
+export interface CsfbEventRow {
+  Side: "A" | "B" | string | null;
+  SessionId: string | number | null;
+  /** Αρχή του fallback (Extended Service Request) και τέλος της τελευταίας φάσης. */
+  FallbackStart: string | null;
+  FallbackEnd: string | null;
+  /** Πότε έφυγε το RRCConnectionRelease με το redirect (KPI 10181). */
+  RedirectTime: string | null;
+  ReturnStart: string | null;
+  ReturnEnd: string | null;
+  RadioRedirectMs: number | null;
+  RadioFallbackMs: number | null;
+  TechChangeMs: number | null;
+  TelephonyFallbackMs: number | null;
+  CsFallbackDelayMs: number | null;
+  TelephonyServiceMs: number | null;
+  ReturnDelayMs: number | null;
+  ErrorCode: number | null;
+  ErrorMessage: string | null;
+  Status: "Success" | "Fail" | "Unknown" | string;
+  /** Από την αρχή του fallback μέχρι την πρώτη 2G/3G κυψέλη στο NetworkInfo. */
+  RadioGapMs: number | null;
+  SourceTime: string | null;
+  SourceTechnology: string | null;
+  SourceRFBand: string | number | null;
+  SourceCGI: string | null;
+  SourceCellId: string | number | null;
+  SourceLAC: string | number | null;
+  SourceEARFCN: string | number | null;
+  SourceOperator: string | null;
+  TargetTime: string | null;
+  TargetTechnology: string | null;
+  TargetRFBand: string | number | null;
+  TargetCGI: string | null;
+  TargetCellId: string | number | null;
+  TargetLAC: string | number | null;
+  TargetRAC: string | number | null;
+  TargetBCCH: string | number | null;
+  TargetBSIC: string | number | null;
+  TargetOperator: string | null;
+  ReturnTime: string | null;
+  ReturnTechnology: string | null;
+  ReturnCGI: string | null;
+  SourceRadioTime: string | null;
+  SourceRadioEARFCN: number | null;
+  SourcePCI: number | null;
+  SourceRadioCGI: string | null;
+  SourceRSRP: number | null;
+  SourceRSRQ: number | null;
+  SourceSINR: number | null;
+  TargetRadioTime: string | null;
+  TargetRadioBand: string | number | null;
+  TargetRadioCGI: string | null;
+  TargetRxLev: number | null;
+  TargetRxQual: number | null;
+}
+
+/** Μία φάση της μετάβασης — ένα KPI row, για τον πίνακα βημάτων. */
+export interface CsfbStepRow {
+  Side: "A" | "B" | string | null;
+  SessionId: string | number | null;
+  KPIId: number;
+  MsgId: number | null;
+  StepName: string;
+  Phase: "fallback" | "return" | string;
+  StartTime: string | null;
+  EndTime: string | null;
+  DurationMs: number | null;
+  ErrorCode: number | null;
+  ErrorMessage: string | null;
+  Status: "Success" | "Fail" | "Unknown" | string;
+}
+
+export interface CsfbDetailResponse {
+  events: CsfbEventRow[];
+  steps: CsfbStepRow[];
+  technology: SrvccTechnologyRow[];
+}
+
+export async function fetchCallCsfbDetail(
+  database: string,
+  session_id: string
+): Promise<CsfbDetailResponse> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/call_csfb_detail?${params.toString()}`);
+}
+
 export interface TechnologyTimelineRow {
   MsgTime: string | null;
   PrevTechnology: string | null;
