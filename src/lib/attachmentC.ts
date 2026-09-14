@@ -664,12 +664,22 @@ export const buildSrvccTable = (rows: SrvccRow[]): { byOperator: Map<string, Srv
 };
 
 /**
- * "Fake Event(s)" ανά operator — πλήθος AllCallsRow με isValid=0, σκοπισμένο στο ίδιο
- * mode (GSM ή FREE) βάσει ASideLocation, ίδιο pattern με resolveMode/resolveOperator
- * παντού αλλού εδώ. Ίδιο "session marked fake" κριτήριο με το "FAKE EVENT LIST"
- * reference query (Sessions.sessionType='CALL' AND Sessions.valid='0') — το isValid
- * του AllCallsRow ΕΙΝΑΙ ήδη το S.Valid εκείνου του query (βλ. /api/calls στο backend),
- * οπότε δεν χρειάζεται ξεχωριστό endpoint.
+ * "Fake Event(s)" ανά operator — πλήθος AllCallsRow με isValid=0 ΚΑΙ σχόλιο που αρχίζει
+ * από "fake" (case-insensitive), σκοπισμένο στο ίδιο mode (GSM ή FREE) βάσει ASideLocation,
+ * ίδιο pattern με resolveMode/resolveOperator παντού αλλού εδώ.
+ *
+ * ΓΙΑΤΙ όχι απλά isValid=0, ΟΥΤΕ isValid=0 + "έχει οποιοδήποτε σχόλιο" (2026-09-02,
+ * real-data check: 191 "fake" σε βάση με ΜΟΝΟ 1 πραγματικό fake session): Sessions.Valid=0
+ * από μόνο του ΔΕΝ σημαίνει "μαρκαρίστηκε fake εδώ" — πολλά sessions μπαίνουν Valid=0 από
+ * το ίδιο το import/collection pipeline (π.χ. αποτυχημένη λήψη, calibration run) πολύ πριν
+ * αγγίξει κανείς το comment box σε αυτή την εφαρμογή, και ένα session μπορεί να έχει ΟΠΟΙΟ-
+ * ΔΗΠΟΤΕ άσχετο σχόλιο (π.χ. "route ok") χωρίς να είναι fake. Το ΜΟΝΟ σημείο που η ίδια η
+ * εφαρμογή αποφασίζει "αυτό είναι fake" είναι το update_call_comment στο
+ * backend/routers/calls.py: SET Valid=0 ΜΟΝΟ όταν το σχόλιο αρχίζει από "fake"/"FAKE"
+ * (comment.lower().startswith("fake")) — ό,τι δεν αρχίζει έτσι παίρνει Valid=1. Άρα το
+ * σωστό κριτήριο ξαναδιαβάζει το ΙΔΙΟ startswith πάνω στο τρέχον comment (ήδη
+ * COALESCE(DWC.Comment, S.InvalidReason), βλ. AllCallsRow.comment / /api/calls στο
+ * backend) — όχι μόνο "υπάρχει κάποιο σχόλιο".
  */
 export const buildFakeEventTable = (
   rows: AllCallsRow[],
@@ -681,6 +691,7 @@ export const buildFakeEventTable = (
   for (const row of rows) {
     if (resolveMode(row.Location) !== mode) continue;
     if (row.isValid !== 0) continue;
+    if (!row.comment?.toLowerCase().startsWith("fake")) continue;
 
     const key = resolveOperator(row.Location).key;
     byOperator.set(key, (byOperator.get(key) ?? 0) + 1);

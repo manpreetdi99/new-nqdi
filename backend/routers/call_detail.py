@@ -154,21 +154,24 @@ def get_call_neighbors(
                 SELECT TOP (1)
                     CA.SessionId,
                     CA.FileId,
-                    CA.callStartTimeStamp
+                    COALESCE(S.startTime, SB.startTime) AS callStartTimeStamp
                 FROM CallAnalysis CA
                 INNER JOIN pair_root PR ON PR.SessionId = CA.SessionId
+                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 WHERE (CA.Side <> 'B' OR CA.Side IS NULL)
             ),
             visible_calls AS (
                 SELECT
                     CA.SessionId,
-                    CA.callStartTimeStamp
+                    COALESCE(S.startTime, SB.startTime) AS callStartTimeStamp
                 FROM CallAnalysis CA
                 INNER JOIN current_call CC ON CC.FileId = CA.FileId
                 LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 WHERE (CA.Side <> 'B' OR CA.Side IS NULL)
                   AND (S.Valid IN (0, 1) OR S.SessionId IS NULL)
-                  AND CA.callStartTimeStamp IS NOT NULL
+                  AND COALESCE(S.startTime, SB.startTime) IS NOT NULL
             )
             SELECT
                 (SELECT TOP (1) VC.SessionId

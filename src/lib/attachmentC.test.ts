@@ -1259,15 +1259,15 @@ describe("technology mix", () => {
     expect(gsm.total.srvcc).toBeNull();
   });
 
-  it("buildFakeEventTable counts isValid=0 rows per operator, scoped to GSM/FREE mode", () => {
+  it("buildFakeEventTable counts isValid=0 rows whose comment starts with 'fake' (case-insensitive) per operator, scoped to GSM/FREE mode", () => {
     const rows = [
-      call({ Location: "Cosmote GSM", isValid: 0 }),
-      call({ Location: "Cosmote GSM", isValid: 1 }),
-      call({ Location: "Cosmote Free A", isValid: 0 }),
-      call({ Location: "Vodafone Free A", isValid: 0 }),
-      call({ Location: "Vodafone Free A", isValid: 0 }),
+      call({ Location: "Cosmote GSM", isValid: 0, comment: "fake - wrong route" }),
+      call({ Location: "Cosmote GSM", isValid: 1, comment: "fake - wrong route" }),
+      call({ Location: "Cosmote Free A", isValid: 0, comment: "FAKE" }),
+      call({ Location: "Vodafone Free A", isValid: 0, comment: "fake" }),
+      call({ Location: "Vodafone Free A", isValid: 0, comment: "Fake - duplicate" }),
       // Valid rows and other-mode rows must not count.
-      call({ Location: "Nova Data A", isValid: 0 }),
+      call({ Location: "Nova Data A", isValid: 0, comment: "fake" }),
     ];
 
     const free = buildFakeEventTable(rows, "FREE");
@@ -1281,15 +1281,27 @@ describe("technology mix", () => {
     expect(gsm.total).toBe(1);
   });
 
+  it("buildFakeEventTable does NOT count isValid=0 rows with no comment, or with an unrelated comment (2026-09-02 real-data bug: isValid=0 rows exist for reasons unrelated to the 'fake' comment workflow, and a session can carry any unrelated comment — plain 'comment IS NOT NULL' massively over-counted, e.g. 191 vs. 1 real fake session in production)", () => {
+    const rows = [
+      call({ Location: "Cosmote Free A", isValid: 0, comment: null }),
+      call({ Location: "Cosmote Free A", isValid: 0, comment: "route ok, signal dropped near tunnel" }),
+      call({ Location: "Cosmote Free A", isValid: 0, comment: "fake" }),
+    ];
+
+    const free = buildFakeEventTable(rows, "FREE");
+    expect(free.byOperator.get("COSMOTE")).toBe(1);
+    expect(free.total).toBe(1);
+  });
+
   it("buildVoiceTable wires fakeEvents into BOTH GSM and FREE tables (unlike cellCount/srvcc)", () => {
     const validRows = [call({ Location: "Cosmote GSM" }), call({ Location: "Cosmote Free A" })];
     // Ξεχωριστό array, σαν το ΑΝΕΠΕΞΕΡΓΑΣΤΟ allCallsRows πριν το "Valid calls only" filter
     // του SummaryTab — περιέχει isValid=0 γραμμές που δεν είναι καν στο validRows.
     const rawRows = [
       ...validRows,
-      call({ Location: "Cosmote GSM", isValid: 0 }),
-      call({ Location: "Cosmote Free A", isValid: 0 }),
-      call({ Location: "Cosmote Free A", isValid: 0 }),
+      call({ Location: "Cosmote GSM", isValid: 0, comment: "fake" }),
+      call({ Location: "Cosmote Free A", isValid: 0, comment: "fake" }),
+      call({ Location: "Cosmote Free A", isValid: 0, comment: "fake - duplicate" }),
     ];
 
     const gsm = buildVoiceTable(validRows, "GSM", [], [], rawRows);
