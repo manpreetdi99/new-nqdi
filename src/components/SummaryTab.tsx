@@ -633,7 +633,7 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
   { label: "Call outcome mix", cell: (s) => ({ kind: "mix", stats: s }) },
   {
     label: "Codec Type Usage %",
-    hint: "FR AMR WB / AMR HR / AMR / EFR / FR / HR — βλ. CallCodecTypeUsageGSM.sql",
+    hint: "EVS / AMR UMTS / AMR FR / AMR HR / EFR / FR / HR / no codec rate / AMR WB / EVS WB — βλ. CallCodecTypeUsageGSM.sql",
     cell: (s) => ({ kind: "codecMix", mix: s.codecMix }),
   },
   {

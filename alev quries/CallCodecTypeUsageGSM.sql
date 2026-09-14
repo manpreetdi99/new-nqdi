@@ -1,5 +1,5 @@
 -- ==================================================CallCodecTypeUsageGSM=======================================================
--- Codec Type Usage % (GSM): FR AMR WB / AMR HR / AMR / EFR / FR / HR / no codec rate
+-- Codec Type Usage % (GSM): EVS / AMR UMTS / AMR FR / AMR HR / EFR / FR / HR / no codec rate / AMR WB / EVS WB / AMR
 -- Ίδιο session/technology φιλτράρισμα με το CallCodecRateDataGSM.sql (Attachment C, A-LEVEL).
 -- Το CodecType buckets εδώ πρέπει να μείνουν συγχρονισμένα με το bucketCodec() στο src/lib/attachmentC.ts.
 
@@ -35,7 +35,7 @@ WITH SessionCTE AS (
 ),
 
 -- Bucket κάθε test στον codec type του, με τα ίδια κανόνες με το bucketCodec()
--- (src/lib/attachmentC.ts): AMR+WB -> 'FR AMR WB', AMR+HR -> 'AMR HR', AMR -> 'AMR',
+-- (src/lib/attachmentC.ts): EVS/EVS WB and AMR variants are kept as separate buckets,
 -- *EFR* -> 'EFR', ξεκινάει με HR -> 'HR', ξεκινάει με FR -> 'FR', αλλιώς raw name,
 -- NULL/'-' -> 'no codec rate'.
 BucketedCTE AS (
@@ -57,7 +57,11 @@ BucketedCTE AS (
         SessionCTE.Technology,
         CASE
             WHEN vvct.CodecName IS NULL OR vvct.CodecName = '-' THEN 'no codec rate'
-            WHEN CHARINDEX('AMR', UPPER(vvct.CodecName)) > 0 AND CHARINDEX('WB', UPPER(vvct.CodecName)) > 0 THEN 'FR AMR WB'
+            WHEN CHARINDEX('EVS', UPPER(vvct.CodecName)) > 0 AND CHARINDEX('WB', UPPER(vvct.CodecName)) > 0 THEN 'EVS WB'
+            WHEN CHARINDEX('EVS', UPPER(vvct.CodecName)) > 0 THEN 'EVS'
+            WHEN CHARINDEX('AMR', UPPER(vvct.CodecName)) > 0 AND CHARINDEX('UMTS', UPPER(vvct.CodecName)) > 0 THEN 'AMR UMTS'
+            WHEN CHARINDEX('AMR', UPPER(vvct.CodecName)) > 0 AND CHARINDEX('WB', UPPER(vvct.CodecName)) > 0 THEN 'AMR WB'
+            WHEN CHARINDEX('AMR', UPPER(vvct.CodecName)) > 0 AND CHARINDEX('FR', UPPER(vvct.CodecName)) > 0 THEN 'AMR FR'
             WHEN CHARINDEX('AMR', UPPER(vvct.CodecName)) > 0 AND CHARINDEX('HR', UPPER(vvct.CodecName)) > 0 THEN 'AMR HR'
             WHEN CHARINDEX('AMR', UPPER(vvct.CodecName)) > 0 THEN 'AMR'
             WHEN CHARINDEX('EFR', UPPER(vvct.CodecName)) > 0 THEN 'EFR'
@@ -99,7 +103,7 @@ SELECT
     CodecType,
     SUM(TestDurationSec) AS TestDuration,
     COUNT(TestId) AS TestCount,
-    -- % των tests αυτού του codec type μέσα στο session (FR AMR WB / AMR HR / AMR / EFR / FR / HR / no codec rate αθροίζουν σε 100%)
+    -- % των tests αυτού του codec type μέσα στο session (όλα τα codec buckets αθροίζουν σε 100%)
     CAST(
         COUNT(TestId) * 100.0 /
         SUM(COUNT(TestId)) OVER (PARTITION BY FileID, SessionID)
@@ -128,12 +132,16 @@ ORDER BY
     FileID,
     SessionID,
     CASE CodecType
-        WHEN 'FR AMR WB' THEN 1
-        WHEN 'AMR HR' THEN 2
-        WHEN 'AMR' THEN 3
-        WHEN 'EFR' THEN 4
-        WHEN 'FR' THEN 5
-        WHEN 'HR' THEN 6
+        WHEN 'EVS' THEN 1
+        WHEN 'AMR UMTS' THEN 2
+        WHEN 'AMR FR' THEN 3
+        WHEN 'AMR HR' THEN 4
+        WHEN 'EFR' THEN 5
+        WHEN 'FR' THEN 6
+        WHEN 'HR' THEN 7
         WHEN 'no codec rate' THEN 8
+        WHEN 'AMR WB' THEN 9
+        WHEN 'EVS WB' THEN 10
+        WHEN 'AMR' THEN 11
         ELSE 7
     END;

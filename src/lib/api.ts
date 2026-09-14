@@ -141,7 +141,11 @@ export interface AllCallsRow {
    * ώστε το "Codec Type Usage %" να ζυγίζεται με πραγματικό όγκο tests, όχι με τον
    * ένα "dominant" codec ανά session.
    */
-  codecFrAmrWbCount?: number | null;
+  codecEvsCount?: number | null;
+  codecEvsWbCount?: number | null;
+  codecAmrUmtsCount?: number | null;
+  codecAmrFrCount?: number | null;
+  codecAmrWbCount?: number | null;
   codecAmrHrCount?: number | null;
   codecAmrCount?: number | null;
   codecEfrCount?: number | null;

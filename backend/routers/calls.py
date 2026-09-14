@@ -209,7 +209,11 @@ def list_calls(
                     WHEN CA.callStatus IN ('Completed', 'Dropped') AND CA.callmode IN ('CSFB', 'CS')
                     THEN VKPI.KpiCsDuration ELSE NULL
                 END AS csSetupTime,
-                CODEC.CodecFrAmrWbCount AS codecFrAmrWbCount,
+                CODEC.CodecEvsCount AS codecEvsCount,
+                CODEC.CodecEvsWbCount AS codecEvsWbCount,
+                CODEC.CodecAmrUmtsCount AS codecAmrUmtsCount,
+                CODEC.CodecAmrFrCount AS codecAmrFrCount,
+                CODEC.CodecAmrWbCount AS codecAmrWbCount,
                 CODEC.CodecAmrHrCount AS codecAmrHrCount,
                 CODEC.CodecAmrCount AS codecAmrCount,
                 CODEC.CodecEfrCount AS codecEfrCount,
@@ -284,13 +288,17 @@ def list_calls(
             -- Codec Type Usage % inputs for the session: per-test counts bucketed
             -- exactly like the A-LEVEL "CallCodecTypeUsageGSM.sql" reference query /
             -- bucketCodec() in attachmentC.ts (Testinfo.Valid=1, Appl % 10 <> 0,
-            -- direction-matched vVoiceCodecTest; AMR+WB -> FR AMR WB, AMR+HR -> AMR HR,
-            -- AMR -> AMR, *EFR* -> EFR, HR%/FR% -> HR/FR, unrecognized -> other,
+            -- direction-matched vVoiceCodecTest; EVS/EVS WB and AMR variants are kept
+            -- separate, then EFR/FR/HR, unrecognized -> other,
             -- NULL/'-' -> no codec rate). Returned as counts (not one dominant name) so
             -- the frontend can weight "Codec Type Usage %" by actual test volume.
             OUTER APPLY (
                 SELECT
-                    SUM(CASE WHEN Bucketed.CodecBucket = 'FR AMR WB' THEN Bucketed.Cnt ELSE 0 END) AS CodecFrAmrWbCount,
+                    SUM(CASE WHEN Bucketed.CodecBucket = 'EVS' THEN Bucketed.Cnt ELSE 0 END) AS CodecEvsCount,
+                    SUM(CASE WHEN Bucketed.CodecBucket = 'EVS WB' THEN Bucketed.Cnt ELSE 0 END) AS CodecEvsWbCount,
+                    SUM(CASE WHEN Bucketed.CodecBucket = 'AMR UMTS' THEN Bucketed.Cnt ELSE 0 END) AS CodecAmrUmtsCount,
+                    SUM(CASE WHEN Bucketed.CodecBucket = 'AMR FR' THEN Bucketed.Cnt ELSE 0 END) AS CodecAmrFrCount,
+                    SUM(CASE WHEN Bucketed.CodecBucket = 'AMR WB' THEN Bucketed.Cnt ELSE 0 END) AS CodecAmrWbCount,
                     SUM(CASE WHEN Bucketed.CodecBucket = 'AMR HR' THEN Bucketed.Cnt ELSE 0 END) AS CodecAmrHrCount,
                     SUM(CASE WHEN Bucketed.CodecBucket = 'AMR' THEN Bucketed.Cnt ELSE 0 END) AS CodecAmrCount,
                     SUM(CASE WHEN Bucketed.CodecBucket = 'EFR' THEN Bucketed.Cnt ELSE 0 END) AS CodecEfrCount,
@@ -302,7 +310,11 @@ def list_calls(
                     SELECT
                         CASE
                             WHEN VVCT.CodecName IS NULL OR VVCT.CodecName = '-' THEN 'no codec rate'
-                            WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('WB', UPPER(VVCT.CodecName)) > 0 THEN 'FR AMR WB'
+                            WHEN CHARINDEX('EVS', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('WB', UPPER(VVCT.CodecName)) > 0 THEN 'EVS WB'
+                            WHEN CHARINDEX('EVS', UPPER(VVCT.CodecName)) > 0 THEN 'EVS'
+                            WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('UMTS', UPPER(VVCT.CodecName)) > 0 THEN 'AMR UMTS'
+                            WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('WB', UPPER(VVCT.CodecName)) > 0 THEN 'AMR WB'
+                            WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('FR', UPPER(VVCT.CodecName)) > 0 THEN 'AMR FR'
                             WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('HR', UPPER(VVCT.CodecName)) > 0 THEN 'AMR HR'
                             WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 THEN 'AMR'
                             WHEN CHARINDEX('EFR', UPPER(VVCT.CodecName)) > 0 THEN 'EFR'
@@ -320,7 +332,11 @@ def list_calls(
                     WHERE TI2.SessionID = CA.SessionId AND TI2.Valid = 1
                     GROUP BY CASE
                         WHEN VVCT.CodecName IS NULL OR VVCT.CodecName = '-' THEN 'no codec rate'
-                        WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('WB', UPPER(VVCT.CodecName)) > 0 THEN 'FR AMR WB'
+                        WHEN CHARINDEX('EVS', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('WB', UPPER(VVCT.CodecName)) > 0 THEN 'EVS WB'
+                        WHEN CHARINDEX('EVS', UPPER(VVCT.CodecName)) > 0 THEN 'EVS'
+                        WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('UMTS', UPPER(VVCT.CodecName)) > 0 THEN 'AMR UMTS'
+                        WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('WB', UPPER(VVCT.CodecName)) > 0 THEN 'AMR WB'
+                        WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('FR', UPPER(VVCT.CodecName)) > 0 THEN 'AMR FR'
                         WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 AND CHARINDEX('HR', UPPER(VVCT.CodecName)) > 0 THEN 'AMR HR'
                         WHEN CHARINDEX('AMR', UPPER(VVCT.CodecName)) > 0 THEN 'AMR'
                         WHEN CHARINDEX('EFR', UPPER(VVCT.CodecName)) > 0 THEN 'EFR'

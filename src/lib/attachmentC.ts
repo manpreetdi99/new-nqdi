@@ -365,7 +365,11 @@ export const EMPTY_VOICE_STATS: VoiceStats = {
 
 /** Σταθερά χρώματα για τα γνωστά codec buckets· ό,τι άλλο παίρνει χρώμα από FALLBACK_CODEC_COLORS. */
 const CODEC_BUCKET_COLORS: Record<string, string> = {
-  "FR AMR WB": "#2f8f6e",
+  EVS: "#ef6c8f",
+  "EVS WB": "#c94f78",
+  "AMR UMTS": "#2f8f6e",
+  "AMR FR": "#3d9b78",
+  "AMR WB": "#287b62",
   "AMR HR": "#d99a2b",
   AMR: "#3568c9",
   EFR: "#8a4fd1",
@@ -377,7 +381,7 @@ const CODEC_BUCKET_COLORS: Record<string, string> = {
 const FALLBACK_CODEC_COLORS = ["#767a8a", "#9a8f6a", "#6a9a8f", "#9a6a8f", "#8f9a6a"];
 
 /** Σειρά εμφάνισης των γνωστών buckets· ό,τι δεν αναγνωρίζεται πάει αλφαβητικά στο τέλος. */
-const CODEC_BUCKET_ORDER = ["FR AMR WB", "AMR HR", "AMR", "EFR", "FR", "HR", "no codec rate"];
+const CODEC_BUCKET_ORDER = ["EVS", "AMR UMTS", "AMR FR", "AMR HR", "EFR", "FR", "HR", "no codec rate", "AMR WB", "EVS WB", "AMR"];
 
 export interface CodecShare {
   bucket: string;
@@ -392,7 +396,11 @@ export interface CodecShare {
  * που έχει το A-LEVEL "CallCodecTypeUsageGSM.sql" reference query.
  */
 const CODEC_COUNT_FIELDS: { bucket: string; field: keyof AllCallsRow }[] = [
-  { bucket: "FR AMR WB", field: "codecFrAmrWbCount" },
+  { bucket: "EVS", field: "codecEvsCount" },
+  { bucket: "EVS WB", field: "codecEvsWbCount" },
+  { bucket: "AMR UMTS", field: "codecAmrUmtsCount" },
+  { bucket: "AMR FR", field: "codecAmrFrCount" },
+  { bucket: "AMR WB", field: "codecAmrWbCount" },
   { bucket: "AMR HR", field: "codecAmrHrCount" },
   { bucket: "AMR", field: "codecAmrCount" },
   { bucket: "EFR", field: "codecEfrCount" },
@@ -419,7 +427,7 @@ export const buildCodecMix = (rows: AllCallsRow[]): CodecShare[] => {
   }
 
   const total = Array.from(counts.values()).reduce((sum, count) => sum + count, 0);
-  const known = CODEC_BUCKET_ORDER.filter((bucket) => counts.has(bucket));
+  const known = total > 0 ? CODEC_BUCKET_ORDER : [];
   const rest = Array.from(counts.keys())
     .filter((bucket) => !CODEC_BUCKET_ORDER.includes(bucket))
     .sort((a, b) => a.localeCompare(b));
