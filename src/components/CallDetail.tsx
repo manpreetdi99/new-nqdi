@@ -181,7 +181,10 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   const [bSideLteValues, setBSideLteValues] = useState<any[]>([]);
   // Which side (A/B) and which network (LTE/GSM, only relevant for SRVCC calls) the UI currently shows
   const [selectedLteSide, setSelectedLteSide] = useState<"A" | "B">("A");
-  const [srvccNetwork, setSrvccNetwork] = useState<"LTE" | "GSM">("LTE");
+  // Σε CS κλήση η φωνή ζει στο 2G, οπότε ξεκινάμε από εκεί· οπουδήποτε αλλού το LTE είναι
+  // το σκέλος που κρατάει την κλήση. Και στις δύο περιπτώσεις η επιλογή υποχωρεί αν η
+  // πλευρά που βλέπεις δεν έχει τέτοιες μετρήσεις (βλ. activeLeg).
+  const [srvccNetwork, setSrvccNetwork] = useState<"LTE" | "GSM">(call.callMode === "CS" ? "GSM" : "LTE");
 
   // Serving cell (eNB/EARFCN/PCI) for A-side and B-side, plus the nearest physical antenna
   // matched by PCI + shortest distance to the call's average GPS position (Cosmote Free only)
@@ -247,10 +250,31 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // Ένα CSFB σκέλος μπορεί να κρύβεται σε κλήση περασμένη VoLTE/CS (μόνο το ένα κινητό
   // έπεσε σε 2G). Μόλις το μάθουμε, το GSM σκέλος πρέπει να φαίνεται κι εκεί — αλλά χωρίς
   // να ξαναγυρίσει πίσω στο αρχικό fetch, γι' αυτό είναι ξεχωριστή μεταβλητή.
-  const showsGsmLeg = isDualTechCall || (csfbDetail?.events.length ?? 0) > 0;
-  // True when the active table/chart should show GSM columns instead of LTE:
-  // CS calls are always GSM; SRVCC/CSFB calls let the user toggle between LTE and GSM.
-  const isGSMMode = call.callMode === "CS" || (showsGsmLeg && srvccNetwork === "GSM");
+  // Μια CS κλήση ΔΕΝ σημαίνει «μόνο 2G»: σε CSFB τα κινητά κάθονται σε LTE και κατεβαίνουν
+  // στο 2G μόνο για τη φωνή, οπότε το technology έρχεται "GSM/LTE" και το ένα από τα δύο
+  // κινητά μπορεί να μην πάτησε ποτέ 2G. Χωρίς τα LTE δεδομένα η πλευρά εκείνη έβγαινε
+  // εντελώς άδεια, ενώ η άλλη έδειχνε μόνο τα λίγα δευτερόλεπτα του GSM σκέλους.
+  const csTouchesLte = call.callMode === "CS" && /LTE|4G|NR|5G/i.test(call.technology ?? "");
+  const wantsLteLeg = call.callMode !== "CS" || csTouchesLte;
+  const showsGsmLeg = isDualTechCall || call.callMode === "CS" || (csfbDetail?.events.length ?? 0) > 0;
+  // Ποιο σκέλος δείχνουν πίνακες/διάγραμμα. Ο χρήστης διαλέγει (srvccNetwork), αλλά η
+  // επιλογή του ΔΕΝ μπορεί να σταθεί σε πλευρά που δεν έχει τέτοιες μετρήσεις: σε CSFB
+  // συχνά μόνο το ένα κινητό κατεβαίνει σε 2G, οπότε εκεί πέφτουμε στο άλλο σκέλος αντί
+  // να δείξουμε άδειο πίνακα. Το ίδιο το isGSMMode υπολογίζεται πιο κάτω, μόλις είναι
+  // γνωστά τα δεδομένα κάθε πλευράς (βλ. sideHasGsm / sideHasLte).
+  const sideHasGsm = (selectedLteSide === "B" ? bSideGsmValues : gsmValues).length > 0
+    || (selectedLteSide === "B" ? gsmContextSignalBSide : gsmContextSignal).length > 0;
+  const sideHasLte = (selectedLteSide === "B" ? bSideLteValues : radioValues).length > 0
+    || (selectedLteSide === "B" ? contextSignalBSide : contextSignal).length > 0;
+  const activeLeg: "LTE" | "GSM" = srvccNetwork === "GSM"
+    ? (sideHasGsm || !sideHasLte ? "GSM" : "LTE")
+    : (sideHasLte || !sideHasGsm ? "LTE" : "GSM");
+  const isGSMMode = showsGsmLeg && activeLeg === "GSM";
+  // Ο επιλογέας σκέλους βγαίνει μόνο όταν υπάρχουν όντως ΚΑΙ τα δύο σκέλη (σε οποιαδήποτε
+  // πλευρά)· σε καθαρά 2G κλήση θα ήταν ένα κουμπί που δεν αλλάζει τίποτα.
+  const canToggleLeg = showsGsmLeg
+    && gsmValues.length + bSideGsmValues.length > 0
+    && radioValues.length + bSideLteValues.length > 0;
   // True for calls that touch the 5G NR core (VoNR, VoNR/VoLTE, VoNR/VoLTE N26 HO): these need
   // FactNR5GRadio on top of (or instead of) the LTE anchor, since the LTE-only query can come back
   // empty/partial once the UE is camped on NR. Rows from both are merged chronologically below.
@@ -362,26 +386,26 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       setIsLoadingRadio(true);
       try {
         const [lteRes, gsmRes, nr5gRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, pagingBSideRes, deviceRes, lteMeasCompRes, lteScannerCompRes, gsmCtxSignalRes, ctxSignalBSideRes, gsmCtxSignalBSideRes, callKpiTileRes, handoverInfoRes, technologyTimelineRes, voiceCodecRes, markersRes, srvccDetailRes, csfbDetailRes] = await Promise.allSettled([
-          call.callMode !== "CS" ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
+          wantsLteLeg ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           wantsGsmLeg ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
           isVoNRMode ? fetchNr5gValues(database, call.callId) : Promise.resolve({ nr5gValues: [] }),
           fetchMosValues(database, call.callId),
           fetchKpiValues(database, call.callId),
           fetchCallSideComparison(database, call.callId),
-          call.callMode === "CS" ? Promise.resolve({ lteValuesBSide: [] }) : fetchLteValuesBSide(database, call.callId),
+          wantsLteLeg ? fetchLteValuesBSide(database, call.callId) : Promise.resolve({ lteValuesBSide: [] }),
           fetchTracelogValues(database, call.callId),
           wantsGsmLeg ? fetchGsmValuesBSide(database, call.callId) : Promise.resolve({ gsmValuesBSide: [] }),
-          call.callMode !== "CS" ? fetchCellInfo(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
-          call.callMode !== "CS" ? fetchCellInfoBSide(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
+          wantsLteLeg ? fetchCellInfo(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
+          wantsLteLeg ? fetchCellInfoBSide(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
           fetchCallContextSignal(database, call.callId, contextWindowSec),
           fetchCallContextTechnology(database, call.callId, contextWindowSec),
           fetchL3Messages(database, call.callId, { side: "A" }),
           fetchL3Messages(database, call.callId, { side: "B" }),
           fetchCallDeviceInfo(database, call.callId),
-          call.callMode !== "CS" ? fetchLteMeasurementComparison(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
-          call.callMode !== "CS" ? fetchLteScannerMeasurement(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
+          wantsLteLeg ? fetchLteMeasurementComparison(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
+          wantsLteLeg ? fetchLteScannerMeasurement(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
           wantsGsmLeg ? fetchGsmContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
-          call.callMode !== "CS" ? fetchCallContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+          wantsLteLeg ? fetchCallContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
           wantsGsmLeg ? fetchGsmContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
           fetchCallKpiTile(database, call.callId),
           fetchHandoverInfo(database, call.callId),
@@ -589,7 +613,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       setCommentText(call.comment || "");
       setIsEditingComment(false);
       setSelectedLteSide("A");
-      setSrvccNetwork("LTE");
+      setSrvccNetwork(call.callMode === "CS" ? "GSM" : "LTE");
       setLteMeasComp(null);
       setLteScannerComp(null);
       setScannerRawA([]);
@@ -610,7 +634,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       setSelectedLteSide("A");
       loadRadio();
     }
-  }, [database, call.callId, call.callMode, wantsGsmLeg]);
+  }, [database, call.callId, call.callMode, wantsGsmLeg, wantsLteLeg]);
 
   // Ένα CSFB σκέλος μπορεί να κρέμεται από κλήση περασμένη VoLTE/CS: το ένα κινητό μιλάει
   // VoLTE και το άλλο πέφτει σε 2G για να απαντήσει. Σε αυτές τις κλήσεις το GSM σκέλος δεν
@@ -647,7 +671,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // "LTE Scanner" chart line / "RSRP Scanner" column can cross-check the UE's own measurements
   // against the scanner — same per-segment approach as the GSM fetch below.
   useEffect(() => {
-    if (call.callMode === "CS" || radioValues.length === 0 || !database) {
+    if (!wantsLteLeg || radioValues.length === 0 || !database) {
       setScannerRawA([]);
       return;
     }
@@ -672,11 +696,11 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       if (!cancelled) setScannerRawA(results.flat());
     });
     return () => { cancelled = true; };
-  }, [database, call.callMode, radioValues]);
+  }, [database, wantsLteLeg, radioValues]);
 
   // Same as above, but for the B-side (second leg) of the call.
   useEffect(() => {
-    if (call.callMode === "CS" || bSideLteValues.length === 0 || !database) {
+    if (!wantsLteLeg || bSideLteValues.length === 0 || !database) {
       setScannerRawB([]);
       return;
     }
@@ -701,7 +725,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       if (!cancelled) setScannerRawB(results.flat());
     });
     return () => { cancelled = true; };
-  }, [database, call.callMode, bSideLteValues]);
+  }, [database, wantsLteLeg, bSideLteValues]);
 
   // For GSM-capable calls, fetch A-side scanner samples per contiguous serving-cell segment so the
   // "RxLev Scanner" column can cross-check the UE's own measurements against the scanner.
@@ -779,7 +803,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // "Best LTE Scanner" — same idea as the GSM one above, but for FactLTEScanner
   // (DmnIdTopN_RSRP_Operator = 1), independent of the UE's serving EARFCN/PCI.
   useEffect(() => {
-    if (call.callMode === "CS" || !database || !call.callId) {
+    if (!wantsLteLeg || !database || !call.callId) {
       setLteScannerBestRaw([]);
       return;
     }
@@ -788,7 +812,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       .then(rows => { if (!cancelled) setLteScannerBestRaw(rows); })
       .catch(() => { if (!cancelled) setLteScannerBestRaw([]); });
     return () => { cancelled = true; };
-  }, [database, call.callMode, call.callId]);
+  }, [database, wantsLteLeg, call.callId]);
 
   // Re-fetches only the "before/during/after" context-signal data when the user changes the
   // time window (10/30/60/120s) — cheaper than re-running the full loadRadio() load above.
@@ -796,10 +820,10 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     if (!call.callId || !database) return;
     async function reloadContext() {
       const [ctxRes, ctxTechRes, gsmCtxRes, ctxBRes, gsmCtxBRes, nrCtxRes, nrCtxBRes, techPerRes, techPerBRes] = await Promise.allSettled([
-        call.callMode !== "CS" ? fetchCallContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+        wantsLteLeg ? fetchCallContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
         fetchCallContextTechnology(database, call.callId, contextWindowSec),
         wantsGsmLeg ? fetchGsmContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
-        call.callMode !== "CS" ? fetchCallContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+        wantsLteLeg ? fetchCallContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
         wantsGsmLeg ? fetchGsmContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
         // Όχι μόνο σε VoNR: μια VoLTE κλήση με EN-DC (5G NSA πάνω σε LTE anchor) έχει κι αυτή
         // γραμμές στο FactNR5GRadio, και το NR σκέλος της αξίζει να φαίνεται στην καμπύλη.
@@ -820,7 +844,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       if (techPerBRes.status === "fulfilled") setTechPeriodsBSide((techPerBRes.value as { periods?: TechnologyPeriodRow[] }).periods || []);
     }
     reloadContext();
-  }, [contextWindowSec, call.callId, database, call.callMode, wantsGsmLeg]);
+  }, [contextWindowSec, call.callId, database, call.callMode, wantsGsmLeg, wantsLteLeg]);
 
   // Cosmote Free only: match the A-side serving cell (by PCI) to the physical antenna closest
   // to the call's average GPS position, since PCI alone can be reused by several sites.
@@ -878,10 +902,9 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // Single source of truth for "which measurement rows are currently on screen", combining the
   // callMode/srvccNetwork (LTE vs GSM) and selectedLteSide (A vs B) selections into one array.
   const activeRadioValues = useMemo(() => {
-    if (call.callMode === "CS") return selectedLteSide === "B" ? bSideGsmValues : gsmValues;
-    if (showsGsmLeg && srvccNetwork === "GSM") return selectedLteSide === "B" ? bSideGsmValues : gsmValues;
+    if (isGSMMode) return selectedLteSide === "B" ? bSideGsmValues : gsmValues;
     return selectedLteSide === "B" ? bSideLteValues : radioValues;
-  }, [call.callMode, showsGsmLeg, selectedLteSide, radioValues, bSideLteValues, gsmValues, bSideGsmValues, srvccNetwork]);
+  }, [isGSMMode, selectedLteSide, radioValues, bSideLteValues, gsmValues, bSideGsmValues]);
 
   // Formats a numeric KPI value with fixed decimals + unit suffix, or an em-dash when missing
   const fmtMetric = (v: number | null | undefined, decimals: number, suffix: string) =>
@@ -1050,14 +1073,20 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       };
     });
 
-    // Σε SRVCC/CSFB το GSM σκέλος δεν είναι το «ενεργό» activeRadioValues όταν βλέπουμε LTE,
-    // αλλά πρέπει να σχεδιαστεί ώστε το σκαλοπάτι της μετάβασης να φαίνεται στην ίδια καμπύλη.
+    // Σε SRVCC/CSFB/CS το άλλο σκέλος δεν είναι το «ενεργό» activeRadioValues, αλλά πρέπει να
+    // σχεδιαστεί κι αυτό ώστε το σκαλοπάτι της μετάβασης να φαίνεται στην ίδια καμπύλη — και
+    // προς τις δύο κατευθύνσεις: σε CSFB το GSM σκέλος κρατάει λίγα δευτερόλεπτα από μια κλήση
+    // που το υπόλοιπο διάστημα τρέχει σε LTE, οπότε χωρίς το LTE σκέλος η καμπύλη ήταν σχεδόν άδεια.
     const gsmLeg = (showsGsmLeg && !isGSMMode
       ? (selectedLteSide === "B" ? bSideGsmValues : gsmValues)
       : []
     ).map((val: any) => ({ t: toTimestamp(val.MsgTime), RxLev: toNumber(val.RxLevSub), RxQual: toNumber(val.RxQualSub) }));
+    const lteLeg = (showsGsmLeg && isGSMMode
+      ? (selectedLteSide === "B" ? bSideLteValues : radioValues)
+      : []
+    ).map((val: any) => ({ t: toTimestamp(val.MsgTime), RSRP: toNumber(val.RSRP), RSRQ: toNumber(val.RSRQ) }));
 
-    const merged = mergeSignalSamples([lteContext, gsmContext, nrContext, gsmLeg, callRows]);
+    const merged = mergeSignalSamples([lteContext, gsmContext, nrContext, gsmLeg, lteLeg, callRows]);
 
     // Το scanner έρχεται από άλλο query και σπάνια πέφτει στο ίδιο ακριβώς ms, οπότε
     // προσαρτάται στο πλησιέστερο δείγμα αντί για exact-match merge.
@@ -1067,7 +1096,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
         ? { ScannerStrength: toNumber(gsmScannerMatched[idx]?.RxLev), BestScannerStrength: toNumber(gsmScannerBestMatched[idx]?.RxLev) }
         : { ScannerStrength: toNumber(lteScannerMatched[idx]?.RSRP), BestScannerStrength: toNumber(lteScannerBestMatched[idx]?.RSRP) },
     })));
-  }, [activeRadioValues, isGSMMode, showsGsmLeg, selectedLteSide, gsmValues, bSideGsmValues,
+  }, [activeRadioValues, isGSMMode, showsGsmLeg, selectedLteSide, gsmValues, bSideGsmValues, radioValues, bSideLteValues,
       contextSignal, contextSignalBSide, gsmContextSignal, gsmContextSignalBSide, nr5gContextSignal, nr5gContextSignalBSide,
       gsmScannerMatched, gsmScannerBestMatched, lteScannerMatched, lteScannerBestMatched]);
 
@@ -2684,19 +2713,19 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
               {/* SRVCC calls start on LTE and hand over to GSM mid-call, CSFB calls drop to GSM to
                   set the call up — this toggle lets the user inspect either leg's measurements,
                   and resets side back to "A" on switch */}
-              {showsGsmLeg && (
+              {canToggleLeg && (
                 <div className="inline-flex rounded-md border border-border overflow-hidden mr-2">
                   <button
                     type="button"
                     onClick={() => { setSrvccNetwork("LTE"); setSelectedLteSide("A"); }}
-                    className={`px-2 py-1 text-xs ${srvccNetwork === "LTE" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
+                    className={`px-2 py-1 text-xs ${activeLeg === "LTE" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
                   >
                     LTE
                   </button>
                   <button
                     type="button"
                     onClick={() => { setSrvccNetwork("GSM"); setSelectedLteSide("A"); }}
-                    className={`px-2 py-1 text-xs border-l border-border ${srvccNetwork === "GSM" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
+                    className={`px-2 py-1 text-xs border-l border-border ${activeLeg === "GSM" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
                   >
                     GSM
                   </button>
