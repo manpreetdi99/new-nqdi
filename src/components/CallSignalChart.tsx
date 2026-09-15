@@ -57,6 +57,13 @@ interface CallSignalChartProps {
   /** Κοινός cursor: το timestamp κάτω από το ποντίκι, από οπουδήποτε στη σελίδα. */
   hoveredTime: number | null;
   onHoverTime: (time: number | null) => void;
+  /**
+   * Η ώρα του cursor ήρθε από ΑΛΛΗ πλευρά απ' ό,τι δείχνει η καμπύλη (π.χ. κυλάς τον
+   * πίνακα L3 του B-side ενώ το διάγραμμα δείχνει A-side). Το σημείο εξακολουθεί να
+   * δείχνει την ίδια στιγμή στον απόλυτο χρόνο, αλλά ΔΕΝ είναι μέτρηση του ίδιου κινητού:
+   * οι κουκκίδες και η γραμμή σβήνουν, ώστε το έντονο σημάδι να σημαίνει πάντα A→A / B→B.
+   */
+  hoverFromOtherSide?: boolean;
   /** Καρφιτσωμένο στην κορυφή κατά το scroll (το sticky wrapper είναι του γονέα). */
   pinned: boolean;
   onPinnedChange: (pinned: boolean) => void;
@@ -109,7 +116,7 @@ function clock(ms: number, withMillis = false): string {
 
 export function CallSignalChart({
   network, technology, samples, domain, callBounds, overviewTimes, overviewLanes, events,
-  hoveredTime, onHoverTime, pinned, onPinnedChange, controls, subtitle,
+  hoveredTime, onHoverTime, hoverFromOtherSide = false, pinned, onPinnedChange, controls, subtitle,
 }: CallSignalChartProps) {
   // Κάθε σειρά (RSRP / SS-RSRP / RSRQ / SS-RSRQ …) έχει δικό της checkbox. Κρατάμε ΜΟΝΟ
   // όσες πείραξε ρητά ο χρήστης· οι υπόλοιπες ακολουθούν την προεπιλογή, ώστε μια σειρά
@@ -386,7 +393,7 @@ export function CallSignalChart({
                 activeDot={false}
                 dot={(props: { index?: number; cx?: number; cy?: number }) =>
                   props.index === highlightIndex && props.cx != null && props.cy != null
-                    ? <circle key={series.key} cx={props.cx} cy={props.cy} r={4.5} fill={series.color} stroke="white" strokeWidth={1.5} />
+                    ? <circle key={series.key} cx={props.cx} cy={props.cy} r={hoverFromOtherSide ? 3.5 : 4.5} fill={series.color} stroke="white" strokeWidth={1.5} opacity={hoverFromOtherSide ? 0.35 : 1} />
                     : <g key={`${series.key}-${props.index}`} />}
               />
             ))}
@@ -409,7 +416,7 @@ export function CallSignalChart({
                 activeDot={false}
                 dot={(props: { index?: number; cx?: number; cy?: number }) =>
                   props.index === highlightIndex && props.cx != null && props.cy != null
-                    ? <circle key={series.key} cx={props.cx} cy={props.cy} r={4.5} fill={series.color} stroke="white" strokeWidth={1.5} />
+                    ? <circle key={series.key} cx={props.cx} cy={props.cy} r={hoverFromOtherSide ? 3.5 : 4.5} fill={series.color} stroke="white" strokeWidth={1.5} opacity={hoverFromOtherSide ? 0.35 : 1} />
                     : <g key={`${series.key}-${props.index}`} />}
               />
             ))}
@@ -421,6 +428,8 @@ export function CallSignalChart({
                 yAxisId={showStrengthAxis ? "strength" : qualityAxisId}
                 stroke="hsl(180, 90%, 55%)"
                 strokeWidth={2}
+                strokeOpacity={hoverFromOtherSide ? 0.35 : 1}
+                strokeDasharray={hoverFromOtherSide ? "3 3" : undefined}
               />
             )}
           </LineChart>

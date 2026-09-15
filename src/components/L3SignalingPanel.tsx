@@ -33,8 +33,12 @@ interface L3SignalingPanelProps {
    * Κοινός cursor με το διάγραμμα σήματος: περνώντας το ποντίκι πάνω από ένα μήνυμα L3
    * δείχνει την ώρα του πάνω στην καμπύλη, ώστε να βλέπεις αμέσως τι έκανε το σήμα
    * τη στιγμή που στάλθηκε το μήνυμα.
+   *
+   * Το `side` λέει από ΠΟΙΟ κινητό ήρθε η ώρα: στο split view ο πίνακας του B-side
+   * δείχνει πάνω σε καμπύλη που μπορεί να είναι του A-side, οπότε ο παραλήπτης μπορεί
+   * να σβήσει τον cursor όταν οι πλευρές δεν ταιριάζουν.
    */
-  onHoverTime?: (time: number | null) => void;
+  onHoverTime?: (time: number | null, side?: Side) => void;
 }
 
 type Side = "A" | "B";
@@ -533,8 +537,8 @@ function SignalingPane({ l3Data, l3DataBSide, fixedSide, syncTarget, onTimestamp
                         ref={(element) => { if (element) rowRefs.current.set(i, element); else rowRefs.current.delete(i); }}
                         data-message-index={i}
                         onClick={() => setExpanded(isOpen ? null : i)}
-                        onMouseEnter={() => onHoverTime?.(Number.isFinite(timestamp) ? timestamp : null)}
-                        onMouseLeave={() => onHoverTime?.(null)}
+                        onMouseEnter={() => onHoverTime?.(Number.isFinite(timestamp) ? timestamp : null, side)}
+                        onMouseLeave={() => onHoverTime?.(null, side)}
                         title={h.reason || undefined}
                         className={`border-b border-border/40 cursor-pointer transition-colors hover:bg-muted/50 ${
                           SEV_ROW_CLASS[h.severity]

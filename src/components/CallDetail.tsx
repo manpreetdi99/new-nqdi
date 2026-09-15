@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback } from "react";
 import { motion } from "framer-motion";
 import {
   ArrowLeft, Signal, Activity, Gauge, ArrowDown, ArrowUp,
@@ -273,7 +273,16 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // Ένας κοινός cursor για ΟΛΗ τη σελίδα: το absolute timestamp (epoch ms) κάτω από το
   // ποντίκι, από όποιον πίνακα/λωρίδα/ταμπέλα κι αν προέρχεται. Το διάγραμμα δείχνει εκεί
   // την κάθετη γραμμή και οι πίνακες φωτίζουν τη γραμμή τους — και προς τις δύο κατευθύνσεις.
-  const [hoveredTime, setHoveredTime] = useState<number | null>(null);
+  const [hoveredTime, setHoveredTimeValue] = useState<number | null>(null);
+  // Από ποια πλευρά ήρθε η ώρα του cursor. null = από τα στοιχεία της πλευράς που δείχνει
+  // ήδη η σελίδα (πίνακες/λωρίδες/χάρτης), οπότε το σημάδι στο διάγραμμα είναι ακριβώς η
+  // ίδια μέτρηση. Στο split L3 view ο πίνακας του B-side δίνει "B" ενώ η καμπύλη μπορεί να
+  // είναι A-side: εκεί η ώρα ταιριάζει, η μέτρηση όχι.
+  const [hoveredSide, setHoveredSide] = useState<"A" | "B" | null>(null);
+  const setHoveredTime = useCallback((time: number | null, side?: "A" | "B" | null) => {
+    setHoveredTimeValue(time);
+    setHoveredSide(time == null ? null : side ?? null);
+  }, []);
   // Καρφιτσωμένο διάγραμμα: μένει ορατό στην κορυφή όσο κυλάς τους πίνακες από κάτω.
   const [chartPinned, setChartPinned] = useState(true);
   // Όσο είναι καρφιτσωμένο, το ύψος του δημοσιεύεται ως CSS variable (ίδιο μοτίβο με το
@@ -1088,6 +1097,16 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
 
   // Important L3/SIP/NAS events are projected onto the nearest radio sample, producing the
   // vertical event lines and stacked labels seen in drive-test tools. Repeated low-value
+  /**
+   * MO / MT της πλευράς που δείχνει το διάγραμμα. Η κατεύθυνση είναι ιδιότητα του
+   * ΚΑΘΕ κινητού ξεχωριστά — σε mobile-to-mobile τεστ το ένα καλεί (MO) και το άλλο
+   * δέχεται (MT) — οπότε ακολουθεί τον επιλογέα A/B μαζί με τις καμπύλες.
+   */
+  const activeCallDir = useMemo<string | null>(() => {
+    const dir = (selectedLteSide === "B" ? l3DataBSide : l3Data)?.callWindow?.callDir;
+    return typeof dir === "string" && dir.trim() !== "" ? dir.trim().toUpperCase() : null;
+  }, [selectedLteSide, l3Data, l3DataBSide]);
+
   // messages (especially Paging) are rate-limited so the RSRP/RxLev trace remains readable.
   const signalEvents = useMemo<SignalEvent[]>(() => {
     if (!unifiedDomain) return [];
@@ -2456,9 +2475,26 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
           events={signalEvents}
           hoveredTime={hoveredTime}
           onHoverTime={setHoveredTime}
+          hoverFromOtherSide={hoveredSide != null && hoveredSide !== selectedLteSide}
           pinned={chartPinned}
           onPinnedChange={setChartPinned}
-          subtitle={`±${contextWindowSec}s γύρω από την κλήση · ${unifiedSamples.length} δείγματα · ${selectedLteSide}-side`}
+          subtitle={
+            <>
+              ±{contextWindowSec}s γύρω από την κλήση · {unifiedSamples.length} δείγματα · {selectedLteSide}-side
+              {activeCallDir && (
+                <span
+                  className={`ml-1.5 px-1.5 py-0.5 rounded text-[12px] font-bold tracking-wide ${
+                    activeCallDir === "MO" ? "bg-primary/15 text-primary" : "bg-accent/15 text-accent"
+                  }`}
+                  title={activeCallDir === "MO"
+                    ? "Mobile Originated · από αυτό το κινητό ξεκίνησε η κλήση"
+                    : "Mobile Terminated · αυτό το κινητό δέχθηκε την κλήση"}
+                >
+                  {activeCallDir}
+                </span>
+              )}
+            </>
+          }
           controls={
             <>
               {/* Μέγεθος παραθύρου — αλλάζοντάς το ξαναφορτώνει το context (reloadContext effect) */}
@@ -2719,11 +2755,11 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                     <tr>
                       <th className="px-1 py-1 font-semibold text-left">BCCH</th>
                       <th className="px-1 py-1 font-semibold text-left">Band</th>
-                      <th className="px-1 py-1 font-semibold text-primary">RxLev</th>
+                      <th className="px-1 py-1 font-semibold text-primary">RxLevSub</th>
                       {gsmScannerMatched.length > 0 && (
                         <th className="px-1 py-1 font-semibold text-cyan-400/80">RxLev Scanner</th>
                       )}
-                      <th className="px-1 py-1 font-semibold">RxQual</th>
+                      <th className="px-1 py-1 font-semibold">RxQualSub</th>
                       {gsmScannerMatched.length > 0 && (
                         <th className="px-1 py-1 font-semibold text-cyan-400/80">BSIC</th>
                       )}
