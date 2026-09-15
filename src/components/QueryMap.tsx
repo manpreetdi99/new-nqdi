@@ -1,9 +1,15 @@
-import { useState, useMemo, useEffect, useRef, useCallback } from "react";
-import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from "react-leaflet";
+import { useState, useMemo, useEffect, useRef, useCallback, memo } from "react";
+import { MapContainer, TileLayer, CircleMarker, Tooltip, Pane, useMap } from "react-leaflet";
 import type { CircleMarkerProps } from "react-leaflet";
 import { createElementObject, createPathComponent, extendContext, updateCircle } from "@react-leaflet/core";
-import { CircleMarker as LeafletCircleMarker } from "leaflet";
-import type { CircleMarker as LeafletCircleMarkerType } from "leaflet";
+import { CircleMarker as LeafletCircleMarker, Tooltip as LeafletTooltipClass } from "leaflet";
+import type {
+  CircleMarker as LeafletCircleMarkerType,
+  PathOptions,
+  Map as LeafletMap,
+  LeafletEventHandlerFnMap,
+  LeafletEvent as LeafletLeafletEvent,
+} from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
   Play,
@@ -18,7 +24,21 @@ import {
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { runBenchmarkApi, fetchCollectionNames, fetchLocations } from "@/lib/api";
+import { useUrlStringState } from "@/hooks/use-url-state";
 import type { CellValue } from "@/types/benchmark";
+import {
+  COLOR_SCHEMES,
+  BUBBLE_TIERS,
+  colorForValue,
+  bucketKeyForValue,
+  bubbleColor,
+  bubbleTierLabel,
+  computeBucketCounters,
+  buildDynamicPciCategories,
+  type ColorScheme,
+  type CategoryScheme,
+} from "@/lib/mapColorSchemes";
+import { TEMPLATES, type MapMode } from "@/lib/queryMapTemplates";
 
 // ── Greek city coordinates (for bubble/aggregate mode) ────────────────────────
 const CITY_COORDS: Record<string, [number, number]> = {
@@ -52,336 +72,6 @@ const CITY_COORDS: Record<string, [number, number]> = {
   Zakynthos: [37.7902, 20.8954],
 };
 
-// ── Color schemes (ported from Python panel_data.py / panel_free.py / panel_gsm.py) ─
-type RangeBucket = { min: number; max: number; color: string; label: string };
-type CategoryEntry = { value: string; color: string };
-
-interface RangeScheme {
-  type: "range";
-  label: string;
-  suggestCol: string;
-  buckets: RangeBucket[];
-}
-interface CategoryScheme {
-  type: "category";
-  label: string;
-  suggestCol: string;
-  categories: CategoryEntry[];
-  defaultColor: string;
-}
-type ColorScheme = RangeScheme | CategoryScheme;
-
-const COLOR_SCHEMES: Record<string, ColorScheme> = {
-  rsrp_data: {
-    type: "range",
-    label: "RSRP – DATA panel (dBm)",
-    suggestCol: "rsrp",
-    buckets: [
-      { min: -50, max: -30, color: "#3E0480", label: "-50 to -30" },
-      { min: -65, max: -50, color: "#7F00D3", label: "-65 to -50" },
-      { min: -75, max: -65, color: "#7E3D3E", label: "-75 to -65" },
-      { min: -85, max: -75, color: "#FE0707", label: "-85 to -75" },
-      { min: -95, max: -85, color: "#0808FE", label: "-95 to -85" },
-      { min: -105, max: -95, color: "#B1FEFC", label: "-105 to -95" },
-      { min: -120, max: -105, color: "#14FE14", label: "-120 to -105" },
-      { min: -160, max: -120, color: "#FEFE25", label: "-160 to -120" },
-    ],
-  },
-  rsrp_free: {
-    type: "range",
-    label: "RSRP – FREE panel (dBm)",
-    suggestCol: "rsrp",
-    buckets: [
-      { min: -50, max: -30, color: "#035E03", label: "-50 to -30" },
-      { min: -65, max: -50, color: "#00ff00", label: "-65 to -50" },
-      { min: -75, max: -65, color: "#99ff00", label: "-75 to -65" },
-      { min: -85, max: -75, color: "#00ffff", label: "-85 to -75" },
-      { min: -95, max: -85, color: "#ffff00", label: "-95 to -85" },
-      { min: -105, max: -95, color: "#ff9900", label: "-105 to -95" },
-      { min: -120, max: -105, color: "#ff0000", label: "-120 to -105" },
-      { min: -150, max: -120, color: "#800000", label: "-150 to -120" },
-    ],
-  },
-  dl_throughput: {
-    type: "range",
-    label: "DL Throughput (kbps)",
-    suggestCol: "DLThrpt",
-    buckets: [
-      { min: 350000, max: 1000000, color: "#3F007D", label: "350.000–1.000.000" },
-      { min: 100000, max: 350000,  color: "#7A0A00", label: "100.000–350.000" },
-      { min: 50000,  max: 100000,  color: "#FF0000", label: "50.000–100.000" },
-      { min: 20000,  max: 50000,   color: "#FF8A00", label: "20.000–50.000" },
-      { min: 5000,   max: 20000,   color: "#0076FF", label: "5.000–20.000" },
-      { min: 350,    max: 5000,    color: "#00EEFF", label: "350–5.000" },
-      { min: 0,      max: 350,     color: "#00FF00", label: "0–350" },
-    ],
-  },
-  ul_throughput: {
-    type: "range",
-    label: "UL Throughput (kbps)",
-    suggestCol: "ULThrpt",
-    buckets: [
-      { min: 150000, max: 500000, color: "#3F007D", label: "150.000–500.000" },
-      { min: 30000,  max: 150000, color: "#7A0A00", label: "30.000–150.000" },
-      { min: 15000,  max: 30000,  color: "#FF0000", label: "15.000–30.000" },
-      { min: 5000,   max: 15000,  color: "#FF8A00", label: "5.000–15.000" },
-      { min: 350,    max: 5000,   color: "#0076FF", label: "350–5.000" },
-      { min: 0,      max: 350,    color: "#00FF00", label: "0–350" },
-    ],
-  },
-  rxlevsub_gsm: {
-    type: "range",
-    label: "RxLevSub – GSM (dBm)",
-    suggestCol: "RxLevSub",
-    buckets: [
-      { min: -69,  max: 0,    color: "#5e0000", label: "-69 to 0" },
-      { min: -72,  max: -69,  color: "#ff0000", label: "-72 to -69" },
-      { min: -82,  max: -72,  color: "#ff8000", label: "-82 to -72" },
-      { min: -90,  max: -82,  color: "#0000ff", label: "-90 to -82" },
-      { min: -100, max: -90,  color: "#00ffff", label: "-100 to -90" },
-      { min: -140, max: -100, color: "#00ff00", label: "-140 to -100" },
-    ],
-  },
-  rxqualsub_gsm: {
-    type: "range",
-    label: "RxQualSub – GSM (0–7)",
-    suggestCol: "RxQualSub",
-    buckets: [
-      { min: 0, max: 1, color: "#00ff00",  label: "0 (best)" },
-      { min: 1, max: 2, color: "#80ff00",  label: "1" },
-      { min: 2, max: 3, color: "#ffff00",  label: "2" },
-      { min: 3, max: 4, color: "#ffcc00",  label: "3" },
-      { min: 4, max: 5, color: "#ff8000",  label: "4" },
-      { min: 5, max: 6, color: "#ff4000",  label: "5" },
-      { min: 6, max: 7, color: "#ff0000",  label: "6" },
-      { min: 7, max: 8, color: "#800000",  label: "7 (worst)" },
-    ],
-  },
-  mos_lq: {
-    type: "range",
-    label: "MOS / LQ (1–5)",
-    suggestCol: "LQ",
-    buckets: [
-      { min: 4.0, max: 5.1, color: "#00ff00",  label: "4.0 – 5.0 (Excellent)" },
-      { min: 3.6, max: 4.0, color: "#80ff00",  label: "3.6 – 4.0 (Good)" },
-      { min: 3.1, max: 3.6, color: "#ffff00",  label: "3.1 – 3.6 (Fair)" },
-      { min: 2.6, max: 3.1, color: "#ff8000",  label: "2.6 – 3.1 (Poor)" },
-      { min: 1.0, max: 2.6, color: "#ff0000",  label: "1.0 – 2.6 (Bad)" },
-    ],
-  },
-  call_status: {
-    type: "category",
-    label: "Call Status",
-    suggestCol: "callStatus",
-    categories: [
-      { value: "Completed",      color: "#00ff00" },
-      { value: "Failed",         color: "#ff8000" },
-      { value: "System Release", color: "#d400ff" },
-      { value: "Dropped",        color: "#ff0000" },
-    ],
-    defaultColor: "#808080",
-  },
-  http_transfer: {
-    type: "range",
-    label: "HTTP Transfer / 10MB (kbps)",
-    suggestCol: "throughput",
-    buckets: [
-      { min: 350000, max: 1000000, color: "#3F007D", label: "350.000–1.000.000" },
-      { min: 100000, max: 350000,  color: "#6F0300", label: "100.000–350.000" },
-      { min: 50000,  max: 100000,  color: "#FF0000", label: "50.000–100.000" },
-      { min: 20000,  max: 50000,   color: "#FF7A00", label: "20.000–50.000" },
-      { min: 5000,   max: 20000,   color: "#0072FF", label: "5.000–20.000" },
-      { min: 350,    max: 5000,    color: "#00EDFF", label: "350–5.000" },
-      { min: 0,      max: 350,     color: "#39FF00", label: "0–350" },
-    ],
-  },
-  technology_free: {
-    type: "category",
-    label: "Technology – FREE / GSM",
-    suggestCol: "technology",
-    categories: [
-      { value: "GSM 900",       color: "#00ffff" },
-      { value: "GSM 1800",      color: "#0000ff" },
-      { value: "LTE E-UTRA 1",  color: "#800000" },
-      { value: "LTE E-UTRA 3",  color: "#008000" },
-      { value: "LTE E-UTRA 20", color: "#ff9900" },
-      { value: "LTE E-UTRA 28", color: "#800080" },
-      { value: "LTE E-UTRA 7",  color: "#ff0000" },
-      { value: "LTE E-UTRA 8",  color: "#A24FFF" },
-    ],
-    defaultColor: "#808080",
-  },
-  technology_data: {
-    type: "category",
-    label: "DATA Technology – (LTE/5G)",
-    suggestCol: "technology_data",
-    categories: [
-      { value: "5G NR CA", color: "#045231" },
-      { value: "5G NR", color: "#002d80" },
-      { value: "LTE-5G NR", color: "#800080" },
-      { value: "LTE CA",    color: "#ff0000" },
-      { value: "LTE",       color: "#e5ff00" },
-    ],
-    defaultColor: "#808080",
-  },
-  ookla_dl: {
-    type: "range",
-    label: "OOKLA DL Throughput (Mbps)",
-    suggestCol: "ookla_dl",
-    buckets: [
-      { min: 300, max: 100000, color: "#1B5E20", label: "≥ 300 Mbps" },
-      { min: 100, max: 300,   color: "#8BC34A", label: "100–300 Mbps" },
-      { min: 50,  max: 100,   color: "#FFEB00", label: "50–100 Mbps" },
-      { min: 20,  max: 50,    color: "#FF8A00", label: "20–50 Mbps" },
-      { min: 10,  max: 20,    color: "#FF0000", label: "10–20 Mbps" },
-      { min: 1,   max: 10,    color: "#7A0A00", label: "1–10 Mbps" },
-      { min: 0,   max: 1,     color: "#000000", label: "0–1 Mbps" },
-    ],
-  },
-  ookla_ul: {
-    type: "range",
-    label: "OOKLA UL Throughput (Mbps)",
-    suggestCol: "ookla_ul",
-    buckets: [
-      { min: 100, max: 100000, color: "#1B5E20", label: "≥ 100 Mbps" },
-      { min: 50,  max: 100,   color: "#8BC34A", label: "50–100 Mbps" },
-      { min: 20,  max: 50,    color: "#FFEB00", label: "20–50 Mbps" },
-      { min: 5,   max: 20,    color: "#FF8A00", label: "5–20 Mbps" },
-      { min: 1,   max: 5,     color: "#FF0000", label: "1–5 Mbps" },
-      { min: 0,   max: 1,     color: "#000000", label: "0–1 Mbps" },
-    ],
-  },
-  ookla_latency: {
-    type: "range",
-    label: "OOKLA Latency (ms)",
-    suggestCol: "ookla_latency",
-    buckets: [
-      { min: 0,   max: 20,   color: "#035E03", label: "0–20 ms (εξαιρετικό)" },
-      { min: 20,  max: 50,   color: "#00FF00", label: "20–50 ms" },
-      { min: 50,  max: 100,  color: "#FEFE25", label: "50–100 ms" },
-      { min: 100, max: 200,  color: "#FF8A00", label: "100–200 ms" },
-      { min: 200, max: 500,  color: "#FF0000", label: "200–500 ms" },
-      { min: 500, max: 9999, color: "#7A0A00", label: "> 500 ms" },
-    ],
-  },
-  nr5g_ssrsrp: {
-    type: "range",
-    label: "5G SS-RSRP (dBm)",
-    suggestCol: "SS-RSRP",
-    buckets: [
-      { min: -44,  max: 0,    color: "#3E0480", label: "-44 to 0" },
-      { min: -60,  max: -44,  color: "#035E03", label: "-60 to -44" },
-      { min: -70,  max: -60,  color: "#00ff00", label: "-70 to -60" },
-      { min: -80,  max: -70,  color: "#99ff00", label: "-80 to -70" },
-      { min: -90,  max: -80,  color: "#00ffff", label: "-90 to -80" },
-      { min: -100, max: -90,  color: "#ffff00", label: "-100 to -90" },
-      { min: -110, max: -100, color: "#ff9900", label: "-110 to -100" },
-      { min: -156, max: -110, color: "#ff0000", label: "-156 to -110" },
-    ],
-  },
-  lte_rsrq: {
-    type: "range",
-    label: "LTE Scanner RSRQ (dB)",
-    suggestCol: "RSRQ",
-    buckets: [
-      { min: -3,  max: 0,   color: "#3E0480", label: "-3 to 0 (εξαιρετικό)" },
-      { min: -6,  max: -3,  color: "#035E03", label: "-6 to -3" },
-      { min: -10, max: -6,  color: "#00ff00", label: "-10 to -6" },
-      { min: -13, max: -10, color: "#ffff00", label: "-13 to -10" },
-      { min: -16, max: -13, color: "#ff9900", label: "-16 to -13" },
-      { min: -20, max: -16, color: "#ff0000", label: "-20 to -16" },
-      { min: -40, max: -20, color: "#800000", label: "< -20 (πολύ χαμηλό)" },
-    ],
-  },
-  rxlev_scanner_gsm: {
-    type: "range",
-    label: "GSM Scanner RxLev (dBm)",
-    suggestCol: "RxLev",
-    buckets: [
-      { min: -50, max: 0,    color: "#3E0480", label: "≥ -50 (εξαιρετικό)" },
-      { min: -60, max: -50,  color: "#035E03", label: "-50 to -60" },
-      { min: -70, max: -60,  color: "#00ff00", label: "-60 to -70" },
-      { min: -80, max: -70,  color: "#99ff00", label: "-70 to -80" },
-      { min: -90, max: -80,  color: "#ffff00", label: "-80 to -90" },
-      { min: -100, max: -90, color: "#ff9900", label: "-90 to -100" },
-      { min: -110, max: -100, color: "#ff0000", label: "-100 to -110" },
-      { min: -200, max: -110, color: "#800000", label: "< -110 (πολύ χαμηλό)" },
-    ],
-  },
-  pci_lte: {
-    // Categories are computed dynamically per-query (see buildDynamicPciCategories):
-    // the N most-sampled PCI values each get a distinct color; every other PCI
-    // falls through to defaultColor. Static placeholder here just for suggestCol.
-    type: "category",
-    label: "PCI (top values by sample count)",
-    suggestCol: "PCI",
-    categories: [],
-    defaultColor: "#808080",
-  },
-  nr5g_sssinr: {
-    type: "range",
-    label: "5G SS-SINR (dB)",
-    suggestCol: "SS-SINR",
-    buckets: [
-      { min: 20,  max: 50,  color: "#3E0480", label: "≥20 dB" },
-      { min: 13,  max: 20,  color: "#035E03", label: "13–20 dB" },
-      { min: 0,   max: 13,  color: "#00ff00", label: "0–13 dB" },
-      { min: -3,  max: 0,   color: "#ffff00", label: "-3–0 dB" },
-      { min: -10, max: -3,  color: "#ff9900", label: "-10–(-3) dB" },
-      { min: -23, max: -10, color: "#ff0000", label: "-23–(-10) dB" },
-    ],
-  },
-};
-
-// ── Color lookup helpers ──────────────────────────────────────────────────────
-function colorForValue(scheme: ColorScheme, val: CellValue): string {
-  if (scheme.type === "range") {
-    const n = Number(val);
-    if (isNaN(n)) return "#808080";
-    for (const b of scheme.buckets) {
-      if (n >= b.min && n < b.max) return b.color;
-    }
-    return "#808080";
-  }
-  // category
-  const str = String(val ?? "").trim();
-  const entry = scheme.categories.find((c) => c.value === str);
-  return entry ? entry.color : scheme.defaultColor;
-}
-
-// ── Legend bucket/category key for a raw value (drives legend click-to-filter) ─
-function bucketKeyForValue(scheme: ColorScheme, val: CellValue): string | null {
-  if (scheme.type === "range") {
-    const n = Number(val);
-    if (isNaN(n)) return null;
-    const b = scheme.buckets.find((bb) => n >= bb.min && n < bb.max);
-    return b ? b.label : null;
-  }
-  const str = String(val ?? "").trim();
-  return str || null;
-}
-
-// ── Aggregate-mode color (normalized rank 0–1) ────────────────────────────────
-function bubbleColor(rank: number): { fill: string; stroke: string } {
-  if (rank >= 0.8) return { fill: "#ef4444", stroke: "#dc2626" };
-  if (rank >= 0.6) return { fill: "#f97316", stroke: "#ea580c" };
-  if (rank >= 0.4) return { fill: "#eab308", stroke: "#ca8a04" };
-  if (rank >= 0.2) return { fill: "#22c55e", stroke: "#16a34a" };
-  return { fill: "#3b82f6", stroke: "#2563eb" };
-}
-
-const BUBBLE_TIERS = [
-  { label: "Πολύ Υψηλό",  fill: "#ef4444", min: 0.8 },
-  { label: "Υψηλό",       fill: "#f97316", min: 0.6 },
-  { label: "Μέτριο",      fill: "#eab308", min: 0.4 },
-  { label: "Χαμηλό",      fill: "#22c55e", min: 0.2 },
-  { label: "Πολύ Χαμηλό", fill: "#3b82f6", min: -Infinity },
-] as const;
-
-function bubbleTierLabel(rank: number): string {
-  return (BUBBLE_TIERS.find((t) => rank >= t.min) ?? BUBBLE_TIERS[BUBBLE_TIERS.length - 1]).label;
-}
-
 // ── Resolve city-name → coords (used in bubble mode) ─────────────────────────
 function resolveCity(name: string): { lat: number; lng: number } | null {
   if (CITY_COORDS[name]) return { lat: CITY_COORDS[name][0], lng: CITY_COORDS[name][1] };
@@ -392,33 +82,59 @@ function resolveCity(name: string): { lat: number; lng: number } | null {
 }
 
 // ── Auto-fit bounds ───────────────────────────────────────────────────────────
-function MapBounds({ points }: { points: Array<{ lat: number; lng: number }> }) {
+// Δουλεύουμε με έτοιμα bounds αντί για πίνακα σημείων: με 3 layers × 20.000
+// σημεία, το να φτιάχνεται πίνακας-ένωση σε κάθε render ήταν σκέτη σπατάλη.
+interface DataBounds {
+  minLat: number;
+  maxLat: number;
+  minLng: number;
+  maxLng: number;
+}
+
+function computeBounds(points: Array<{ lat: number; lng: number }>): DataBounds | null {
+  if (points.length === 0) return null;
+  let minLat = points[0].lat, maxLat = points[0].lat;
+  let minLng = points[0].lng, maxLng = points[0].lng;
+  for (let i = 1; i < points.length; i++) {
+    const p = points[i];
+    if (p.lat < minLat) minLat = p.lat;
+    if (p.lat > maxLat) maxLat = p.lat;
+    if (p.lng < minLng) minLng = p.lng;
+    if (p.lng > maxLng) maxLng = p.lng;
+  }
+  return { minLat, maxLat, minLng, maxLng };
+}
+
+function unionBounds(list: Array<DataBounds | null>): DataBounds | null {
+  let out: DataBounds | null = null;
+  for (const b of list) {
+    if (!b) continue;
+    out = out ? {
+      minLat: Math.min(out.minLat, b.minLat),
+      maxLat: Math.max(out.maxLat, b.maxLat),
+      minLng: Math.min(out.minLng, b.minLng),
+      maxLng: Math.max(out.maxLng, b.maxLng),
+    } : b;
+  }
+  return out;
+}
+
+function MapBounds({ bounds }: { bounds: DataBounds | null }) {
   const map = useMap();
 
-  const fitToPoints = useCallback(() => {
-    if (points.length === 0) return;
-    let minLat = points[0].lat, maxLat = points[0].lat;
-    let minLng = points[0].lng, maxLng = points[0].lng;
-    for (let i = 1; i < points.length; i++) {
-      if (points[i].lat < minLat) minLat = points[i].lat;
-      if (points[i].lat > maxLat) maxLat = points[i].lat;
-      if (points[i].lng < minLng) minLng = points[i].lng;
-      if (points[i].lng > maxLng) maxLng = points[i].lng;
-    }
-    const b: [[number, number], [number, number]] = [
-      [minLat, minLng],
-      [maxLat, maxLng],
-    ];
-    if (b[0][0] === b[1][0] && b[0][1] === b[1][1]) {
-      map.setView([b[0][0], b[0][1]], 12);
+  const fitToBounds = useCallback(() => {
+    if (!bounds) return;
+    const { minLat, maxLat, minLng, maxLng } = bounds;
+    if (minLat === maxLat && minLng === maxLng) {
+      map.setView([minLat, minLng], 12);
     } else {
-      map.fitBounds(b, { padding: [50, 50], maxZoom: 14 });
+      map.fitBounds([[minLat, minLng], [maxLat, maxLng]], { padding: [50, 50], maxZoom: 14 });
     }
-  }, [points, map]);
+  }, [bounds, map]);
 
   useEffect(() => {
-    fitToPoints();
-  }, [fitToPoints]);
+    fitToBounds();
+  }, [fitToBounds]);
 
   // The grid layout (1/2/3 χάρτες) resizes each map's container without Leaflet
   // knowing — it only recomputes pixel↔latlng mapping on init or on an explicit
@@ -430,11 +146,11 @@ function MapBounds({ points }: { points: Array<{ lat: number; lng: number }> }) 
     const container = map.getContainer();
     const ro = new ResizeObserver(() => {
       map.invalidateSize();
-      fitToPoints();
+      fitToBounds();
     });
     ro.observe(container);
     return () => ro.disconnect();
-  }, [map, fitToPoints]);
+  }, [map, fitToBounds]);
 
   return null;
 }
@@ -479,9 +195,6 @@ function bestCollectionForOperator(
   return best;
 }
 
-// ── Template definitions ──────────────────────────────────────────────────────
-type MapMode = "bubble" | "points";
-
 // One entry per map layer — a panel syncs ALL of its layers to the other panels
 interface LayerSync {
   tmplIdx: number;
@@ -500,1064 +213,39 @@ interface SyncPayload {
   layers: LayerSync[];
 }
 
-interface QueryTemplate {
-  label: string;
-  category: string;
-  mode: MapMode;
-  quantityCol?: string;
-  valueCol?: string;
-  colorScheme?: string;
-  labelCol: string;
-  sql: string;
-  requiresFilters?: boolean;
-  nrarfcnCol?: string;
-  linkCol?: string;
-}
-
-const TEMPLATES: QueryTemplate[] = [
-
-  {
-    label: "R24 Voice - MOS/SQ",
-    category: "SmartAnalytics R24",
-    mode: "points",
-    valueCol: "LQ",
-    colorScheme: "mos_lq",
-    labelCol: "Location",
-    requiresFilters: true,
-    sql: `SELECT
-  CAST(FCV.LatitudeA AS FLOAT) AS latitude,
-  CAST(FCV.LongitudeA AS FLOAT) AS longitude,
-  FCV.AvgSQ AS LQ,
-  FCV.CallStatus,
-  FCV.CallSetupTime_s,
-  FCV.CallDuration_s,
-  FCV.CallTechnologyA,
-  DF.Location,
-  DF.CollectionName
-FROM FactCDRVoice FCV
-LEFT JOIN DmnFile DF ON DF.DmnId = FCV.DmnIdFile
-WHERE FCV.LatitudeA IS NOT NULL
-  AND FCV.LongitudeA IS NOT NULL
-  AND FCV.AvgSQ IS NOT NULL
-  AND DF.CollectionName = '{collection}'
-  AND DF.Location = '{location}'
-ORDER BY FCV.CallSessionStartTS`,
-  },
-  {
-    label: "R24 LTE Scanner - top RSRP",
-    category: "SmartAnalytics R24",
-    mode: "points",
-    valueCol: "RSRP",
-    colorScheme: "rsrp_data",
-    labelCol: "Location",
-    requiresFilters: true,
-    sql: `SELECT
-  CAST(POS.Latitude  AS FLOAT) AS latitude,
-  CAST(POS.Longitude AS FLOAT) AS longitude,
-  LS.RSRP,
-  LS.RSRQ,
-  LS.SINR,
-  LS.EARFCN,
-  LS.PCI,
-  LS.CGI,
-  DF.Location,
-  DF.CollectionName
-FROM FactLTEScanner LS
-LEFT JOIN DmnPosition POS ON POS.DmnId = LS.DmnIdPosition
-LEFT JOIN DmnFile DF ON DF.DmnId = LS.DmnIdFile
-WHERE LS.DmnIdTopN_RSRP = 1
-  AND POS.Latitude IS NOT NULL
-  AND POS.Longitude IS NOT NULL
-  AND DF.CollectionName = '{collection}'
-  AND DF.Location = '{location}'
-ORDER BY LS.FullDate`,
-  },
-  {
-    label: "R24 5G Phone - SS-RSRP",
-    category: "SmartAnalytics R24",
-    mode: "points",
-    valueCol: "SS-RSRP",
-    colorScheme: "nr5g_ssrsrp",
-    labelCol: "Location",
-    requiresFilters: true,
-    nrarfcnCol: "NRARFCN",
-    sql: `SELECT
-  CAST(POS.Latitude  AS FLOAT) AS latitude,
-  CAST(POS.Longitude AS FLOAT) AS longitude,
-  NR.RSRP AS [SS-RSRP],
-  NR.RSRQ AS [SS-RSRQ],
-  NR.SINR AS [SS-SINR],
-  NR.NRARFCN,
-  NR.PCI,
-  DF.Location,
-  DF.CollectionName
-FROM FactNR5GRadio NR
-LEFT JOIN DmnPosition POS ON POS.DmnId = NR.DmnIdPosition
-LEFT JOIN DmnFile DF ON DF.DmnId = NR.DmnIdFile
-WHERE POS.Latitude IS NOT NULL
-  AND POS.Longitude IS NOT NULL
-  AND NR.RSRP IS NOT NULL
-  AND DF.CollectionName = '{collection}'
-  AND DF.Location = '{location}'
-ORDER BY NR.FullDate`,
-  },
-  // ── Individual GPS Points ───────────────────────────────────────────────
-  {
-    label: "RSRP σημεία μέτρησης (FREE panel)",
-    category: "RSRP",
-    mode: "points",
-    valueCol: "rsrp",
-    colorScheme: "rsrp_free",
-    labelCol: "Location",
-    sql: `SELECT
-  CAST(DP.Latitude  AS FLOAT) AS latitude,
-  CAST(DP.Longitude AS FLOAT) AS longitude,
-  flr.rsrp,
-  DF.ASideLocation AS Location,
-  DF.CollectionName
-FROM LTEMeasurementReport AS flr
-LEFT JOIN Sessions  AS fs ON flr.SessionId = fs.SessionId
-LEFT JOIN FileList  AS DF ON fs.FileId     = DF.FileId
-LEFT JOIN Position  AS DP ON flr.PosId     = DP.PosId
-WHERE DP.Latitude  IS NOT NULL
-  AND DP.Longitude IS NOT NULL
-  AND flr.rsrp     IS NOT NULL
-  AND DF.CollectionName = '{collection}'
-  AND DF.ASideLocation  = '{location}'
-ORDER BY flr.MsgTime`,
-  },
-  {
-    label: "DL Throughput σημεία (kbps)",
-    category: "Throughput",
-    mode: "points",
-    valueCol: "DLThrpt",
-    colorScheme: "dl_throughput",
-    labelCol: "Location",
-    sql: `SELECT
-  Position.latitude  AS latitude,
-  Position.longitude AS longitude,
-  ROUND(CONVERT(float, ResultsCapacityTest.ThroughputGet) * 0.008, 1) AS DLThrpt,
-  FileList.ASideLocation AS Location,
-  FileList.CollectionName
-FROM Sessions
-JOIN FileList ON Sessions.FileId = FileList.FileId
-JOIN ResultsCapacityTest ON Sessions.sessionId = ResultsCapacityTest.sessionId
-JOIN Position ON ResultsCapacityTest.PosId = Position.PosId
-JOIN ResultsCapacityTestParameters ON ResultsCapacityTest.TestId = ResultsCapacityTestParameters.TestId
-WHERE Sessions.Valid = 1
-  AND ResultsCapacityTest.lastBlock = 1
-  AND ResultsCapacityTestParameters.Direction LIKE 'get%'
-  AND FileList.CollectionName = '{collection}'
-  AND FileList.ASideLocation  = '{location}'
-ORDER BY ResultsCapacityTest.MsgTime`,
-  },
-  {
-    label: "UL Throughput σημεία (kbps)",
-    category: "Throughput",
-    mode: "points",
-    valueCol: "ULThrpt",
-    colorScheme: "ul_throughput",
-    labelCol: "Location",
-    sql: `SELECT
-  Position.latitude  AS latitude,
-  Position.longitude AS longitude,
-  ROUND(CONVERT(float, ResultsCapacityTest.ThroughputPut) * 0.008, 1) AS ULThrpt,
-  FileList.ASideLocation AS Location,
-  FileList.CollectionName
-FROM Sessions
-JOIN FileList ON Sessions.FileId = FileList.FileId
-JOIN ResultsCapacityTest ON Sessions.sessionId = ResultsCapacityTest.sessionId
-JOIN Position ON ResultsCapacityTest.PosId = Position.PosId
-JOIN ResultsCapacityTestParameters ON ResultsCapacityTest.TestId = ResultsCapacityTestParameters.TestId
-WHERE Sessions.Valid = 1
-  AND ResultsCapacityTest.lastBlock = 1
-  AND ResultsCapacityTestParameters.Direction LIKE 'put%'
-  AND FileList.CollectionName = '{collection}'
-  AND FileList.ASideLocation  = '{location}'
-ORDER BY ResultsCapacityTest.MsgTime`,
-  },
-  {
-    label: "HTTP Transfer 10MB σημεία (kbps)",
-    category: "Throughput",
-    mode: "points",
-    valueCol: "throughput",
-    colorScheme: "http_transfer",
-    labelCol: "Location",
-    sql: `SELECT
-  Position.latitude  AS latitude,
-  Position.longitude AS longitude,
-  CONVERT(float, ResultsHttpTransfertest.throughput) * 0.008 AS throughput,
-  FileList.ASideLocation AS Location
-FROM Sessions
-JOIN ResultsHttpTransfertest ON Sessions.sessionId = ResultsHttpTransfertest.sessionId
-JOIN ResultsHTTPTransferParameters ON ResultsHttpTransfertest.TestId = ResultsHTTPTransferParameters.TestId
-JOIN Position ON ResultsHttpTransfertest.PosId = Position.PosId
-JOIN FileList ON Sessions.FileId = FileList.FileId
-WHERE Sessions.Valid = 1
-  AND ResultsHttpTransfertest.throughput > 0
-  AND ResultsHTTPTransferParameters.RemoteFilename = '10M'
-  AND FileList.CollectionName = '{collection}'
-  AND FileList.ASideLocation  = '{location}'`,
-  },
-  {
-    label: "OOKLA DL Throughput (Mbps)",
-    category: "Throughput",
-    mode: "points",
-    valueCol: "ookla_dl",
-    colorScheme: "ookla_dl",
-    labelCol: "Location",
-    sql: `WITH SessionsCTE AS (
-  SELECT SessionId, FileId, info FROM Sessions WHERE valid = 1
-  GROUP BY SessionId, FileId, info
-)
-SELECT
-  CAST(pos.Latitude  AS FLOAT) AS latitude,
-  CAST(pos.Longitude AS FLOAT) AS longitude,
-  CASE aaf.thp WHEN 0 THEN NULL ELSE aaf.thp END AS ookla_dl,
-  fl.ASideLocation                                AS Location,
-  fl.CollectionName,
-  ni.Technology,
-  t.PrevTechnology                                AS Data_Technology,
-  atp.ServiceProvider                             AS App,
-  aaf.Latency                                     AS Latency_ms,
-  aaf.PacketLossPercent                           AS PacketLoss_pct,
-  CASE COALESCE(aa.ErrorCode, aaf.ErrorCode)
-    WHEN 0 THEN 'Success' ELSE 'Failed'
-  END                                             AS ActionStatus
-FROM SessionsCTE s
-INNER JOIN FileList                 fl  ON fl.FileId   = s.FileId
-INNER JOIN TestInfo                 ti  ON s.SessionId = ti.SessionId AND ti.Valid = 1
-INNER JOIN ResultsAppTestParameters atp ON ti.TestId   = atp.TestId
-LEFT  JOIN ResultsAppAction         aa  ON ti.TestId   = aa.TestId   AND aa.LastBlock = 1
-LEFT  JOIN (
-    SELECT raap.TestId, raap.ActionId, raap.MsgTime, raap.ErrorCode, raap.NetworkId,
-           CAST(raap.DLThroughput AS FLOAT) * 8.0 / 1000000.0               AS thp,
-           ISNULL(raap.Ping, raap.Latency)                                   AS Latency,
-           raap.PacketLossPercent
-    FROM ResultsAppActionPerformance raap
-) aaf ON ti.TestId = aaf.TestId
-INNER JOIN NetworkInfo ni ON ni.NetworkId = ISNULL(ISNULL(aa.NetworkId, aaf.NetworkId), ti.NetworkId)
-LEFT  JOIN Technology  t  ON t.PrevTechnology IS NOT NULL AND (
-    (t.TestId = aaf.TestId AND aaf.MsgTime BETWEEN DATEADD(ms,-1*t.Duration,t.MsgTime) AND t.MsgTime) OR
-    (t.TestId = aa.TestId  AND aa.MsgTime  BETWEEN DATEADD(ms,-1*t.Duration,t.MsgTime) AND t.MsgTime))
-OUTER APPLY (
-    SELECT TOP (1) p.Latitude, p.Longitude
-    FROM Position p
-    WHERE p.TestId  = ti.TestId
-      AND p.MsgTime <= COALESCE(aa.MsgTime, aaf.MsgTime)
-    ORDER BY p.MsgTime DESC
-) pos
-WHERE pos.Latitude    IS NOT NULL
-  AND pos.Longitude   IS NOT NULL
-  AND s.SessionId     IS NOT NULL
-  AND aaf.thp         IS NOT NULL
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-ORDER BY ti.TestId, aaf.ActionId`,
-  },
-  {
-    label: "OOKLA UL Throughput (Mbps)",
-    category: "Throughput",
-    mode: "points",
-    valueCol: "ookla_ul",
-    colorScheme: "ookla_ul",
-    labelCol: "Location",
-    sql: `WITH SessionsCTE AS (
-  SELECT SessionId, FileId, info FROM Sessions WHERE valid = 1
-  GROUP BY SessionId, FileId, info
-)
-SELECT
-  CAST(pos.Latitude  AS FLOAT) AS latitude,
-  CAST(pos.Longitude AS FLOAT) AS longitude,
-  CASE aaf.thp WHEN 0 THEN NULL ELSE aaf.thp END AS ookla_ul,
-  fl.ASideLocation                                AS Location,
-  fl.CollectionName,
-  ni.Technology,
-  t.PrevTechnology                                AS Data_Technology,
-  atp.ServiceProvider                             AS App,
-  aaf.Latency                                     AS Latency_ms,
-  aaf.PacketLossPercent                           AS PacketLoss_pct,
-  CASE COALESCE(aa.ErrorCode, aaf.ErrorCode)
-    WHEN 0 THEN 'Success' ELSE 'Failed'
-  END                                             AS ActionStatus
-FROM SessionsCTE s
-INNER JOIN FileList                 fl  ON fl.FileId   = s.FileId
-INNER JOIN TestInfo                 ti  ON s.SessionId = ti.SessionId AND ti.Valid = 1
-INNER JOIN ResultsAppTestParameters atp ON ti.TestId   = atp.TestId
-LEFT  JOIN ResultsAppAction         aa  ON ti.TestId   = aa.TestId   AND aa.LastBlock = 1
-LEFT  JOIN (
-    SELECT raap.TestId, raap.ActionId, raap.MsgTime, raap.ErrorCode, raap.NetworkId,
-           CAST(raap.ULThroughput AS FLOAT) * 8.0 / 1000000.0               AS thp,
-           ISNULL(raap.Ping, raap.Latency)                                   AS Latency,
-           raap.PacketLossPercent
-    FROM ResultsAppActionPerformance raap
-) aaf ON ti.TestId = aaf.TestId
-INNER JOIN NetworkInfo ni ON ni.NetworkId = ISNULL(ISNULL(aa.NetworkId, aaf.NetworkId), ti.NetworkId)
-LEFT  JOIN Technology  t  ON t.PrevTechnology IS NOT NULL AND (
-    (t.TestId = aaf.TestId AND aaf.MsgTime BETWEEN DATEADD(ms,-1*t.Duration,t.MsgTime) AND t.MsgTime) OR
-    (t.TestId = aa.TestId  AND aa.MsgTime  BETWEEN DATEADD(ms,-1*t.Duration,t.MsgTime) AND t.MsgTime))
-OUTER APPLY (
-    SELECT TOP (1) p.Latitude, p.Longitude
-    FROM Position p
-    WHERE p.TestId  = ti.TestId
-      AND p.MsgTime <= COALESCE(aa.MsgTime, aaf.MsgTime)
-    ORDER BY p.MsgTime DESC
-) pos
-WHERE pos.Latitude    IS NOT NULL
-  AND pos.Longitude   IS NOT NULL
-  AND s.SessionId     IS NOT NULL
-  AND aaf.thp         IS NOT NULL
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-ORDER BY ti.TestId, aaf.ActionId`,
-  },
-  {
-    label: "CAPACITY – DL Throughput (grx+akamai+ookla)",
-    category: "Throughput",
-    mode: "points",
-    valueCol: "dl_mbps",
-    colorScheme: "ookla_dl",
-    labelCol: "Location",
-    linkCol: "link",
-    sql: `/* ============================================================
-   ΚΟΙΝΟ QUERY — App tests + Capacity tests
-   Μία στήλη [link]: ServiceProvider για τα APP,
-   σύντομο alias του URIList (akamai / grx) για τα CAPACITY
-   ============================================================ */
-
-/* --------- APP TESTS --------- */
-/* --------- APP TESTS --------- */
-SELECT
-    'APP'                                  AS TestType,
-    CAST(p.Latitude  AS FLOAT)             AS latitude,
-    CAST(p.Longitude AS FLOAT)             AS longitude,
-    ISNULL(CAST(raap.DLThroughput AS FLOAT) * 8.0 / 1000000.0, 0) AS dl_mbps,
-    fl.ASideLocation                       AS Location,
-    fl.CollectionName,
-    CAST(atp.ServiceProvider AS NVARCHAR(MAX)) AS link,
-    CASE COALESCE(aa.ErrorCode, raap.ErrorCode)
-         WHEN 0 THEN 'Success' ELSE 'Failed'
-    END                                    AS ActionStatus,
-    COALESCE(aa.MsgTime, raap.MsgTime)     AS MsgTime
-FROM Sessions s
-INNER JOIN FileList                    fl   ON fl.FileId    = s.FileId
-INNER JOIN TestInfo                    ti   ON ti.SessionId = s.SessionId AND ti.Valid = 1
-INNER JOIN ResultsAppTestParameters    atp  ON atp.TestId   = ti.TestId
-INNER JOIN Position                    p    ON p.PosId      = ti.PosId
-                                           AND p.Latitude  IS NOT NULL
-                                           AND p.Longitude IS NOT NULL
-INNER JOIN ResultsAppActionPerformance raap ON raap.TestId  = ti.TestId
-LEFT  JOIN ResultsAppAction            aa   ON aa.TestId    = ti.TestId AND aa.LastBlock = 1
-WHERE s.Valid = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-
-UNION ALL
-
-/* --------- CAPACITY TESTS --------- */
-SELECT
-    'CAPACITY',
-    CAST(p.Latitude  AS FLOAT),
-    CAST(p.Longitude AS FLOAT),
-    ISNULL(CONVERT(FLOAT, rct.ThroughputGet) * 8.0 / 1000000.0, 0),
-    fl.ASideLocation,
-    fl.CollectionName,
-    CAST(CASE
-        WHEN rctp.URIList LIKE '%akamai-bench.commsquare.com%' THEN 'akamai'
-        WHEN rctp.URIList LIKE '%grx-bench.commsquare.com%'    THEN 'grx'
-        ELSE LEFT(rctp.URIList, CHARINDEX(';', rctp.URIList + ';') - 1)
-    END AS NVARCHAR(MAX)),                          -- link
-    CASE rct.ErrorCode WHEN 0 THEN 'Success' ELSE 'Failed' END,
-    rct.MsgTime
-FROM Sessions s
-INNER JOIN FileList                      fl   ON fl.FileId     = s.FileId
-INNER JOIN ResultsCapacityTest           rct  ON rct.SessionId = s.SessionId
-INNER JOIN Position                      p    ON p.PosId       = rct.PosId
-INNER JOIN ResultsCapacityTestParameters rctp ON rctp.TestId   = rct.TestId
-WHERE s.Valid = 1
-  AND rct.LastBlock = 1
-  AND rctp.Direction LIKE 'get%'
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-
-ORDER BY dl_mbps;   -- ή: Location, CollectionName, MsgTime`,
-  },
-  {
-    label: "CAPACITY – UL Throughput (grx+akamai+ookla)",
-    category: "Throughput",
-    mode: "points",
-    valueCol: "ul_mbps",
-    colorScheme: "ookla_ul",
-    labelCol: "Location",
-    linkCol: "link",
-    sql: `/* ============================================================
-   ΚΟΙΝΟ QUERY — App tests + Capacity tests
-   Μία στήλη [link]: ServiceProvider για τα APP,
-   σύντομο alias του URIList (akamai / grx) για τα CAPACITY
-   ============================================================ */
-   
-  SELECT
-    'APP'                                  AS TestType,
-    CAST(p.Latitude  AS FLOAT)             AS latitude,
-    CAST(p.Longitude AS FLOAT)             AS longitude,
-    ISNULL(CAST(raap.ULThroughput AS FLOAT) * 8.0 / 1000000.0, 0) AS ul_mbps,
-    fl.ASideLocation                       AS Location,
-    fl.CollectionName,
-    CAST(atp.ServiceProvider AS NVARCHAR(MAX)) AS link,
-    CASE COALESCE(aa.ErrorCode, raap.ErrorCode)
-         WHEN 0 THEN 'Success' ELSE 'Failed'
-    END                                    AS ActionStatus,
-    COALESCE(aa.MsgTime, raap.MsgTime)     AS MsgTime
-FROM Sessions s
-INNER JOIN FileList                    fl   ON fl.FileId    = s.FileId
-INNER JOIN TestInfo                    ti   ON ti.SessionId = s.SessionId AND ti.Valid = 1
-INNER JOIN ResultsAppTestParameters    atp  ON atp.TestId   = ti.TestId
-INNER JOIN Position                    p    ON p.PosId      = ti.PosId
-                                           AND p.Latitude  IS NOT NULL
-                                           AND p.Longitude IS NOT NULL
-INNER JOIN ResultsAppActionPerformance raap ON raap.TestId  = ti.TestId
-LEFT  JOIN ResultsAppAction            aa   ON aa.TestId    = ti.TestId AND aa.LastBlock = 1
-WHERE s.Valid = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-
-UNION ALL
-
-/* --------- CAPACITY TESTS --------- */
-SELECT
-    'CAPACITY',
-    CAST(p.Latitude  AS FLOAT),
-    CAST(p.Longitude AS FLOAT),
-    ISNULL(CONVERT(FLOAT, rct.ThroughputPut) * 8.0 / 1000000.0, 0),
-    fl.ASideLocation,
-    fl.CollectionName,
-    CAST(CASE
-        WHEN rctp.URIList LIKE '%akamai-bench.commsquare.com%' THEN 'akamai'
-        WHEN rctp.URIList LIKE '%grx-bench.commsquare.com%'    THEN 'grx'
-        ELSE LEFT(rctp.URIList, CHARINDEX(';', rctp.URIList + ';') - 1)
-    END AS NVARCHAR(MAX)),                          -- link
-    CASE rct.ErrorCode WHEN 0 THEN 'Success' ELSE 'Failed' END,
-    rct.MsgTime
-FROM Sessions s
-INNER JOIN FileList                      fl   ON fl.FileId     = s.FileId
-INNER JOIN ResultsCapacityTest           rct  ON rct.SessionId = s.SessionId
-INNER JOIN Position                      p    ON p.PosId       = rct.PosId
-INNER JOIN ResultsCapacityTestParameters rctp ON rctp.TestId   = rct.TestId
-WHERE s.Valid = 1
-  AND rct.LastBlock = 1
-  AND rctp.Direction LIKE 'put%'
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-
-ORDER BY ul_mbps;   -- ή: Location, CollectionName, MsgTime`,
-  },
-  {
-    label: "RxLevSub σημεία (GSM)",
-    category: "GSM",
-    mode: "points",
-    valueCol: "RxLevSub",
-    colorScheme: "rxlevsub_gsm",
-    labelCol: "Location",
-    sql: `SELECT
-  COALESCE(l1.RxLevSub, -200) AS RxLevSub,
-  p.Latitude  AS latitude,
-  p.Longitude AS longitude,
-  f.ASideLocation AS Location
-FROM msgGSMLayer1 AS l1
-JOIN Sessions  AS s ON s.SessionId = l1.SessionId AND s.Valid = 1
-JOIN FileList  AS f ON f.FileId    = s.FileId
-JOIN Position  AS p ON p.PosId     = l1.PosId
-WHERE l1.formatid <> 'IDLE'
-  AND f.CollectionName = '{collection}'
-  AND f.ASideLocation  = '{location}'
-ORDER BY l1.msgTime`,
-  },
-  {
-    label: "RxQualSub σημεία (GSM)",
-    category: "GSM",
-    mode: "points",
-    valueCol: "RxQualSub",
-    colorScheme: "rxqualsub_gsm",
-    labelCol: "Location",
-    requiresFilters: true,
-    sql: `SELECT
-  CAST(POS.Latitude  AS FLOAT) AS latitude,
-  CAST(POS.Longitude AS FLOAT) AS longitude,
-  GR.RxLevSub,
-  GR.RxQualSub,
-  GR.BCCH,
-  GR.BSIC,
-  DF.Location,
-  DF.CollectionName
-FROM FactGSMRadio GR
-LEFT JOIN DmnPosition POS ON POS.DmnId = GR.DmnIdPosition
-LEFT JOIN DmnFile DF ON DF.DmnId = GR.DmnIdFile
-WHERE POS.Latitude IS NOT NULL
-  AND POS.Longitude IS NOT NULL
-  AND GR.RxLevSub IS NOT NULL
-  AND DF.CollectionName = '{collection}'
-  AND DF.Location = '{location}'
-ORDER BY GR.FullDate`,
-  },
-
-  {
-    label: "GSM Radio – RxQual",
-    category: "GSM",
-    mode: "points",
-    valueCol: "RxQual",
-    colorScheme: "rxqualsub_gsm",
-    labelCol: "Location",
-    sql: `SELECT
-  gr.RxQual,
-  gr.RxLev,
-  gr.BCCH,
-  gr.BSIC,
-  fl.ASideLocation    AS Location,
-  fl.CollectionName,
-  CAST(pos.Latitude  AS FLOAT) AS latitude,
-  CAST(pos.Longitude AS FLOAT) AS longitude
-FROM [dbo].[FactGSMRadio] gr
-LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = gr.[FileId]
-LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = gr.[PosId]
-WHERE gr.RxQual IS NOT NULL
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-ORDER BY gr.FullDate`,
-  },
-  {
-    label: "MOS FREE/GSM",
-    category: "MOS",
-    mode: "points",
-    valueCol: "LQ",
-    colorScheme: "mos_lq",
-    labelCol: "Location",
-    requiresFilters: true,
-    sql: `SELECT
-  fs.LQ                          AS LQ,
-  fl.ASideLocation               AS Location,
-  fl.CollectionName,
-  CAST(dp.Latitude  AS FLOAT)    AS latitude,
-  CAST(dp.Longitude AS FLOAT)    AS longitude,
-  fs.TestId,
-  fs.SessionId
-FROM dbo.FactSpeech fs
-LEFT JOIN FileList fl ON fl.FileId  = fs.FileId
-LEFT JOIN TestInfo TI ON TI.TestId  = fs.TestId
-LEFT JOIN Position dp ON dp.PosId   = TI.PosId
-WHERE fl.CollectionName  = '{collection}'
-  AND fl.ASideLocation   = '{location}'
-  AND fs.LQ IS NOT NULL
-  AND dp.Latitude  IS NOT NULL
-  AND dp.Longitude IS NOT NULL
-ORDER BY fs.TestId`,
-  },
-  {
-    label: "ALL CALLS",
-    category: "Calls",
-    mode: "points",
-    valueCol: "callStatus",
-    colorScheme: "call_status",
-    labelCol: "Location",
-    requiresFilters: true,
-    sql: `SELECT
-  CA.SessionId,
-  CA.technology,
-  CA.callMode,
-  CA.callType,
-  CA.callDir,
-  CA.callStatus,
-  ROUND(CA.setupTime, 2) AS setupTime,
-  (CA.callDuration / 1000) AS callDuration_s,
-  FL.CollectionName,
-  FL.ASideLocation AS Location,
-  CAST(P.Latitude  AS FLOAT) AS latitude,
-  CAST(P.Longitude AS FLOAT) AS longitude
-FROM CallAnalysis CA
-LEFT JOIN FileList FL ON CA.FileId = FL.FileId
-LEFT JOIN Sessions S  ON S.SessionId = CA.SessionId
-LEFT JOIN Position P  ON P.PosId = CA.PosId
-WHERE S.Valid IN (0, 1)
-  AND FL.CollectionName = '{collection}'
-  AND FL.ASideLocation  = '{location}'
-ORDER BY CA.SessionId DESC`,
-  },
-  {
-    label: "Radio Technology",
-    category: "Technology",
-    mode: "points",
-    valueCol: "technology",
-    colorScheme: "technology_free",
-    labelCol: "Location",
-    sql: `SELECT
-  p.Latitude  AS latitude,
-  p.Longitude AS longitude,
-  ni.technology,
-  f.ASideLocation AS Location,
-  f.CollectionName
-FROM Sessions AS s
-JOIN Position  AS p  ON s.SessionId = p.SessionId
-OUTER APPLY (
-  SELECT TOP (1) n.*
-  FROM NetworkInfo AS n
-  WHERE n.FileId = p.FileId
-    AND n.MsgTime < p.msgTime
-  ORDER BY n.MsgTime DESC
-) AS ni
-LEFT JOIN dbo.Filelist AS f ON s.FileId = f.FileId
-WHERE s.Valid = 1
-  AND ni.technology IS NOT NULL
-  AND ni.technology <> 'Unknown'
-  AND f.CollectionName = '{collection}'
-  AND f.ASideLocation  = '{location}'
-ORDER BY ni.MsgTime`,
-  },
-  {
-    label: "Data Technology",
-    category: "Technology",
-    mode: "points",
-    valueCol: "technology_data",
-    colorScheme: "technology_data",
-    labelCol: "Location",
-    sql: `SELECT
-  p.Latitude   AS latitude,
-  p.Longitude  AS longitude,
-  t.CurrTechnology AS technology_data,
-  fl.ASideLocation AS Location,
-  p.MsgTime
-FROM Sessions AS s
-JOIN FileList AS fl ON fl.FileId    = s.FileId
-JOIN TestInfo AS ti ON ti.SessionId = s.SessionId
-JOIN Position AS p  ON p.TestId     = ti.TestId
-OUTER APPLY (
-    SELECT TOP 1 t2.CurrTechnology
-    FROM Technology AS t2
-    WHERE t2.TestId  = p.TestId
-      AND t2.MsgTime < p.MsgTime
-      AND t2.CurrTechnology IS NOT NULL
-    ORDER BY t2.MsgTime DESC
-) AS t
-WHERE s.Valid = 1 AND ti.Valid = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-  --AND ti.TestName IN ('Capacity DL','FTP DL','HTTP TRANSFER (DL)')   -- <<< Test Data Server DL
-  AND p.Latitude  IS NOT NULL AND p.Latitude  <> 0
-  AND p.Longitude IS NOT NULL AND p.Longitude <> 0
-ORDER BY p.MsgTime`,
-  },
-  {
-    label: "PCI – LTE Measurement Report",
-    category: "Technology",
-    mode: "points",
-    valueCol: "PCI",
-    colorScheme: "pci_lte",
-    labelCol: "Location",
-    sql: `SELECT
-  F.CollectionName,
-  F.ASideLocation      AS Location,
-  POS.PosId,
-  CAST(POS.Latitude  AS FLOAT) AS latitude,
-  CAST(POS.Longitude AS FLOAT) AS longitude,
-  LMR.PhyCellId        AS PCI
-FROM LTEMeasurementReport AS LMR
-JOIN Position POS ON LMR.PosId     = POS.PosId
-JOIN Sessions S    ON LMR.SessionId = S.SessionId
-JOIN Filelist F    ON S.FileId      = F.FileId
-WHERE POS.Latitude    IS NOT NULL
-  AND POS.Longitude   IS NOT NULL
-  AND LMR.PhyCellId    IS NOT NULL
-  AND F.CollectionName = '{collection}'
-  AND F.ASideLocation  = '{location}'
-ORDER BY LMR.MsgTime`,
-  },
-  {
-    label: "RSRP σημεία – FREE LTE",
-    category: "RSRP",
-    mode: "points",
-    valueCol: "rsrp",
-    colorScheme: "rsrp_data",
-    labelCol: "ASideLocation",
-    requiresFilters: true,
-    sql: `SELECT
-    DF.CollectionName,
-    DF.ASideLocation,
-    CAST(DP.Latitude  AS FLOAT) AS latitude,
-    CAST(DP.Longitude AS FLOAT) AS longitude,
-    flr.MsgTime,
-    flr.rsrp
-FROM LTEMeasurementReport AS flr
-LEFT JOIN Sessions  AS fs ON flr.SessionId = fs.SessionId
-LEFT JOIN FileList  AS DF ON fs.FileId     = DF.FileId
-LEFT JOIN Position  AS DP ON flr.PosId     = DP.PosId
-WHERE DF.CollectionName = '{collection}'
-  AND DF.ASideLocation  = '{location}'
-  AND DP.Latitude  IS NOT NULL
-  AND DP.Longitude IS NOT NULL
-  AND flr.rsrp     IS NOT NULL
-ORDER BY flr.MsgTime`,
-  },
-  
-  {
-    label: "OOKLA Latency (ms)",
-    category: "OOKLA",
-    mode: "points",
-    valueCol: "ookla_latency",
-    colorScheme: "ookla_latency",
-    labelCol: "Location",
-    sql: `WITH SessionsCTE AS (
-  SELECT SessionId, FileId, info FROM Sessions WHERE valid = 1
-  GROUP BY SessionId, FileId, info
-)
-SELECT
-  CAST(pos.Latitude  AS FLOAT) AS latitude,
-  CAST(pos.Longitude AS FLOAT) AS longitude,
-  ISNULL(raap.Ping, raap.Latency)                AS ookla_latency,
-  fl.ASideLocation                               AS Location,
-  fl.CollectionName,
-  ni.Technology,
-  t.PrevTechnology                               AS Data_Technology,
-  atp.ServiceProvider                            AS App,
-  raap.PacketLossPercent                         AS PacketLoss_pct
-FROM SessionsCTE s
-INNER JOIN FileList                 fl  ON fl.FileId   = s.FileId
-INNER JOIN TestInfo                 ti  ON s.SessionId = ti.SessionId AND ti.Valid = 1
-INNER JOIN ResultsAppTestParameters atp ON ti.TestId   = atp.TestId
-INNER JOIN ResultsAppActionPerformance raap ON ti.TestId = raap.TestId
-INNER JOIN NetworkInfo ni ON ni.NetworkId = raap.NetworkId
-LEFT  JOIN Technology  t  ON t.PrevTechnology IS NOT NULL AND
-    t.TestId = raap.TestId AND
-    raap.MsgTime BETWEEN DATEADD(ms,-1*t.Duration,t.MsgTime) AND t.MsgTime
-OUTER APPLY (
-    SELECT TOP (1) p.Latitude, p.Longitude
-    FROM Position p
-    WHERE p.TestId  = ti.TestId
-      AND p.MsgTime <= raap.MsgTime
-    ORDER BY p.MsgTime DESC
-) pos
-WHERE pos.Latitude  IS NOT NULL
-  AND pos.Longitude IS NOT NULL
-  AND ISNULL(raap.Ping, raap.Latency) IS NOT NULL
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-ORDER BY ti.TestId, raap.ActionId`,
-  },
-  {
-    label: "5G Phone – SS-RSRP",
-    category: "5G",
-    mode: "points",
-    valueCol: "SS-RSRP",
-    colorScheme: "nr5g_ssrsrp",
-    labelCol: "Location",
-    requiresFilters: true,
-    nrarfcnCol: "NRARFCN",
-    sql: `SELECT
-  nr.PosId,
-  nr.NRARFCN,
-  AVG(nr.RSRP)  AS [SS-RSRP],
-  AVG(nr.RSRQ)  AS [SS-RSRQ],
-  AVG(nr.SINR)  AS [SS-SINR],
-  CAST(pos.latitude  AS FLOAT) AS latitude,
-  CAST(pos.longitude AS FLOAT) AS longitude,
-  fl.CollectionName,
-  fl.ASideLocation              AS Location,
-  NRcarrier.CarrierIndexName
-FROM [dbo].[FactNR5GRadio] nr
-LEFT JOIN Position           pos       ON pos.PosId   = nr.PosId
-LEFT JOIN FileList           fl        ON fl.FileId   = nr.FileId
-LEFT JOIN DmnNR5GCarrierInfo NRcarrier ON NRcarrier.DmnId = nr.DmnIdNR5GCarrierInfo
-WHERE fl.Valid = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-GROUP BY nr.SessionId, nr.PosId, nr.NRARFCN,
-         pos.latitude, pos.longitude,
-         fl.CollectionName, fl.ASideLocation, NRcarrier.CarrierIndexName
-ORDER BY nr.PosId`,
-  },
-  {
-    label: "5G Phone – SS-SINR",
-    category: "5G",
-    mode: "points",
-    valueCol: "SS-SINR",
-    colorScheme: "nr5g_sssinr",
-    labelCol: "Location",
-    requiresFilters: true,
-    nrarfcnCol: "NRARFCN",
-    sql: `SELECT
-  nr.PosId,
-  nr.NRARFCN,
-  AVG(nr.RSRP)  AS [SS-RSRP],
-  AVG(nr.RSRQ)  AS [SS-RSRQ],
-  AVG(nr.SINR)  AS [SS-SINR],
-  CAST(pos.latitude  AS FLOAT) AS latitude,
-  CAST(pos.longitude AS FLOAT) AS longitude,
-  fl.CollectionName,
-  fl.ASideLocation              AS Location,
-  NRcarrier.CarrierIndexName
-FROM [dbo].[FactNR5GRadio] nr
-LEFT JOIN Position           pos       ON pos.PosId   = nr.PosId
-LEFT JOIN FileList           fl        ON fl.FileId   = nr.FileId
-LEFT JOIN DmnNR5GCarrierInfo NRcarrier ON NRcarrier.DmnId = nr.DmnIdNR5GCarrierInfo
-WHERE fl.Valid = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-GROUP BY nr.SessionId, nr.PosId, nr.NRARFCN,
-         pos.latitude, pos.longitude,
-         fl.CollectionName, fl.ASideLocation, NRcarrier.CarrierIndexName
-ORDER BY nr.PosId`,
-  },
-  {
-    label: "5G Scanner – SS-RSRP",
-    category: "Scanner",
-    mode: "points",
-    valueCol: "SS-RSRP",
-    colorScheme: "nr5g_ssrsrp",
-    labelCol: "Location",
-    requiresFilters: true,
-    nrarfcnCol: "NRARFCN",
-    sql: `SELECT
-  nr.PCI,
-  nr.AbsFreqSSB       AS NRARFCN,
-  nr.SS_RSRP          AS [SS-RSRP],
-  nr.SS_SINR          AS [SS-SINR],
-  fl.CollectionName,
-  fl.ASideLocation    AS Location,
-  CAST(pos.Latitude  AS FLOAT) AS latitude,
-  CAST(pos.Longitude AS FLOAT) AS longitude
-FROM [dbo].[FactNR5GScannerBeam] nr
-LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = nr.[FileId]
-LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = nr.[PosId]
-WHERE nr.[DmnIdTopN_SS_RSRP] = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-ORDER BY latitude, longitude`,
-  },
-  {
-    label: "5G Scanner – SS-SINR",
-    category: "Scanner",
-    mode: "points",
-    valueCol: "SS-SINR",
-    colorScheme: "nr5g_sssinr",
-    labelCol: "Location",
-    requiresFilters: true,
-    nrarfcnCol: "NRARFCN",
-    sql: `SELECT
-  nr.PCI,
-  nr.AbsFreqSSB       AS NRARFCN,
-  nr.SS_RSRP          AS [SS-RSRP],
-  nr.SS_SINR          AS [SS-SINR],
-  fl.CollectionName,
-  fl.ASideLocation    AS Location,
-  CAST(pos.Latitude  AS FLOAT) AS latitude,
-  CAST(pos.Longitude AS FLOAT) AS longitude
-FROM [dbo].[FactNR5GScannerBeam] nr
-LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = nr.[FileId]
-LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = nr.[PosId]
-WHERE nr.[DmnIdTopN_SS_RSRP] = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-ORDER BY latitude, longitude`,
-  },
-  {
-    label: "LTE Scanner – RSRP",
-    category: "Scanner",
-    mode: "points",
-    valueCol: "RSRP",
-    colorScheme: "rsrp_data",
-    labelCol: "Location",
-    requiresFilters: true,
-    sql: `SELECT
-  ls.RSRP,
-  ls.RSRQ,
-  ls.SINR,
-  ls.RSSI,
-  ls.EARFCN,
-  ls.PCI,
-  ls.CGI,
-  fl.ASideLocation    AS Location,
-  fl.CollectionName,
-  CAST(pos.Latitude  AS FLOAT) AS latitude,
-  CAST(pos.Longitude AS FLOAT) AS longitude
-FROM [dbo].[FactLTEScanner] ls
-LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = ls.[FileId]
-LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = ls.[PosId]
-WHERE ls.[DmnIdTopN_RSRP] = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-ORDER BY latitude, longitude`,
-  },
-  {
-    label: "LTE Scanner – SINR",
-    category: "Scanner",
-    mode: "points",
-    valueCol: "SINR",
-    colorScheme: "nr5g_sssinr",
-    labelCol: "Location",
-    requiresFilters: true,
-    sql: `SELECT
-  ls.SINR,
-  ls.RSRP,
-  ls.RSRQ,
-  ls.RSSI,
-  ls.EARFCN,
-  ls.PCI,
-  ls.CGI,
-  fl.ASideLocation    AS Location,
-  fl.CollectionName,
-  CAST(pos.Latitude  AS FLOAT) AS latitude,
-  CAST(pos.Longitude AS FLOAT) AS longitude
-FROM [dbo].[FactLTEScanner] ls
-LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = ls.[FileId]
-LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = ls.[PosId]
-WHERE ls.[DmnIdTopN_SINR] = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-ORDER BY latitude, longitude`,
-  },
-  {
-    label: "LTE Scanner – RSRQ",
-    category: "Scanner",
-    mode: "points",
-    valueCol: "RSRQ",
-    colorScheme: "lte_rsrq",
-    labelCol: "Location",
-    requiresFilters: true,
-    sql: `SELECT
-  ls.RSRQ,
-  ls.RSRP,
-  ls.SINR,
-  ls.RSSI,
-  ls.EARFCN,
-  ls.PCI,
-  ls.CGI,
-  fl.ASideLocation    AS Location,
-  fl.CollectionName,
-  CAST(pos.Latitude  AS FLOAT) AS latitude,
-  CAST(pos.Longitude AS FLOAT) AS longitude
-FROM [dbo].[FactLTEScanner] ls
-LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = ls.[FileId]
-LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = ls.[PosId]
-WHERE ls.[DmnIdTopN_RSRQ] = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-ORDER BY latitude, longitude`,
-  },
-  {
-    label: "GSM Scanner – RxLev",
-    category: "Scanner",
-    mode: "points",
-    valueCol: "RxLev",
-    colorScheme: "rxlev_scanner_gsm",
-    labelCol: "Location",
-    requiresFilters: true,
-    sql: `SELECT
-  gs.RxLev,
-  gs.BCCH,
-  gs.BSIC,
-  gs.LAC,
-  gs.CId,
-  gs.CGI,
-  fl.ASideLocation    AS Location,
-  fl.CollectionName,
-  CAST(pos.Latitude  AS FLOAT) AS latitude,
-  CAST(pos.Longitude AS FLOAT) AS longitude
-FROM [dbo].[FactGSMScanner] gs
-LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = gs.[FileId]
-LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = gs.[PosId]
-WHERE gs.[DmnIdTopN_RxLev] = 1
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-ORDER BY latitude, longitude`,
-  },
-  {
-    label: "— Custom SQL —",
-    category: "Custom",
-    mode: "points",
-    valueCol: "",
-    colorScheme: "rsrp_data",
-    labelCol: "Location",
-    sql: `-- Custom query για σημεία GPS.
--- Χρειάζονται στήλες: latitude, longitude, και η τιμή σας.
--- Παράδειγμα:
-SELECT TOP 2000
-  CAST(DP.Latitude  AS FLOAT) AS latitude,
-  CAST(DP.Longitude AS FLOAT) AS longitude,
-  flr.rsrp,
-  DF.ASideLocation AS Location
-FROM LTEMeasurementReport AS flr
-LEFT JOIN Sessions AS fs ON flr.SessionId = fs.SessionId
-LEFT JOIN FileList AS DF ON fs.FileId     = DF.FileId
-LEFT JOIN Position AS DP ON flr.PosId     = DP.PosId
-WHERE DP.Latitude IS NOT NULL AND flr.rsrp IS NOT NULL
-ORDER BY flr.MsgTime`,
-  },
-];
-
-// ── Compute bucket counters for legend ───────────────────────────────────────
-function computeBucketCounters(
-  rows: Record<string, CellValue>[],
-  valueCol: string,
-  scheme: ColorScheme,
-): Map<string, number> {
-  const counters = new Map<string, number>();
-  if (scheme.type === "range") {
-    for (const b of scheme.buckets) counters.set(b.label, 0);
-    for (const row of rows) {
-      const n = Number(row[valueCol]);
-      if (isNaN(n)) continue;
-      const bucket = scheme.buckets.find((b) => n >= b.min && n < b.max);
-      if (bucket) counters.set(bucket.label, (counters.get(bucket.label) ?? 0) + 1);
-    }
-  } else {
-    for (const c of scheme.categories) counters.set(c.value, 0);
-    for (const row of rows) {
-      const str = String(row[valueCol] ?? "").trim();
-      counters.set(str, (counters.get(str) ?? 0) + 1);
-    }
-  }
-  return counters;
-}
-
-// ── Dynamic PCI coloring: the N most-sampled PCI values get distinct colors; ──
-// everything else falls back to the scheme's defaultColor (no fixed 1-99/100-199… bands).
-const DYNAMIC_PCI_COLORS = [
-  "#e6194b", "#3cb44b", "#ffe119", "#4363d8", "#f58231",
-  "#911eb4", "#46f0f0", "#f032e6", "#bcf60c", "#008080",
-];
-
-function buildDynamicPciCategories(rows: Record<string, CellValue>[], valueCol: string): CategoryEntry[] {
-  if (!valueCol) return [];
-  const counts = new Map<string, number>();
-  for (const row of rows) {
-    const raw = row[valueCol];
-    if (raw === null || raw === undefined || raw === "") continue;
-    const key = String(raw).trim();
-    counts.set(key, (counts.get(key) ?? 0) + 1);
-  }
-  return [...counts.entries()]
-    .sort((a, b) => b[1] - a[1])
-    .slice(0, DYNAMIC_PCI_COLORS.length)
-    .map(([value], i) => ({ value, color: DYNAMIC_PCI_COLORS[i] }));
-}
-
-// ── Spatial decimation: keep at most maxPoints, one per adaptive grid cell ────
+// Ανώτατο πλήθος σημείων που ζωγραφίζονται ταυτόχρονα ανά layer
 const MAX_RENDER_POINTS = 20000;
 
 // Δύο layers μπορεί κάλλιστα να δίνουν κουκκίδες στο ίδιο χρώμα (π.χ. και τα δύο
 // πράσινο). Το χρώμα ανήκει στην ΤΙΜΗ, οπότε το layer το δηλώνει το ΣΧΗΜΑ και το
-// μέγεθος: γεμάτη κουκκίδα → L1, Χ → L2, τρίγωνο → L3. Το legend δείχνει ακριβώς
-// το ίδιο σχήμα, οπότε κάθε γραμμή του διαβάζεται χωρίς να εξαρτάται από χρώμα.
-type MarkerShape = "circle" | "cross" | "triangle";
+// μέγεθος. Τα παρακάτω είναι απλώς τα defaults ανά layer — σχήμα, μέγεθος και
+// πάχος αλλάζουν δυναμικά από τις Ρυθμίσεις του κάθε layer, και το legend
+// ακολουθεί πάντα ό,τι ζωγραφίζεται στον χάρτη.
+type MarkerShape = "circle" | "triangle" | "square" | "diamond" | "cross" | "plus";
+
+// Σχήματα που ζωγραφίζονται μόνο με γραμμές (χωρίς γέμισμα)
+const STROKE_ONLY_SHAPES: MarkerShape[] = ["cross", "plus"];
+const isStrokeOnly = (shape: MarkerShape) => STROKE_ONLY_SHAPES.includes(shape);
+
+const SHAPE_OPTIONS: Array<{ value: MarkerShape; label: string }> = [
+  { value: "circle",   label: "● κύκλος" },
+  { value: "triangle", label: "▲ τρίγωνο" },
+  { value: "square",   label: "■ τετράγωνο" },
+  { value: "diamond",  label: "◆ ρόμβος" },
+  { value: "cross",    label: "✕ Χ" },
+  { value: "plus",     label: "✚ σταυρός" },
+];
 
 interface LayerMarkerStyle {
   shape: MarkerShape;
   radius: number;
-  fillOpacity: number;
   weight: number;
 }
 
 const LAYER_MARKER_STYLES: LayerMarkerStyle[] = [
-  { shape: "circle",   radius: 4, fillOpacity: 0.85, weight: 1 },
-  { shape: "cross",    radius: 6, fillOpacity: 0,    weight: 2.2 },
-  { shape: "triangle", radius: 6, fillOpacity: 0.9,  weight: 1 },
+  { shape: "circle",   radius: 4, weight: 1 },
+  { shape: "triangle", radius: 7, weight: 1 },
+  { shape: "cross",    radius: 8, weight: 2.5 },
 ];
 
 const markerStyleFor = (index: number) => LAYER_MARKER_STYLES[index] ?? LAYER_MARKER_STYLES[0];
@@ -1567,9 +255,17 @@ function shapePathD(x: number, y: number, r: number, shape: MarkerShape): string
   switch (shape) {
     case "cross":
       return `M${x - r},${y - r}L${x + r},${y + r}M${x + r},${y - r}L${x - r},${y + r}`;
+    case "plus":
+      return `M${x},${y - r}L${x},${y + r}M${x - r},${y}L${x + r},${y}`;
     case "triangle": {
       const h = r * 1.15;
       return `M${x},${y - h}L${x + r},${y + h * 0.7}L${x - r},${y + h * 0.7}Z`;
+    }
+    case "square":
+      return `M${x - r},${y - r}h${r * 2}v${r * 2}h${-r * 2}Z`;
+    case "diamond": {
+      const d = r * 1.2;
+      return `M${x},${y - d}L${x + d},${y}L${x},${y + d}L${x - d},${y}Z`;
     }
     default:
       return `M${x - r},${y}a${r},${r} 0 1,0 ${r * 2},0 a${r},${r} 0 1,0 ${-r * 2},0`;
@@ -1579,22 +275,74 @@ function shapePathD(x: number, y: number, r: number, shape: MarkerShape): string
 // CircleMarker που ζωγραφίζει αυθαίρετο σχήμα: κρατά όλη τη συμπεριφορά του
 // (σταθερό μέγεθος σε pixel σε κάθε zoom, ίδιο performance με χιλιάδες σημεία)
 // και αλλάζει μόνο το path που δίνει στον SVG renderer του Leaflet.
+// Το ίδιο σχήμα σε canvas context — ίδια γεωμετρία με το shapePathD
+function traceShape(ctx: CanvasRenderingContext2D, x: number, y: number, r: number, shape: MarkerShape): void {
+  switch (shape) {
+    case "cross":
+      ctx.moveTo(x - r, y - r); ctx.lineTo(x + r, y + r);
+      ctx.moveTo(x + r, y - r); ctx.lineTo(x - r, y + r);
+      break;
+    case "plus":
+      ctx.moveTo(x, y - r); ctx.lineTo(x, y + r);
+      ctx.moveTo(x - r, y); ctx.lineTo(x + r, y);
+      break;
+    case "triangle": {
+      const h = r * 1.15;
+      ctx.moveTo(x, y - h); ctx.lineTo(x + r, y + h * 0.7); ctx.lineTo(x - r, y + h * 0.7);
+      ctx.closePath();
+      break;
+    }
+    case "square":
+      ctx.rect(x - r, y - r, r * 2, r * 2);
+      break;
+    case "diamond": {
+      const d = r * 1.2;
+      ctx.moveTo(x, y - d); ctx.lineTo(x + d, y); ctx.lineTo(x, y + d); ctx.lineTo(x - d, y);
+      ctx.closePath();
+      break;
+    }
+    default:
+      ctx.arc(x, y, r, 0, Math.PI * 2, false);
+  }
+}
+
+interface ShapeMarkerInternals {
+  _radius: number;
+  _point: { x: number; y: number };
+  options: { shape: MarkerShape };
+  _empty: () => boolean;
+  _renderer: {
+    _setPath?: (layer: unknown, d: string) => void;
+    _drawing?: boolean;
+    _ctx?: CanvasRenderingContext2D;
+    _fillStroke?: (ctx: CanvasRenderingContext2D, layer: unknown) => void;
+  };
+}
+
 const ShapeMarkerClass = LeafletCircleMarker.extend({
   options: { shape: "circle" as MarkerShape },
-  _updatePath(this: {
-    _radius: number;
-    _point: { x: number; y: number };
-    options: { shape: MarkerShape };
-    _empty: () => boolean;
-    _renderer: { _setPath: (layer: unknown, d: string) => void };
-  }) {
+  _updatePath(this: ShapeMarkerInternals) {
+    const renderer = this._renderer;
     const r = Math.max(Math.round(this._radius), 1);
-    const d = this._empty() ? "M0 0" : shapePathD(this._point.x, this._point.y, r, this.options.shape);
-    this._renderer._setPath(this, d);
+    const shape = this.options.shape;
+    // SVG renderer: δίνουμε path string, όπως κάνει ο ίδιος ο CircleMarker
+    if (renderer._setPath) {
+      renderer._setPath(this, this._empty() ? "M0 0" : shapePathD(this._point.x, this._point.y, r, shape));
+      return;
+    }
+    // Canvas renderer: ζωγραφίζουμε στο ίδιο context που χρησιμοποιεί το
+    // Leaflet για τους κύκλους — ένα canvas αντί για N κόμβους DOM.
+    if (!renderer._drawing || !renderer._ctx || this._empty()) return;
+    const ctx = renderer._ctx;
+    ctx.beginPath();
+    traceShape(ctx, this._point.x, this._point.y, r, shape);
+    renderer._fillStroke?.(ctx, this);
   },
 });
 
-interface ShapeMarkerProps extends CircleMarkerProps { shape?: MarkerShape }
+// `idx`: δείκτης του σημείου μέσα στο layer — τα κοινά event handlers τον
+// διαβάζουν από τα options του marker, χωρίς closure ανά σημείο.
+interface ShapeMarkerProps extends CircleMarkerProps { shape?: MarkerShape; idx?: number }
 
 const ShapeMarker = createPathComponent<LeafletCircleMarkerType, ShapeMarkerProps>(
   function createShapeMarker({ center, children: _c, ...options }, ctx) {
@@ -1614,29 +362,30 @@ const ShapeMarker = createPathComponent<LeafletCircleMarkerType, ShapeMarkerProp
   },
 );
 
-function decimatePoints<T extends { lat: number; lng: number }>(pts: T[], max = MAX_RENDER_POINTS): T[] {
-  if (pts.length <= max) return pts;
-  let minLat = pts[0].lat, maxLat = pts[0].lat;
-  let minLng = pts[0].lng, maxLng = pts[0].lng;
-  for (let i = 1; i < pts.length; i++) {
-    if (pts[i].lat < minLat) minLat = pts[i].lat;
-    if (pts[i].lat > maxLat) maxLat = pts[i].lat;
-    if (pts[i].lng < minLng) minLng = pts[i].lng;
-    if (pts[i].lng > maxLng) maxLng = pts[i].lng;
-  }
-  const latRange = maxLat - minLat || 0.1;
-  const lngRange = maxLng - minLng || 0.1;
-  const cellSize = Math.sqrt((latRange * lngRange) / max);
-  const seen = new Set<string>();
-  return pts.filter((p) => {
-    const key = `${Math.floor(p.lat / cellSize)},${Math.floor(p.lng / cellSize)}`;
-    if (seen.has(key)) return false;
-    seen.add(key);
-    return true;
-  });
-}
-
 const lc = (s: string) => s.toLowerCase();
+
+// ── SQL placeholders ─────────────────────────────────────────────────────────
+const sqlEscape = (v: string) => v.replace(/'/g, "''");
+
+// Με τιμή: απλή αντικατάσταση (split/join, ώστε ένα `$&` μέσα στην τιμή να μη
+// διαβαστεί ως replacement pattern). Χωρίς τιμή: ουδετεροποιούμε τη ΣΥΓΚΡΙΣΗ
+// (`x = '{location}'` → `1 = 1`) αντί να σβήσουμε ολόκληρη τη γραμμή — αν η
+// γραμμή είχε και δεύτερη συνθήκη, το σβήσιμο την έχανε σιωπηλά. Ό,τι δεν έχει
+// τη μορφή σύγκρισης πέφτει πίσω στην παλιά συμπεριφορά.
+const PLACEHOLDER_COMPARISON = (placeholder: string) =>
+  new RegExp(String.raw`[\w.\[\]]+\s*(?:=|LIKE)\s*'\{${placeholder}\}'`, "gi");
+
+function applySqlFilter(sql: string, placeholder: string, value: string): string {
+  const token = `{${placeholder}}`;
+  if (!sql.includes(token)) return sql;
+  if (value) return sql.split(token).join(sqlEscape(value));
+  const neutralized = sql.replace(PLACEHOLDER_COMPARISON(placeholder), "1 = 1");
+  if (!neutralized.includes(token)) return neutralized;
+  return neutralized
+    .split("\n")
+    .filter((line) => !line.includes(token))
+    .join("\n");
+}
 
 // ── Map layers ────────────────────────────────────────────────────────────────
 // Ένα panel μπορεί να στοιβάξει πολλαπλά ανεξάρτητα queries στον ΙΔΙΟ χάρτη
@@ -1645,7 +394,90 @@ const lc = (s: string) => s.toLowerCase();
 // σταθερό πλήθος φορές (rules of hooks) — τα layers πάνω από το layerCount
 // μένουν ανενεργά με άδειο database.
 const MAX_LAYERS = 3;
+// ── Uniform split grid: same column count keeps every panel the same size ────
+const MAX_PANELS = 4;
 const LAYER_ACCENTS = ["#3b82f6", "#f59e0b", "#a855f7"];
+
+// ── Shareable URL state ───────────────────────────────────────────────────────
+// Ένα param (`?qmap=…`) περιγράφει panels → layers: database, template, φίλτρα
+// και εμφάνιση, ώστε ένα link να ανοίγει ακριβώς τον χάρτη που βλέπεις. Τα πεδία
+// είναι θεσιακά και URI-encoded, ώστε ονόματα με κενά ή διαχωριστικά να μη
+// σπάνε το URL. Το custom SQL ΔΕΝ αποθηκεύεται (πολύ μεγάλο για URL) — ένα link
+// επαναφέρει το template, όχι χειρόγραφες αλλαγές στο query. Τα αποτελέσματα
+// δεν εκτελούνται αυτόματα: ο χρήστης πατάει Run όταν θέλει.
+interface LayerInit {
+  db?: string;
+  tmplIdx?: number;
+  collection?: string;
+  location?: string;
+  shape?: MarkerShape;
+  radius?: number;
+  weight?: number;
+  mode?: MapMode;
+  visible?: boolean;
+}
+
+const FIELD_SEP = "~";
+const LAYER_SEP = ";";
+const PANEL_SEP = "|";
+
+// Το encodeURIComponent ΔΕΝ κάνει escape το `~` (unreserved), οπότε ένα όνομα
+// collection/location με `~` θα έσπαγε το parsing των πεδίων — το κωδικοποιούμε
+// ρητά. Τα `;` και `|` τα καλύπτει ήδη το encodeURIComponent.
+const encField = (v: string) => encodeURIComponent(v).replace(/~/g, "%7E");
+
+const safeDecode = (v: string) => {
+  try { return decodeURIComponent(v); } catch { return ""; }
+};
+
+const clamp = (n: number, min: number, max: number) => Math.min(Math.max(n, min), max);
+
+function serializeLayerInit(l: Required<LayerInit>): string {
+  return [
+    encField(l.db),
+    String(l.tmplIdx),
+    encField(l.collection),
+    encField(l.location),
+    l.shape,
+    String(l.radius),
+    String(l.weight),
+    l.mode === "bubble" ? "b" : "p",
+    l.visible ? "1" : "0",
+  ].join(FIELD_SEP);
+}
+
+function parseLayerInit(raw: string): LayerInit | null {
+  const f = raw.split(FIELD_SEP);
+  if (f.length < 4) return null;
+  const tmplIdx = Number(f[1]);
+  const shape = f[4] as MarkerShape;
+  const radius = Number(f[5]);
+  const weight = Number(f[6]);
+  return {
+    db: safeDecode(f[0]),
+    tmplIdx: Number.isInteger(tmplIdx) && tmplIdx >= 0 && tmplIdx < TEMPLATES.length ? tmplIdx : 0,
+    collection: safeDecode(f[2]),
+    location: safeDecode(f[3]),
+    shape: SHAPE_OPTIONS.some((o) => o.value === shape) ? shape : undefined,
+    radius: Number.isFinite(radius) ? clamp(radius, 2, 14) : undefined,
+    weight: Number.isFinite(weight) ? clamp(weight, 0.5, 6) : undefined,
+    mode: f[7] === "b" ? "bubble" : f[7] === "p" ? "points" : undefined,
+    visible: f[8] === undefined ? undefined : f[8] === "1",
+  };
+}
+
+/** `?qmap=` → ένας πίνακας layers ανά panel (άκυρα κομμάτια αγνοούνται). */
+function parseQueryMapUrlState(raw: string): LayerInit[][] {
+  if (!raw) return [];
+  return raw
+    .split(PANEL_SEP)
+    .map((panel) => panel.split(LAYER_SEP)
+      .map(parseLayerInit)
+      .filter((l): l is LayerInit => l !== null)
+      .slice(0, MAX_LAYERS))
+    .filter((layers) => layers.length > 0)
+    .slice(0, MAX_PANELS);
+}
 
 interface LayerState {
   db: string;
@@ -1669,36 +501,45 @@ interface LayerState {
   selectedGroup: string | null;
   selectedBuckets: Set<string>;
   visible: boolean;
+  shape: MarkerShape;
+  radius: number;
+  weight: number;
 }
 
-function useQueryLayer(initialDb: string) {
-  const [db, setDb]                         = useState(initialDb);
+function useQueryLayer(init: LayerInit, index: number) {
+  // Αρχικές τιμές από το URL (ή defaults) — διαβάζονται μία φορά, στο mount
+  const initTemplate = TEMPLATES[init.tmplIdx ?? 0] ?? TEMPLATES[0];
+  const [db, setDb]                         = useState(init.db ?? "");
   const [collections, setCollections]       = useState<string[]>([]);
   const [collectionsLoading, setCollectionsLoading] = useState(false);
   const [locations, setLocations]           = useState<string[]>([]);
 
-  const [tmplIdx, setTmplIdx]               = useState(0);
-  const [sql, setSql]                       = useState(TEMPLATES[0].sql);
-  const [mode, setMode]                     = useState<MapMode>(TEMPLATES[0].mode);
-  const [quantityCol, setQuantityCol]       = useState(TEMPLATES[0].quantityCol ?? "");
-  const [labelCol, setLabelCol]             = useState(TEMPLATES[0].labelCol);
+  const [tmplIdx, setTmplIdx]               = useState(init.tmplIdx ?? 0);
+  const [sql, setSql]                       = useState(initTemplate.sql);
+  const [mode, setMode]                     = useState<MapMode>(init.mode ?? initTemplate.mode);
+  const [quantityCol, setQuantityCol]       = useState(initTemplate.quantityCol ?? "");
+  const [labelCol, setLabelCol]             = useState(initTemplate.labelCol);
   const [latCol, setLatCol]                 = useState("");
   const [lngCol, setLngCol]                 = useState("");
-  const [valueCol, setValueCol]             = useState(TEMPLATES[0].valueCol ?? "");
-  const [colorSchemeKey, setColorSchemeKey] = useState(TEMPLATES[0].colorScheme ?? "rsrp_data");
+  const [valueCol, setValueCol]             = useState(initTemplate.valueCol ?? "");
+  const [colorSchemeKey, setColorSchemeKey] = useState(initTemplate.colorScheme ?? "rsrp_data");
   const [isRunning, setIsRunning]           = useState(false);
   const [error, setError]                   = useState<string | null>(null);
   const [columns, setColumns]               = useState<string[]>([]);
   const [rows, setRows]                     = useState<Record<string, CellValue>[]>([]);
   const [executionTime, setExecutionTime]   = useState<number | null>(null);
-  const [filterCollection, setFilterCollection] = useState("");
-  const [filterLocation, setFilterLocation]     = useState("");
+  const [filterCollection, setFilterCollection] = useState(init.collection ?? "");
+  const [filterLocation, setFilterLocation]     = useState(init.location ?? "");
   const [filterNRARFCN, setFilterNRARFCN]       = useState("");
   const [filterLink, setFilterLink]             = useState("");
   const [selectedGroup, setSelectedGroup]       = useState<string | null>(null);
   // Multiple legend value-groups can be isolated at once (e.g. RSRP -75..-65 AND -85..-75)
   const [selectedBuckets, setSelectedBuckets]   = useState<Set<string>>(new Set());
-  const [visible, setVisible]                   = useState(true);
+  const [visible, setVisible]                   = useState(init.visible ?? true);
+  // Στυλ κουκκίδας — ξεκινά από το URL ή από το default του layer, και αλλάζει δυναμικά
+  const [shape, setShape]   = useState<MarkerShape>(init.shape ?? markerStyleFor(index).shape);
+  const [radius, setRadius] = useState<number>(init.radius ?? markerStyleFor(index).radius);
+  const [weight, setWeight] = useState<number>(init.weight ?? markerStyleFor(index).weight);
 
   useEffect(() => {
     if (!db) { setCollections([]); setLocations([]); return; }
@@ -1715,6 +556,11 @@ function useQueryLayer(initialDb: string) {
       .then(setLocations)
       .catch(() => setLocations([]));
   }, [db, filterCollection]);
+
+  // Σταθερό callback: περνά σαν prop στο memoized LayerMarkers
+  const toggleGroup = useCallback((label: string) => {
+    setSelectedGroup((g) => (g === label ? null : label));
+  }, []);
 
   const toggleBucket = useCallback((label: string) => {
     setSelectedBuckets((prev) => {
@@ -1776,7 +622,14 @@ function useQueryLayer(initialDb: string) {
   const needsFilters = template?.requiresFilters ?? false;
   const filtersReady = !needsFilters || (filterCollection !== "" && filterLocation !== "");
 
+  // Αύξων αριθμός τρέχοντος run — φρουρός για out-of-order απαντήσεις
+  const runIdRef = useRef(0);
+
   const clearResults = () => {
+    // Αλλαγή template/db ακυρώνει ό,τι τρέχει: η απάντησή του δεν αφορά
+    // πια αυτό που βλέπει ο χρήστης.
+    runIdRef.current++;
+    setIsRunning(false);
     setRows([]); setColumns([]); setError(null); setExecutionTime(null);
     setFilterNRARFCN(""); setFilterLink(""); setSelectedGroup(null); setSelectedBuckets(new Set());
   };
@@ -1811,7 +664,7 @@ function useQueryLayer(initialDb: string) {
     db, tmplIdx, sql, mode, quantityCol, labelCol, latCol, lngCol, valueCol,
     colorSchemeKey, columns, rows, executionTime, error,
     filterCollection, filterLocation, filterNRARFCN, filterLink,
-    selectedGroup, selectedBuckets, visible,
+    selectedGroup, selectedBuckets, visible, shape, radius, weight,
   });
 
   const setState = (s: LayerState) => {
@@ -1824,45 +677,45 @@ function useQueryLayer(initialDb: string) {
     setFilterNRARFCN(s.filterNRARFCN); setFilterLink(s.filterLink);
     setSelectedGroup(s.selectedGroup); setSelectedBuckets(s.selectedBuckets);
     setVisible(s.visible);
+    setShape(s.shape); setRadius(s.radius); setWeight(s.weight);
   };
 
   const runQuery = async () => {
     if (!db) { setError("Επιλέξτε database πρώτα."); return; }
     if (!filtersReady) { setError("Επιλέξτε Collection και ASideLocation πριν εκτελέσετε το query."); return; }
+    // Κάθε run παίρνει αύξοντα αριθμό: μια αργή απάντηση που γυρίζει ΜΕΤΑ από
+    // νεότερο run (ή μετά από αλλαγή template/db) αγνοείται, αντί να γράψει από πάνω.
+    const runId = ++runIdRef.current;
     setIsRunning(true); setError(null); setSelectedGroup(null); setSelectedBuckets(new Set());
-    const esc = (s: string) => s.replace(/'/g, "''");
-    let effectiveSql = sql;
-    if (filterCollection) {
-      effectiveSql = effectiveSql.replace(/\{collection\}/g, esc(filterCollection));
-    } else {
-      effectiveSql = effectiveSql.split("\n").filter((line) => !line.includes("{collection}")).join("\n");
-    }
-    if (filterLocation) {
-      effectiveSql = effectiveSql.replace(/\{location\}/g, esc(filterLocation));
-    } else {
-      effectiveSql = effectiveSql.split("\n").filter((line) => !line.includes("{location}")).join("\n");
-    }
+    const effectiveSql = applySqlFilter(
+      applySqlFilter(sql, "collection", filterCollection),
+      "location", filterLocation,
+    );
     try {
       const result = await runBenchmarkApi(db, [effectiveSql]);
-      if (result.results.length > 0) {
-        const r = result.results[0];
+      if (runId !== runIdRef.current) return;
+      const r = result.results[0];
+      if (r) {
         setColumns(r.columns); setRows(r.data); setExecutionTime(r.executionTime);
         if (!template?.colorScheme) {
           const colsLower = r.columns.map((c) => c.toLowerCase());
-          const match = Object.entries(COLOR_SCHEMES).find(([, s]) => colsLower.includes(s.suggestCol.toLowerCase()));
+          const match = Object.entries(COLOR_SCHEMES).find(([, sc]) => colsLower.includes(sc.suggestCol.toLowerCase()));
           if (match) setColorSchemeKey(match[0]);
         }
       }
     } catch (e) {
+      if (runId !== runIdRef.current) return;
       setError(e instanceof Error ? e.message : "Σφάλμα εκτέλεσης query");
-    } finally { setIsRunning(false); }
+    } finally {
+      if (runId === runIdRef.current) setIsRunning(false);
+    }
   };
 
   // Keep ref pointing to latest runQuery so external triggers avoid stale closures
   const runRef = useRef<() => void>(() => {});
   runRef.current = runQuery;
 
-  const bubblePoints = useMemo(() => {
+  const bubblePoints = useMemo<BubblePointData[]>(() => {
     if (mode !== "bubble" || !effQtyCol || filteredRows.length === 0) return [];
     const vals = filteredRows.map((r) => Number(r[effQtyCol])).filter((v) => !isNaN(v));
     if (!vals.length) return [];
@@ -1904,7 +757,9 @@ function useQueryLayer(initialDb: string) {
     return bubblePoints.filter((p) => selectedBuckets.has(bubbleTierLabel(p.normalized)));
   }, [bubblePoints, selectedBuckets]);
 
-  const pointMarkers = useMemo(() => {
+  // Χωρίς το `row`: το tooltip των σημείων δείχνει μόνο label + τιμή, οπότε δεν
+  // κρατάμε ολόκληρη τη γραμμή του DB ×20.000 markers ×layers ×panels.
+  const pointMarkers = useMemo<PointMarkerData[]>(() => {
     if (mode !== "points" || !effValCol || !effLatCol || !effLngCol || filteredRows.length === 0) return [];
     const raw = filteredRows.flatMap((row) => {
       const lat = Number(row[effLatCol]), lng = Number(row[effLngCol]);
@@ -1916,10 +771,10 @@ function useQueryLayer(initialDb: string) {
         color: colorForValue(currentScheme, val),
         bucketKey: bucketKeyForValue(currentScheme, val),
         label: effLabelCol ? String(row[effLabelCol] ?? "") : "",
-        row,
       }];
     });
-    return decimatePoints(raw);
+    // Χωρίς αραίωση εδώ: το αραίωμα γίνεται πλέον ανά viewport (decimateForView)
+    return raw;
   }, [mode, filteredRows, effValCol, effLatCol, effLngCol, effLabelCol, currentScheme]);
 
   // Legend click-to-filter: isolate one or more value buckets/categories
@@ -1928,12 +783,12 @@ function useQueryLayer(initialDb: string) {
     return pointMarkers.filter((p) => selectedBuckets.has(p.bucketKey));
   }, [pointMarkers, selectedBuckets]);
 
-  // Memoized: MapBounds re-fits whenever this array identity changes, so a fresh
-  // array on every render would reset the user's pan/zoom on any state change.
-  const mapPoints = useMemo(() => (mode === "bubble"
-    ? visibleBubblePoints.map((p) => ({ lat: p.lat, lng: p.lng }))
-    : visiblePointMarkers.map((p) => ({ lat: p.lat, lng: p.lng }))),
-    [mode, visibleBubblePoints, visiblePointMarkers]);
+  // Ό,τι δείχνει ο χάρτης αυτή τη στιγμή (πριν το per-viewport αραίωμα)
+  const shownPoints = mode === "bubble" ? visibleBubblePoints : visiblePointMarkers;
+  const pointCount = shownPoints.length;
+  // Bounds αντί για πίνακα σημείων: το MapBounds θέλει μόνο το πλαίσιο, και έτσι
+  // δεν φτιάχνεται πίνακας 20.000 αντικειμένων σε κάθε render.
+  const dataBounds = useMemo(() => computeBounds(shownPoints), [shownPoints]);
 
   const bucketCounters = useMemo(() => {
     if (mode !== "points" || !effValCol || filteredRows.length === 0) return new Map<string, number>();
@@ -1949,13 +804,14 @@ function useQueryLayer(initialDb: string) {
     isRunning, error, setError, columns, rows, executionTime,
     filterCollection, setFilterCollection, filterLocation, setFilterLocation,
     filterNRARFCN, setFilterNRARFCN, filterLink, setFilterLink,
-    selectedGroup, setSelectedGroup, selectedBuckets, setSelectedBuckets, toggleBucket,
+    selectedGroup, setSelectedGroup, toggleGroup, selectedBuckets, setSelectedBuckets, toggleBucket,
     visible, setVisible,
+    shape, setShape, radius, setRadius, weight, setWeight,
     effLatCol, effLngCol, effQtyCol, effValCol, effLabelCol,
     uniqueCollections, filteredRows, currentScheme, availableNRARFCNs, availableLinks,
     filtersReady, selectTemplate, applySync, getState, setState, clearResults,
     runQuery, runRef,
-    visibleBubblePoints, bubbleTierCounts, visiblePointMarkers, mapPoints,
+    visibleBubblePoints, bubbleTierCounts, visiblePointMarkers, pointCount, dataBounds,
     bucketCounters, pointsTotal,
   };
 }
@@ -1967,56 +823,252 @@ function layerName(L: QueryLayer, index: number): string {
   return `L${index + 1} · ${L.template?.label ?? "—"}`;
 }
 
-// ── Σχήμα κουκκίδας ενός layer, για legend & layer strip ─────────────────────
-// Χωρίς `color` παίρνει το accent του layer (header/tab)· με `color` δείχνει το
-// χρώμα της τιμής στο σχήμα του layer (γραμμές του legend).
-const LayerShapeSwatch = ({ index, color, size = 11 }: { index: number; color?: string; size?: number }) => {
-  const st = markerStyleFor(index);
-  const c = color ?? LAYER_ACCENTS[index] ?? LAYER_ACCENTS[0];
+// ── Σχήμα κουκκίδας ενός layer, για legend / tabs / status row ───────────────
+// Δείχνει πάντα το ΤΡΕΧΟΝ σχήμα του layer, στο χρώμα που του δίνεις (accent του
+// layer στα headers, χρώμα της τιμής στις γραμμές του legend).
+const LayerShapeSwatch = ({ shape, color, size = 11 }: {
+  shape: MarkerShape; color: string; size?: number;
+}) => {
   const mid = size / 2;
-  const r = mid - (st.shape === "circle" ? 1.4 : 1.8);
+  const r = mid - (shape === "circle" ? 1.4 : 1.8);
+  const strokeOnly = isStrokeOnly(shape);
   return (
     <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
-      <path d={shapePathD(mid, mid, r, st.shape)}
-        fill={c} fillOpacity={st.fillOpacity || 0}
-        stroke={c} strokeWidth={st.shape === "cross" ? 2 : 1}
+      <path d={shapePathD(mid, mid, r, shape)}
+        fill={strokeOnly ? "none" : color} fillOpacity={0.9}
+        stroke={color} strokeWidth={strokeOnly ? 2 : 1}
         strokeLinecap="round" />
     </svg>
   );
 };
 
-// ── Markers of one layer, drawn inside the shared <MapContainer> ──────────────
-const LayerMarkers = ({ L, index, name, showName }: {
-  L: QueryLayer; index: number; name: string; showName: boolean;
-}) => {
-  if (!L.visible) return null;
+// ── Σειρά σχεδίασης των layers ────────────────────────────────────────────────
+// Κάθε layer ζωγραφίζεται σε δικό του Leaflet pane, οπότε η σειρά «ποιο πάει
+// πάνω» είναι ένα z-index στο pane — αλλάζει ακαριαία, ακόμη και με δεκάδες
+// χιλιάδες σημεία (καμία μετακίνηση DOM κόμβων).
+const layerPaneName = (index: number) => `qm-layer-${index}`;
+const LAYER_PANE_Z = 401;
 
-  if (L.mode === "bubble") {
+const PaneStack = ({ order }: { order: number[] }) => {
+  const map = useMap();
+  useEffect(() => {
+    order.forEach((layerIdx, pos) => {
+      const pane = map.getPane(layerPaneName(layerIdx));
+      if (pane) pane.style.zIndex = String(LAYER_PANE_Z + pos);
+    });
+  }, [map, order]);
+  return null;
+};
+
+// ── Markers of one layer, drawn inside the shared <MapContainer> ──────────────
+interface PointMarkerData {
+  lat: number;
+  lng: number;
+  val: CellValue;
+  color: string;
+  bucketKey: string | null;
+  label: string;
+}
+
+interface BubblePointData {
+  lat: number;
+  lng: number;
+  qty: number;
+  normalized: number;
+  radius: number;
+  row: Record<string, CellValue>;
+}
+
+interface LayerMarkersProps {
+  visible: boolean;
+  mode: MapMode;
+  bubblePoints: BubblePointData[];
+  pointMarkers: PointMarkerData[];
+  shape: MarkerShape;
+  radius: number;
+  weight: number;
+  dimmed: boolean;
+  accent: string;
+  isBase: boolean;
+  name: string;
+  showName: boolean;
+  valueCol: string;
+  qtyCol: string;
+  labelCol: string;
+  latCol: string;
+  lngCol: string;
+  selectedGroup: string | null;
+  onToggleGroup: (label: string) => void;
+}
+
+// ── Zoom-aware decimation ─────────────────────────────────────────────────────
+// Κρατάμε μόνο ό,τι πέφτει στο τρέχον viewport και ένα σημείο ανά κελί οθόνης.
+// Πριν, το αραίωμα γινόταν μία φορά για όλο το dataset: σε zoom-in έχανες
+// δείγματα που χωρούσαν άνετα. Επιστρέφει δείκτες, ώστε να μην αντιγράφονται
+// αντικείμενα σε κάθε μετακίνηση του χάρτη.
+function decimateForView(
+  pts: Array<{ lat: number; lng: number }>,
+  map: LeafletMap,
+  spacingPx: number,
+  max = MAX_RENDER_POINTS,
+): number[] {
+  const b = map.getBounds().pad(0.25);
+  const south = b.getSouth(), north = b.getNorth(), west = b.getWest(), east = b.getEast();
+  // Μοίρες ανά pixel στο τρέχον zoom (Web Mercator, 256px tiles)
+  const degPerPx = 360 / (256 * Math.pow(2, map.getZoom()));
+  const cellLng = Math.max(spacingPx, 1) * degPerPx;
+  // Στον Mercator τα pixels/μοίρα στο lat είναι 1/cos(φ) των lng — το κελί
+  // διορθώνεται ώστε η αραίωση να είναι ισότροπη στην οθόνη.
+  const cellLat = cellLng * Math.cos((map.getCenter().lat * Math.PI) / 180) || cellLng;
+  const seen = new Set<string>();
+  const out: number[] = [];
+  for (let i = 0; i < pts.length; i++) {
+    const p = pts[i];
+    if (p.lat < south || p.lat > north || p.lng < west || p.lng > east) continue;
+    const key = `${Math.floor(p.lat / cellLat)},${Math.floor(p.lng / cellLng)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(i);
+    if (out.length >= max) break;
+  }
+  return out;
+}
+
+// ── Tooltip σημείου ως HTML ───────────────────────────────────────────────────
+// Ένα tooltip ανά layer (όχι ανά σημείο) σημαίνει ότι το περιεχόμενο φτιάχνεται
+// εκτός React — άρα με ρητό escaping των τιμών που έρχονται από τη βάση.
+const HTML_ESCAPES: Record<string, string> = { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" };
+const escapeHtml = (v: unknown) => String(v ?? "").replace(/[&<>"]/g, (c) => HTML_ESCAPES[c]);
+
+interface HoverContext {
+  points: PointMarkerData[];
+  valueCol: string;
+  name: string;
+  showName: boolean;
+  accent: string;
+  selectedGroup: string | null;
+  onToggleGroup: (label: string) => void;
+}
+
+function pointTooltipHtml(pt: PointMarkerData, ctx: HoverContext): string {
+  const display = typeof pt.val === "number"
+    ? (pt.val % 1 === 0 ? pt.val.toLocaleString() : pt.val.toFixed(2))
+    : String(pt.val);
+  const head = ctx.showName
+    ? `<div class="text-[9px] font-semibold uppercase tracking-wide" style="color:${escapeHtml(ctx.accent)}">${escapeHtml(ctx.name)}</div>`
+    : "";
+  const label = pt.label
+    ? `<div class="font-bold text-xs border-b border-gray-200 pb-0.5 mb-0.5">${escapeHtml(pt.label)}</div>`
+    : "";
+  const hint = pt.label
+    ? `<div class="text-[9px] text-gray-400 italic">${ctx.selectedGroup === pt.label ? "κλικ για επαναφορά όλων" : "κλικ για προβολή μόνο αυτής"}</div>`
+    : "";
+  return `<div class="font-sans text-center space-y-0.5">${head}${label}`
+    + `<div class="text-xs"><span class="text-gray-500">${escapeHtml(ctx.valueCol)}:</span> `
+    + `<span class="font-mono font-bold" style="color:${escapeHtml(pt.color)}">${escapeHtml(display)}</span></div>`
+    + `${hint}</div>`;
+}
+
+// Memo: ο γονιός ξαναγίνεται render σε κάθε πληκτρολόγηση στο SQL, σε κάθε hover
+// στο legend κ.λπ. Με primitive props + memoized πίνακες σημείων, οι δεκάδες
+// χιλιάδες markers δεν ξαναπερνούν καθόλου όταν δεν άλλαξαν τα δεδομένα τους.
+const LayerMarkers = memo(function LayerMarkers({
+  visible, mode, bubblePoints, pointMarkers,
+  shape, radius, weight, dimmed, accent, isBase,
+  name, showName, valueCol, qtyCol, labelCol, latCol, lngCol,
+  selectedGroup, onToggleGroup,
+}: LayerMarkersProps) {
+  const map = useMap();
+  // Focus σε άλλο layer: αυτό πέφτει κατά 60% (μένει στο 40%)
+  const dim = dimmed ? 0.4 : 1;
+  const strokeOnly = isStrokeOnly(shape);
+
+  // Ό,τι διαβάζουν τα κοινά handlers ζει σε ref, ώστε τα handlers να μένουν
+  // σταθερά — αλλιώς 20.000 markers θα ξανα-δένονταν σε κάθε αλλαγή state.
+  const hoverRef = useRef<HoverContext>({ points: pointMarkers, valueCol, name, showName, accent, selectedGroup, onToggleGroup });
+  hoverRef.current = { points: pointMarkers, valueCol, name, showName, accent, selectedGroup, onToggleGroup };
+
+  const tooltip = useMemo(() => new LeafletTooltipClass({ direction: "top", offset: [0, -6], opacity: 0.95 }), []);
+  useEffect(() => () => { map.closeTooltip(tooltip); }, [map, tooltip]);
+
+  // ΕΝΑ tooltip + ΕΝΑ σετ handlers για όλο το layer, αντί για ένα <Tooltip>
+  // React component και ξεχωριστό closure σε κάθε σημείο.
+  const handlers = useMemo<LeafletEventHandlerFnMap>(() => {
+    const pointOf = (e: LeafletLeafletEvent) => {
+      const idx = (e.target as { options?: { idx?: number } })?.options?.idx;
+      return idx === undefined ? null : hoverRef.current.points[idx] ?? null;
+    };
+    return {
+      mouseover(e) {
+        const pt = pointOf(e);
+        if (!pt) return;
+        tooltip.setLatLng([pt.lat, pt.lng]).setContent(pointTooltipHtml(pt, hoverRef.current));
+        map.openTooltip(tooltip);
+      },
+      mouseout() {
+        map.closeTooltip(tooltip);
+      },
+      click(e) {
+        const pt = pointOf(e);
+        if (pt?.label) hoverRef.current.onToggleGroup(pt.label);
+      },
+    };
+  }, [map, tooltip]);
+
+  // Ένα pathOptions ΑΝΑ ΧΡΩΜΑ (όχι ανά σημείο): σταθερό reference ⇒ η
+  // react-leaflet δεν ξανακαλεί setStyle() σε κάθε marker σε κάθε render.
+  const styleByColor = useMemo(() => {
+    const m = new Map<string, PathOptions>();
+    for (const pt of pointMarkers) {
+      if (m.has(pt.color)) continue;
+      m.set(pt.color, {
+        fillColor: pt.color, fill: !strokeOnly, fillOpacity: strokeOnly ? 0 : 0.85 * dim,
+        color: pt.color, opacity: dim, weight, lineCap: "round",
+      });
+    }
+    return m;
+  }, [pointMarkers, strokeOnly, dim, weight]);
+
+  // Ξανα-επιλογή σημείων όποτε αλλάζει το viewport
+  const [viewTick, setViewTick] = useState(0);
+  useEffect(() => {
+    const onMove = () => setViewTick((t) => t + 1);
+    map.on("moveend", onMove);
+    return () => { map.off("moveend", onMove); };
+  }, [map]);
+
+  const rendered = useMemo(
+    () => decimateForView(pointMarkers, map, Math.max(radius * 1.4, 3)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [pointMarkers, map, radius, viewTick],
+  );
+
+  if (!visible) return null;
+
+  if (mode === "bubble") {
     return (
       <>
-        {L.visibleBubblePoints.map((pt, i) => {
+        {bubblePoints.map((pt, i) => {
           const { fill, stroke } = bubbleColor(pt.normalized);
-          const label = L.effLabelCol ? String(pt.row[L.effLabelCol] ?? `#${i}`) : `#${i}`;
-          const extra = Object.entries(pt.row).filter(([k]) => k !== L.effLabelCol && k !== L.effLatCol && k !== L.effLngCol && k !== L.effQtyCol);
+          const label = labelCol ? String(pt.row[labelCol] ?? `#${i}`) : `#${i}`;
+          const extra = Object.entries(pt.row).filter(([k]) => k !== labelCol && k !== latCol && k !== lngCol && k !== qtyCol);
           return (
             <CircleMarker key={i} center={[pt.lat, pt.lng]} radius={pt.radius}
-              pathOptions={{ fillColor: fill, fillOpacity: 0.78, color: index === 0 ? stroke : LAYER_ACCENTS[index], weight: index === 0 ? 2 : 3 }}
-              eventHandlers={{
-                click: () => L.effLabelCol && L.setSelectedGroup((g) => (g === label ? null : label)),
-              }}>
+              pathOptions={{ fillColor: fill, fillOpacity: 0.78 * dim, opacity: dim, color: isBase ? stroke : accent, weight: isBase ? 2 : 3 }}
+              eventHandlers={{ click: () => labelCol && onToggleGroup(label) }}>
               <Tooltip direction="top" offset={[0, -pt.radius]} opacity={0.97}>
                 <div className="font-sans text-center space-y-0.5 min-w-[120px]">
                   {showName && (
-                    <div className="text-[9px] font-semibold uppercase tracking-wide" style={{ color: LAYER_ACCENTS[index] }}>{name}</div>
+                    <div className="text-[9px] font-semibold uppercase tracking-wide" style={{ color: accent }}>{name}</div>
                   )}
                   <div className="font-bold text-xs border-b border-gray-200 pb-1 mb-1">{label}</div>
-                  {L.effLabelCol && (
+                  {labelCol && (
                     <div className="text-[9px] text-gray-400 italic">
-                      {L.selectedGroup === label ? "κλικ για επαναφορά όλων" : "κλικ για προβολή μόνο αυτής"}
+                      {selectedGroup === label ? "κλικ για επαναφορά όλων" : "κλικ για προβολή μόνο αυτής"}
                     </div>
                   )}
                   <div className="text-xs">
-                    <span className="text-gray-500">{L.effQtyCol}:</span>{" "}
+                    <span className="text-gray-500">{qtyCol}:</span>{" "}
                     <span className="font-mono font-bold" style={{ color: stroke }}>
                       {pt.qty % 1 === 0 ? pt.qty.toLocaleString() : pt.qty.toFixed(2)}
                     </span>
@@ -2035,62 +1087,44 @@ const LayerMarkers = ({ L, index, name, showName }: {
     );
   }
 
-  // Σχήμα ανά layer (όχι λευκό περίγραμμα: σε πυκνά δεδομένα τα περιγράμματα
-  // αλληλοκαλύπτονταν και δημιουργούσαν «μισοφέγγαρα»).
-  const st = markerStyleFor(index);
+  // Σχήμα / μέγεθος / πάχος: δυναμικά ανά layer (όχι λευκό περίγραμμα — σε πυκνά
+  // δεδομένα τα περιγράμματα αλληλοκαλύπτονταν και έβγαζαν «μισοφέγγαρα»).
+  // Το `idx` ταυτοποιεί το σημείο στα κοινά handlers, χωρίς per-marker closure.
   return (
     <>
-      {L.visiblePointMarkers.map((pt, i) => {
-        const displayVal = typeof pt.val === "number"
-          ? (pt.val % 1 === 0 ? pt.val.toLocaleString() : pt.val.toFixed(2))
-          : String(pt.val);
+      {rendered.map((idx) => {
+        const pt = pointMarkers[idx];
         return (
-          <ShapeMarker key={i} center={[pt.lat, pt.lng]} radius={st.radius} shape={st.shape}
-            pathOptions={{
-              fillColor: pt.color, fillOpacity: st.fillOpacity, fill: st.fillOpacity > 0,
-              color: pt.color, weight: st.weight, lineCap: "round",
-            }}
-            eventHandlers={{
-              click: () => pt.label && L.setSelectedGroup((g) => (g === pt.label ? null : pt.label)),
-            }}>
-            <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
-              <div className="font-sans text-center space-y-0.5">
-                {showName && (
-                  <div className="text-[9px] font-semibold uppercase tracking-wide" style={{ color: LAYER_ACCENTS[index] }}>{name}</div>
-                )}
-                {pt.label && <div className="font-bold text-xs border-b border-gray-200 pb-0.5 mb-0.5">{pt.label}</div>}
-                <div className="text-xs">
-                  <span className="text-gray-500">{L.effValCol}:</span>{" "}
-                  <span className="font-mono font-bold" style={{ color: pt.color }}>{displayVal}</span>
-                </div>
-                {pt.label && (
-                  <div className="text-[9px] text-gray-400 italic">
-                    {L.selectedGroup === pt.label ? "κλικ για επαναφορά όλων" : "κλικ για προβολή μόνο αυτής"}
-                  </div>
-                )}
-              </div>
-            </Tooltip>
-          </ShapeMarker>
+          <ShapeMarker key={idx} center={[pt.lat, pt.lng]} radius={radius} shape={shape}
+            idx={idx} pathOptions={styleByColor.get(pt.color)} eventHandlers={handlers} />
         );
       })}
     </>
   );
-};
+});
 
 // ── Legend of one layer — stacked, one block per visible layer ────────────────
-const LayerLegend = ({ L, index, name, showName }: {
+const LayerLegend = ({ L, index, name, showName, focused, dimmed, onToggleFocus }: {
   L: QueryLayer; index: number; name: string; showName: boolean;
+  focused?: boolean; dimmed?: boolean; onToggleFocus?: () => void;
 }) => {
   const rowCls = (cnt: number, active: boolean) =>
     `w-full flex items-center gap-1 rounded px-0.5 text-left transition-colors ${cnt === 0 ? "opacity-25 cursor-default" : "cursor-pointer hover:bg-primary/10"} ${active ? "bg-primary/15 ring-1 ring-inset ring-primary/40" : ""}`;
 
   return (
-    <div className={showName ? "pt-1 mt-1 border-t border-border/60 first:pt-0 first:mt-0 first:border-t-0" : ""}>
+    <div className={`${showName ? "pt-1 mt-1 border-t border-border/60 first:pt-0 first:mt-0 first:border-t-0" : ""} ${dimmed ? "opacity-40" : ""} transition-opacity`}>
       {showName && (
-        <div className="flex items-center gap-1 mb-0.5">
-          <LayerShapeSwatch index={index} />
-          <p className="text-[9px] font-bold uppercase tracking-wide text-foreground/80 truncate flex-1">{name}</p>
-        </div>
+        <button
+          type="button"
+          onClick={onToggleFocus}
+          title={focused
+            ? "Κλικ για επαναφορά — όλα τα layers κανονικά"
+            : "Κλικ για focus σε αυτό το layer — τα υπόλοιπα ξεθωριάζουν"}
+          className={`w-full flex items-center gap-1 mb-0.5 rounded px-0.5 text-left transition-colors hover:bg-primary/10 ${focused ? "bg-primary/15 ring-1 ring-inset ring-primary/40" : ""}`}
+        >
+          <LayerShapeSwatch shape={L.shape} color={LAYER_ACCENTS[index]} />
+          <span className="text-[9px] font-bold uppercase tracking-wide text-foreground/80 truncate flex-1">{name}</span>
+        </button>
       )}
       {L.mode === "bubble" ? (
         <>
@@ -2111,7 +1145,7 @@ const LayerLegend = ({ L, index, name, showName }: {
                 title={cnt > 0 ? "Κλικ για προσθήκη/αφαίρεση από την επιλογή (πολλαπλή επιλογή)" : undefined}
                 onClick={() => L.toggleBucket(label)}
                 className={rowCls(cnt, active)}>
-                <LayerShapeSwatch index={L.mode === "bubble" ? 0 : index} color={fill} size={10} />
+                <LayerShapeSwatch shape={L.mode === "bubble" ? "circle" : L.shape} color={fill} size={10} />
                 <span className="text-[10px] text-muted-foreground flex-1 leading-none">{label}</span>
                 {cnt > 0 && (
                   <span className="text-[9px] font-mono text-muted-foreground/60 whitespace-nowrap">{cnt.toLocaleString()}</span>
@@ -2141,7 +1175,7 @@ const LayerLegend = ({ L, index, name, showName }: {
                     title={cnt > 0 ? "Κλικ για προσθήκη/αφαίρεση από την επιλογή (πολλαπλή επιλογή)" : undefined}
                     onClick={() => L.toggleBucket(b.label)}
                     className={rowCls(cnt, active)}>
-                    <LayerShapeSwatch index={L.mode === "bubble" ? 0 : index} color={b.color} size={10} />
+                    <LayerShapeSwatch shape={L.mode === "bubble" ? "circle" : L.shape} color={b.color} size={10} />
                     <span className="text-[10px] text-muted-foreground flex-1 leading-none">{b.label}</span>
                     {cnt > 0 && (
                       <span className="text-[9px] font-mono text-muted-foreground/60 whitespace-nowrap">
@@ -2159,7 +1193,7 @@ const LayerLegend = ({ L, index, name, showName }: {
                     title={cnt > 0 ? "Κλικ για προσθήκη/αφαίρεση από την επιλογή (πολλαπλή επιλογή)" : undefined}
                     onClick={() => L.toggleBucket(c.value)}
                     className={rowCls(cnt, active)}>
-                    <LayerShapeSwatch index={L.mode === "bubble" ? 0 : index} color={c.color} size={10} />
+                    <LayerShapeSwatch shape={L.mode === "bubble" ? "circle" : L.shape} color={c.color} size={10} />
                     <span className="text-[10px] text-muted-foreground flex-1 leading-none">{c.value}</span>
                     {cnt > 0 && (
                       <span className="text-[9px] font-mono text-muted-foreground/60 whitespace-nowrap">
@@ -2266,19 +1300,39 @@ interface SingleMapPanelProps {
   syncTarget?: SyncPayload | null;
   onSyncRequest?: (payload: SyncPayload, collections: string[], locations: string[]) => void;
   runTrigger?: number;
+  /** Αρχική κατάσταση layers από το URL — διαβάζεται μόνο στο mount. */
+  initialLayers?: LayerInit[];
+  /** Αναφέρει τη serialized κατάσταση του panel στο URL state του γονιού. */
+  onPersist?: (serialized: string) => void;
 }
 
-const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label, onRemove, syncTarget, onSyncRequest, runTrigger }: SingleMapPanelProps) => {
+const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label, onRemove, syncTarget, onSyncRequest, runTrigger, initialLayers, onPersist }: SingleMapPanelProps) => {
+  // Το URL state διαβάζεται ΜΟΝΟ στο mount: μετά κερδίζει ό,τι κάνει ο χρήστης
+  const seed = useRef(initialLayers ?? []).current;
   // Fixed number of hook calls; only the first `layerCount` are active
-  const layer0 = useQueryLayer(defaultDatabase);
-  const layer1 = useQueryLayer("");
-  const layer2 = useQueryLayer("");
+  const layer0 = useQueryLayer(seed[0] ?? { db: defaultDatabase }, 0);
+  const layer1 = useQueryLayer(seed[1] ?? {}, 1);
+  const layer2 = useQueryLayer(seed[2] ?? {}, 2);
   const allLayers = [layer0, layer1, layer2];
 
-  const [layerCount, setLayerCount] = useState(1);
+  const [layerCount, setLayerCount] = useState(Math.max(1, Math.min(seed.length, MAX_LAYERS)));
   const [activeLayer, setActiveLayer] = useState(0);
   const [showExpanded, setShowExpanded] = useState(false);
   const [mapLoading, setMapLoading] = useState(false);
+  // Σειρά σχεδίασης, από κάτω προς τα πάνω. Default: L1 κάτω, L2/L3 από πάνω —
+  // ένα uncheck + check φέρνει εκείνο το layer πάνω απ' όλα.
+  const [stackOrder, setStackOrder] = useState<number[]>([0, 1, 2]);
+
+  const bringToTop = (i: number) => setStackOrder((prev) => [...prev.filter((x) => x !== i), i]);
+
+  // Κλικ στον τίτλο ενός legend: focus σε αυτό το layer — τα υπόλοιπα στο 70%
+  const [focusedLayer, setFocusedLayer] = useState<number | null>(null);
+  const toggleFocus = (i: number) => setFocusedLayer((f) => (f === i ? null : i));
+
+  const setLayerVisible = (i: number, on: boolean) => {
+    allLayers[i].setVisible(on);
+    if (on) bringToTop(i);
+  };
 
   const layers = allLayers.slice(0, layerCount);
   const activeIdx = Math.min(activeLayer, layerCount - 1);
@@ -2296,6 +1350,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     next.setFilterCollection(layer0.filterCollection);
     next.setFilterLocation(layer0.filterLocation);
     next.setVisible(true);
+    bringToTop(layerCount);
     setActiveLayer(layerCount);
     setLayerCount(layerCount + 1);
   };
@@ -2306,6 +1361,8 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     if (layerCount <= 1) return;
     for (let i = idx; i < layerCount - 1; i++) allLayers[i].setState(allLayers[i + 1].getState());
     setLayerCount(layerCount - 1);
+    setStackOrder([0, 1, 2]);
+    setFocusedLayer(null);
     setActiveLayer((a) => Math.max(0, Math.min(a, layerCount - 2)));
   };
 
@@ -2341,12 +1398,24 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
   }, [anyRunning]);
 
   // Union of every visible layer's points — MapBounds fits the map to all of them
-  const allMapPoints = useMemo(
-    () => allLayers.slice(0, layerCount).filter((l) => l.visible).flatMap((l) => l.mapPoints),
+  const fitBounds = useMemo(
+    () => unionBounds(allLayers.slice(0, layerCount).filter((l) => l.visible).map((l) => l.dataBounds)),
     // eslint-disable-next-line react-hooks/exhaustive-deps
     [layerCount, layer0.visible, layer1.visible, layer2.visible,
-     layer0.mapPoints, layer1.mapPoints, layer2.mapPoints],
+     layer0.dataBounds, layer1.dataBounds, layer2.dataBounds],
   );
+  const shownPoints = layers.reduce((n, l) => n + (l.visible ? l.pointCount : 0), 0);
+
+  // Ό,τι αξίζει να ζει σε ένα shareable link. Είναι string, οπότε το effect
+  // τρέχει μόνο όταν αλλάζει πραγματικά κάτι από αυτά.
+  const persisted = layers.map((l) => serializeLayerInit({
+    db: l.db, tmplIdx: l.tmplIdx, collection: l.filterCollection, location: l.filterLocation,
+    shape: l.shape, radius: l.radius, weight: l.weight, mode: l.mode, visible: l.visible,
+  })).join(LAYER_SEP);
+
+  const persistRef = useRef(onPersist);
+  persistRef.current = onPersist;
+  useEffect(() => { persistRef.current?.(persisted); }, [persisted]);
   const anyRows = layers.some((l) => l.rows.length > 0);
 
   // Τα ενεργά φίλτρα παρουσιάζονται και καθαρίζονται για όλα τα layers μαζί
@@ -2399,8 +1468,8 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                 <input
                   type="checkbox"
                   checked={lyr.visible}
-                  onChange={(e) => lyr.setVisible(e.target.checked)}
-                  title={lyr.visible ? "Απόκρυψη layer από τον χάρτη" : "Εμφάνιση layer στον χάρτη"}
+                  onChange={(e) => setLayerVisible(i, e.target.checked)}
+                  title={lyr.visible ? "Απόκρυψη layer από τον χάρτη" : "Εμφάνιση layer — πάει πάνω από τα υπόλοιπα"}
                   className="h-3 w-3 accent-primary cursor-pointer shrink-0"
                 />
                 <button
@@ -2409,7 +1478,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                   title={`${layerName(lyr, i)} — κλικ για επεξεργασία αυτού του layer`}
                   className="flex items-center gap-1 max-w-[150px]"
                 >
-                  <LayerShapeSwatch index={i} size={10} />
+                  <LayerShapeSwatch shape={lyr.shape} color={LAYER_ACCENTS[i]} size={10} />
                   <span className={`text-[10px] truncate ${active ? "text-foreground font-medium" : "text-muted-foreground"}`}>
                     L{i + 1}{lyr.effValCol ? ` · ${lyr.effValCol}` : ""}
                   </span>
@@ -2522,6 +1591,42 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
 
         {showExpanded && (
           <div className="space-y-2 pt-2 border-t border-border">
+            {/* Στυλ κουκκίδας του ενεργού layer — σχήμα / μέγεθος / πάχος */}
+            <div>
+              <label className="text-[10px] text-muted-foreground block mb-0.5">
+                Κουκκίδα{multiLayer ? ` — L${activeIdx + 1}` : ""}
+              </label>
+              <div className="flex items-end gap-2">
+                <div className="flex items-center gap-1.5 shrink-0">
+                  <LayerShapeSwatch shape={L.shape} color={LAYER_ACCENTS[activeIdx]} size={14} />
+                  <select
+                    value={L.shape}
+                    onChange={(e) => L.setShape(e.target.value as MarkerShape)}
+                    className="bg-background border border-border rounded px-1.5 py-1 text-xs"
+                  >
+                    {SHAPE_OPTIONS.map((o) => (
+                      <option key={o.value} value={o.value}>{o.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <label className="flex-1 min-w-0">
+                  <span className="text-[10px] text-muted-foreground block">
+                    Μέγεθος <span className="font-mono text-primary/70">{L.radius}</span>
+                  </span>
+                  <input type="range" min={2} max={14} step={1} value={L.radius}
+                    onChange={(e) => L.setRadius(Number(e.target.value))}
+                    className="w-full h-4 accent-primary cursor-pointer" />
+                </label>
+                <label className="flex-1 min-w-0">
+                  <span className="text-[10px] text-muted-foreground block">
+                    Πάχος <span className="font-mono text-primary/70">{L.weight}</span>
+                  </span>
+                  <input type="range" min={0.5} max={6} step={0.5} value={L.weight}
+                    onChange={(e) => L.setWeight(Number(e.target.value))}
+                    className="w-full h-4 accent-primary cursor-pointer" />
+                </label>
+              </div>
+            </div>
             <div>
               <label className="text-[10px] text-muted-foreground block mb-0.5">SQL Query</label>
               <textarea
@@ -2540,18 +1645,20 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
             {/* Ένα checkbox ανά layer: κρύβει ΜΟΝΟ τα δείγματα & το legend του */}
             {layers.map((lyr, i) => (
               <label key={i} className="flex items-center gap-1 cursor-pointer select-none shrink-0"
-                title={`${lyr.visible ? "Απόκρυψη" : "Εμφάνιση"} δειγμάτων & legend — ${layerName(lyr, i)}`}>
+                title={lyr.visible
+                  ? `Απόκρυψη δειγμάτων & legend — ${layerName(lyr, i)}`
+                  : `Εμφάνιση δειγμάτων & legend — ${layerName(lyr, i)} (θα μπει πάνω από τα υπόλοιπα)`}>
                 <input type="checkbox" checked={lyr.visible}
-                  onChange={(e) => lyr.setVisible(e.target.checked)}
+                  onChange={(e) => setLayerVisible(i, e.target.checked)}
                   className="h-3 w-3 accent-primary cursor-pointer" />
-                <LayerShapeSwatch index={i} size={9} />
+                <LayerShapeSwatch shape={lyr.shape} color={LAYER_ACCENTS[i]} size={9} />
                 <span className={lyr.visible ? "text-foreground/70" : "opacity-50 line-through"}>
                   L{i + 1}{lyr.effValCol ? ` · ${lyr.effValCol}` : ""}
                 </span>
               </label>
             ))}
-            <span className={L.mapPoints.length === 0 ? "text-destructive" : "text-primary"}>
-              {L.mapPoints.length} pts
+            <span className={L.pointCount === 0 ? "text-destructive" : "text-primary"}>
+              {L.pointCount} pts
             </span>
             <span>/ {L.filteredRows.length !== L.rows.length ? `${L.filteredRows.length} filtered /` : ""} {L.rows.length} rows</span>
             {L.executionTime != null && <span className="ml-auto">{L.executionTime.toFixed(0)} ms</span>}
@@ -2559,7 +1666,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
             {/* Κάθε ενεργό value-filter κάθε layer — με χρωματική κουκκίδα του layer */}
             {layers.flatMap((lyr, i) => {
               const dot = multiLayer
-                ? <LayerShapeSwatch index={i} size={9} />
+                ? <LayerShapeSwatch shape={lyr.shape} color={LAYER_ACCENTS[i]} size={9} />
                 : null;
               const chip = (key: string, text: string, title: string, onClick: () => void) => (
                 <button type="button" key={key} onClick={onClick} title={title}
@@ -2614,31 +1721,52 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
           center={[39.07, 23.73]}
           zoom={6}
           scrollWheelZoom
+          // Canvas αντί για SVG: δεκάδες χιλιάδες σημεία ζωγραφίζονται σε ένα
+          // canvas ανά pane, αντί για έναν κόμβο DOM ανά σημείο.
+          preferCanvas
           style={{ height: "100%", width: "100%" }}
         >
           <TileLayer
             attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
             url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
           />
-          <MapBounds points={allMapPoints} />
+          <MapBounds bounds={fitBounds} />
 
-          {/* Layer 1 πρώτο = από κάτω· τα επόμενα ζωγραφίζονται από πάνω */}
+          {/* Ένα pane ανά layer: default L1 κάτω → L3 πάνω, και ό,τι ξανα-επιλεγεί
+              ανεβαίνει πρώτο (βλ. PaneStack / setLayerVisible) */}
           {layers.map((lyr, i) => (
-            <LayerMarkers key={i} L={lyr} index={i} name={layerName(lyr, i)} showName={multiLayer} />
+            <Pane key={i} name={layerPaneName(i)} style={{ zIndex: LAYER_PANE_Z + stackOrder.indexOf(i) }}>
+              <LayerMarkers
+                visible={lyr.visible}
+                mode={lyr.mode}
+                bubblePoints={lyr.visibleBubblePoints}
+                pointMarkers={lyr.visiblePointMarkers}
+                shape={lyr.shape} radius={lyr.radius} weight={lyr.weight}
+                dimmed={focusedLayer !== null && focusedLayer !== i}
+                accent={LAYER_ACCENTS[i]} isBase={i === 0}
+                name={layerName(lyr, i)} showName={multiLayer}
+                valueCol={lyr.effValCol} qtyCol={lyr.effQtyCol} labelCol={lyr.effLabelCol}
+                latCol={lyr.effLatCol} lngCol={lyr.effLngCol}
+                selectedGroup={lyr.selectedGroup} onToggleGroup={lyr.toggleGroup} />
+            </Pane>
           ))}
+          <PaneStack order={stackOrder} />
         </MapContainer>
 
         {/* Legend overlay — ένα block ανά ορατό layer (on/off ανά layer, status row) */}
-        {allMapPoints.length > 0 && (
+        {shownPoints > 0 && (
           <div className="absolute bottom-2 right-2 bg-muted/70 backdrop-blur-sm border border-border/50 rounded-md p-2 space-y-0.5 z-[1000] shadow-md max-h-[368px] overflow-y-auto min-w-[161px]">
-            {layers.map((lyr, i) => (lyr.visible && lyr.mapPoints.length > 0) && (
-              <LayerLegend key={i} L={lyr} index={i} name={layerName(lyr, i)} showName={multiLayer} />
+            {layers.map((lyr, i) => (lyr.visible && lyr.pointCount > 0) && (
+              <LayerLegend key={i} L={lyr} index={i} name={layerName(lyr, i)} showName={multiLayer}
+                focused={focusedLayer === i}
+                dimmed={focusedLayer !== null && focusedLayer !== i}
+                onToggleFocus={() => toggleFocus(i)} />
             ))}
           </div>
         )}
 
         {/* Empty state */}
-        {allMapPoints.length === 0 && !anyRunning && (
+        {shownPoints === 0 && !anyRunning && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="text-center space-y-2">
               <MapPin className="h-10 w-10 text-muted-foreground/20 mx-auto" />
@@ -2663,8 +1791,6 @@ interface QueryMapProps {
   defaultDatabase?: string;
 }
 
-// ── Uniform split grid: same column count keeps every panel the same size ────
-const MAX_PANELS = 4;
 
 function gridColsClass(n: number): string {
   if (n <= 1) return "grid-cols-1";
@@ -2675,10 +1801,34 @@ function gridColsClass(n: number): string {
 
 // ── Main component — starts as 1 map, freely split into up to MAX_PANELS ────
 const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
-  const [panels, setPanels] = useState<number[]>([0]);
-  const nextPanelId = useRef(1);
+  // Shareable link (με localStorage fallback): panels → layers, χωρίς το SQL
+  const [urlState, setUrlState] = useUrlStringState<string>("qmap", "", { storageKey: "queryMap.panels" });
+  const seedPanels = useRef(parseQueryMapUrlState(urlState)).current;
+
+  const [panels, setPanels] = useState<number[]>(() =>
+    seedPanels.length > 0 ? seedPanels.map((_, i) => i) : [0]);
+  const nextPanelId = useRef(Math.max(1, seedPanels.length));
   const [syncTargets, setSyncTargets] = useState<Record<number, SyncPayload | null>>({});
   const [runAllTrigger, setRunAllTrigger] = useState(0);
+
+  // Κάθε panel αναφέρει το serialized state του· γράφουμε στο URL με μικρή
+  // καθυστέρηση, ώστε ένα σύρσιμο slider να μη γράφει σε κάθε pixel.
+  const snapshots = useRef(new Map<number, string>());
+  const panelsRef = useRef(panels);
+  panelsRef.current = panels;
+  const writeTimer = useRef<number | undefined>(undefined);
+
+  const persistPanels = useCallback(() => {
+    window.clearTimeout(writeTimer.current);
+    writeTimer.current = window.setTimeout(() => {
+      setUrlState(panelsRef.current
+        .map((id) => snapshots.current.get(id) ?? "")
+        .filter(Boolean)
+        .join(PANEL_SEP));
+    }, 400);
+  }, [setUrlState]);
+
+  useEffect(() => () => window.clearTimeout(writeTimer.current), []);
 
   const addPanel = () => {
     setPanels((prev) => (prev.length >= MAX_PANELS ? prev : [...prev, nextPanelId.current++]));
@@ -2686,6 +1836,8 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
 
   const removePanel = (id: number) => {
     setPanels((prev) => (prev.length <= 1 ? prev : prev.filter((p) => p !== id)));
+    snapshots.current.delete(id);
+    persistPanels();
     setSyncTargets((prev) => {
       if (!(id in prev)) return prev;
       const next = { ...prev };
@@ -2700,11 +1852,13 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
     if (!first) return;
     const refOp = detectOperator(first.location) || detectOperator(first.collection);
     const others = OPERATOR_GROUPS.filter(g => g.name !== refOp);
-    // Sync targets are the 2nd and 3rd map panels, if present
-    const targetIds = panels.slice(1, 3);
+    // Κάθε άλλο panel παίρνει το query — τα δύο πρώτα με τους άλλους δύο operators,
+    // τα παραπάνω (4ο panel) με τον ίδιο — πριν έμεναν εκτός συγχρονισμού.
+    const targetIds = panels.slice(1);
     const updates: Record<number, SyncPayload | null> = {};
     targetIds.forEach((id, i) => {
       const targetOp = others[i];
+      if (!targetOp) { updates[id] = payload; return; }
       // Every layer of the source panel is swapped to the target operator
       const layers = payload.layers.map((layer) => {
         // Swap location to the matching operator location (e.g. "Vodafone Free A")
@@ -2771,6 +1925,8 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
             onSyncRequest={idx === 0 ? handleSyncRequest : undefined}
             syncTarget={idx > 0 ? syncTargets[id] ?? null : undefined}
             runTrigger={runAllTrigger}
+            initialLayers={seedPanels[id]}
+            onPersist={(serialized) => { snapshots.current.set(id, serialized); persistPanels(); }}
           />
         ))}
       </div>
