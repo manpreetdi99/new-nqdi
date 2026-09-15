@@ -1,5 +1,9 @@
 import { useState, useMemo, useEffect, useRef, useCallback } from "react";
 import { MapContainer, TileLayer, CircleMarker, Tooltip, useMap } from "react-leaflet";
+import type { CircleMarkerProps } from "react-leaflet";
+import { createElementObject, createPathComponent, extendContext, updateCircle } from "@react-leaflet/core";
+import { CircleMarker as LeafletCircleMarker } from "leaflet";
+import type { CircleMarker as LeafletCircleMarkerType } from "leaflet";
 import "leaflet/dist/leaflet.css";
 import {
   Play,
@@ -478,8 +482,8 @@ function bestCollectionForOperator(
 // ── Template definitions ──────────────────────────────────────────────────────
 type MapMode = "bubble" | "points";
 
-interface SyncPayload {
-  db: string;
+// One entry per map layer — a panel syncs ALL of its layers to the other panels
+interface LayerSync {
   tmplIdx: number;
   sql: string;
   mode: MapMode;
@@ -489,6 +493,11 @@ interface SyncPayload {
   quantityCol: string;
   location: string;
   collection: string;
+}
+
+interface SyncPayload {
+  db: string;
+  layers: LayerSync[];
 }
 
 interface QueryTemplate {
@@ -1532,6 +1541,79 @@ function buildDynamicPciCategories(rows: Record<string, CellValue>[], valueCol: 
 // ── Spatial decimation: keep at most maxPoints, one per adaptive grid cell ────
 const MAX_RENDER_POINTS = 20000;
 
+// Δύο layers μπορεί κάλλιστα να δίνουν κουκκίδες στο ίδιο χρώμα (π.χ. και τα δύο
+// πράσινο). Το χρώμα ανήκει στην ΤΙΜΗ, οπότε το layer το δηλώνει το ΣΧΗΜΑ και το
+// μέγεθος: γεμάτη κουκκίδα → L1, Χ → L2, τρίγωνο → L3. Το legend δείχνει ακριβώς
+// το ίδιο σχήμα, οπότε κάθε γραμμή του διαβάζεται χωρίς να εξαρτάται από χρώμα.
+type MarkerShape = "circle" | "cross" | "triangle";
+
+interface LayerMarkerStyle {
+  shape: MarkerShape;
+  radius: number;
+  fillOpacity: number;
+  weight: number;
+}
+
+const LAYER_MARKER_STYLES: LayerMarkerStyle[] = [
+  { shape: "circle",   radius: 4, fillOpacity: 0.85, weight: 1 },
+  { shape: "cross",    radius: 6, fillOpacity: 0,    weight: 2.2 },
+  { shape: "triangle", radius: 6, fillOpacity: 0.9,  weight: 1 },
+];
+
+const markerStyleFor = (index: number) => LAYER_MARKER_STYLES[index] ?? LAYER_MARKER_STYLES[0];
+
+// SVG path ενός σχήματος γύρω από το (x, y), σε pixel — κοινό για χάρτη & legend
+function shapePathD(x: number, y: number, r: number, shape: MarkerShape): string {
+  switch (shape) {
+    case "cross":
+      return `M${x - r},${y - r}L${x + r},${y + r}M${x + r},${y - r}L${x - r},${y + r}`;
+    case "triangle": {
+      const h = r * 1.15;
+      return `M${x},${y - h}L${x + r},${y + h * 0.7}L${x - r},${y + h * 0.7}Z`;
+    }
+    default:
+      return `M${x - r},${y}a${r},${r} 0 1,0 ${r * 2},0 a${r},${r} 0 1,0 ${-r * 2},0`;
+  }
+}
+
+// CircleMarker που ζωγραφίζει αυθαίρετο σχήμα: κρατά όλη τη συμπεριφορά του
+// (σταθερό μέγεθος σε pixel σε κάθε zoom, ίδιο performance με χιλιάδες σημεία)
+// και αλλάζει μόνο το path που δίνει στον SVG renderer του Leaflet.
+const ShapeMarkerClass = LeafletCircleMarker.extend({
+  options: { shape: "circle" as MarkerShape },
+  _updatePath(this: {
+    _radius: number;
+    _point: { x: number; y: number };
+    options: { shape: MarkerShape };
+    _empty: () => boolean;
+    _renderer: { _setPath: (layer: unknown, d: string) => void };
+  }) {
+    const r = Math.max(Math.round(this._radius), 1);
+    const d = this._empty() ? "M0 0" : shapePathD(this._point.x, this._point.y, r, this.options.shape);
+    this._renderer._setPath(this, d);
+  },
+});
+
+interface ShapeMarkerProps extends CircleMarkerProps { shape?: MarkerShape }
+
+const ShapeMarker = createPathComponent<LeafletCircleMarkerType, ShapeMarkerProps>(
+  function createShapeMarker({ center, children: _c, ...options }, ctx) {
+    const marker = new (ShapeMarkerClass as unknown as new (
+      c: typeof center, o: typeof options,
+    ) => LeafletCircleMarkerType)(center, options);
+    return createElementObject(marker, extendContext(ctx, { overlayContainer: marker }));
+  },
+  function updateShapeMarker(layer, props, prevProps) {
+    updateCircle(layer, props, prevProps);
+    // Το σχήμα ζει στα options του Leaflet layer: όταν τα layers μετατοπιστούν
+    // (π.χ. αφαίρεση του L1) ο ίδιος marker αλλάζει slot — άρα και σχήμα.
+    if (props.shape !== prevProps.shape) {
+      (layer.options as { shape?: MarkerShape }).shape = props.shape;
+      layer.redraw();
+    }
+  },
+);
+
 function decimatePoints<T extends { lat: number; lng: number }>(pts: T[], max = MAX_RENDER_POINTS): T[] {
   if (pts.length <= max) return pts;
   let minLat = pts[0].lat, maxLat = pts[0].lat;
@@ -1556,57 +1638,84 @@ function decimatePoints<T extends { lat: number; lng: number }>(pts: T[], max = 
 
 const lc = (s: string) => s.toLowerCase();
 
-// ── Single self-contained map panel ──────────────────────────────────────────
-interface SingleMapPanelProps {
-  databases: string[];
-  defaultDatabase?: string;
-  panelIndex?: number;
-  label?: string;
-  onRemove?: () => void;
-  syncTarget?: SyncPayload | null;
-  onSyncRequest?: (payload: SyncPayload, collections: string[], locations: string[]) => void;
-  runTrigger?: number;
+// ── Map layers ────────────────────────────────────────────────────────────────
+// Ένα panel μπορεί να στοιβάξει πολλαπλά ανεξάρτητα queries στον ΙΔΙΟ χάρτη
+// (π.χ. FREE RSRP «χαλί» από κάτω + call points από πάνω). Κάθε layer κρατά δικό
+// του database / template / φίλτρα / αποτελέσματα. Το useQueryLayer καλείται
+// σταθερό πλήθος φορές (rules of hooks) — τα layers πάνω από το layerCount
+// μένουν ανενεργά με άδειο database.
+const MAX_LAYERS = 3;
+const LAYER_ACCENTS = ["#3b82f6", "#f59e0b", "#a855f7"];
+
+interface LayerState {
+  db: string;
+  tmplIdx: number;
+  sql: string;
+  mode: MapMode;
+  quantityCol: string;
+  labelCol: string;
+  latCol: string;
+  lngCol: string;
+  valueCol: string;
+  colorSchemeKey: string;
+  columns: string[];
+  rows: Record<string, CellValue>[];
+  executionTime: number | null;
+  error: string | null;
+  filterCollection: string;
+  filterLocation: string;
+  filterNRARFCN: string;
+  filterLink: string;
+  selectedGroup: string | null;
+  selectedBuckets: Set<string>;
+  visible: boolean;
 }
 
-const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label, onRemove, syncTarget, onSyncRequest, runTrigger }: SingleMapPanelProps) => {
-  // ── Local database + collections ──────────────────────────────────────────
-  const [localDb, setLocalDb]               = useState(defaultDatabase);
-  const [localCollections, setLocalCollections] = useState<string[]>([]);
+function useQueryLayer(initialDb: string) {
+  const [db, setDb]                         = useState(initialDb);
+  const [collections, setCollections]       = useState<string[]>([]);
   const [collectionsLoading, setCollectionsLoading] = useState(false);
-  const [localLocations, setLocalLocations] = useState<string[]>([]);
+  const [locations, setLocations]           = useState<string[]>([]);
 
-  useEffect(() => {
-    if (!localDb) { setLocalCollections([]); setLocalLocations([]); return; }
-    setCollectionsLoading(true);
-    fetchCollectionNames(localDb)
-      .then(setLocalCollections)
-      .catch(() => setLocalCollections([]))
-      .finally(() => setCollectionsLoading(false));
-  }, [localDb]);
-
-  const [tmplIdx, setTmplIdx]           = useState(0);
-  const [sql, setSql]                   = useState(TEMPLATES[0].sql);
-  const [mode, setMode]                 = useState<MapMode>(TEMPLATES[0].mode);
-  const [quantityCol, setQuantityCol]   = useState(TEMPLATES[0].quantityCol ?? "");
-  const [labelCol, setLabelCol]         = useState(TEMPLATES[0].labelCol);
-  const [latCol, setLatCol]             = useState("");
-  const [lngCol, setLngCol]             = useState("");
-  const [valueCol, setValueCol]         = useState(TEMPLATES[0].valueCol ?? "");
+  const [tmplIdx, setTmplIdx]               = useState(0);
+  const [sql, setSql]                       = useState(TEMPLATES[0].sql);
+  const [mode, setMode]                     = useState<MapMode>(TEMPLATES[0].mode);
+  const [quantityCol, setQuantityCol]       = useState(TEMPLATES[0].quantityCol ?? "");
+  const [labelCol, setLabelCol]             = useState(TEMPLATES[0].labelCol);
+  const [latCol, setLatCol]                 = useState("");
+  const [lngCol, setLngCol]                 = useState("");
+  const [valueCol, setValueCol]             = useState(TEMPLATES[0].valueCol ?? "");
   const [colorSchemeKey, setColorSchemeKey] = useState(TEMPLATES[0].colorScheme ?? "rsrp_data");
-  const [isRunning, setIsRunning]       = useState(false);
-  const [error, setError]               = useState<string | null>(null);
-  const [columns, setColumns]           = useState<string[]>([]);
-  const [rows, setRows]                 = useState<Record<string, CellValue>[]>([]);
-  const [executionTime, setExecutionTime] = useState<number | null>(null);
-  const [showExpanded, setShowExpanded] = useState(false);
+  const [isRunning, setIsRunning]           = useState(false);
+  const [error, setError]                   = useState<string | null>(null);
+  const [columns, setColumns]               = useState<string[]>([]);
+  const [rows, setRows]                     = useState<Record<string, CellValue>[]>([]);
+  const [executionTime, setExecutionTime]   = useState<number | null>(null);
   const [filterCollection, setFilterCollection] = useState("");
   const [filterLocation, setFilterLocation]     = useState("");
   const [filterNRARFCN, setFilterNRARFCN]       = useState("");
   const [filterLink, setFilterLink]             = useState("");
-  const [mapLoading, setMapLoading]             = useState(false);
   const [selectedGroup, setSelectedGroup]       = useState<string | null>(null);
   // Multiple legend value-groups can be isolated at once (e.g. RSRP -75..-65 AND -85..-75)
-  const [selectedBuckets, setSelectedBuckets] = useState<Set<string>>(new Set());
+  const [selectedBuckets, setSelectedBuckets]   = useState<Set<string>>(new Set());
+  const [visible, setVisible]                   = useState(true);
+
+  useEffect(() => {
+    if (!db) { setCollections([]); setLocations([]); return; }
+    setCollectionsLoading(true);
+    fetchCollectionNames(db)
+      .then(setCollections)
+      .catch(() => setCollections([]))
+      .finally(() => setCollectionsLoading(false));
+  }, [db]);
+
+  useEffect(() => {
+    if (!db) { setLocations([]); return; }
+    fetchLocations(db, filterCollection ? [filterCollection] : [])
+      .then(setLocations)
+      .catch(() => setLocations([]));
+  }, [db, filterCollection]);
+
   const toggleBucket = useCallback((label: string) => {
     setSelectedBuckets((prev) => {
       const next = new Set(prev);
@@ -1614,33 +1723,6 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
       return next;
     });
   }, []);
-  const latestRunQuery = useRef<() => void>(() => {});
-
-  useEffect(() => {
-    if (!localDb) { setLocalLocations([]); return; }
-    const collections = filterCollection ? [filterCollection] : [];
-    fetchLocations(localDb, collections)
-      .then(setLocalLocations)
-      .catch(() => setLocalLocations([]));
-  }, [localDb, filterCollection]);
-
-  // Apply sync from panel 1 (operator sync)
-  useEffect(() => {
-    if (!syncTarget) return;
-    if (syncTarget.db) setLocalDb(syncTarget.db);
-    setTmplIdx(syncTarget.tmplIdx);
-    setSql(syncTarget.sql);
-    setMode(syncTarget.mode);
-    setValueCol(syncTarget.valueCol);
-    setColorSchemeKey(syncTarget.colorSchemeKey);
-    setLabelCol(syncTarget.labelCol);
-    setQuantityCol(syncTarget.quantityCol);
-    setLatCol(""); setLngCol("");
-    setFilterLocation(syncTarget.location);
-    setFilterCollection(syncTarget.collection);
-    setRows([]); setColumns([]); setError(null); setExecutionTime(null);
-    setFilterNRARFCN(""); setFilterLink(""); setSelectedGroup(null); setSelectedBuckets(new Set());
-  }, [syncTarget]);
 
   const baseScheme = COLOR_SCHEMES[colorSchemeKey];
 
@@ -1690,62 +1772,95 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     return [...new Set(rows.map((r) => String(r[linkCol] ?? "")).filter(Boolean))].sort();
   }, [rows, tmplIdx]);
 
-  const handleTemplateChange = (idx: number) => {
+  const template = TEMPLATES[tmplIdx];
+  const needsFilters = template?.requiresFilters ?? false;
+  const filtersReady = !needsFilters || (filterCollection !== "" && filterLocation !== "");
+
+  const clearResults = () => {
+    setRows([]); setColumns([]); setError(null); setExecutionTime(null);
+    setFilterNRARFCN(""); setFilterLink(""); setSelectedGroup(null); setSelectedBuckets(new Set());
+  };
+
+  const selectTemplate = (idx: number) => {
     const t = TEMPLATES[idx];
     setTmplIdx(idx); setSql(t.sql); setMode(t.mode);
     setQuantityCol(t.quantityCol ?? ""); setValueCol(t.valueCol ?? "");
     setLabelCol(t.labelCol); setLatCol(""); setLngCol("");
     if (t.colorScheme) setColorSchemeKey(t.colorScheme);
-    setRows([]); setColumns([]); setError(null); setExecutionTime(null);
-    setFilterNRARFCN(""); setFilterLink(""); setSelectedGroup(null); setSelectedBuckets(new Set());
+    clearResults();
   };
 
-  const currentTemplate = TEMPLATES[tmplIdx];
-  const needsFilters = currentTemplate?.requiresFilters ?? false;
-  const filtersReady = !needsFilters || (filterCollection !== "" && filterLocation !== "");
+  // Apply an operator-sync payload coming from panel 1
+  const applySync = (s: LayerSync, syncDb: string) => {
+    if (syncDb) setDb(syncDb);
+    setTmplIdx(s.tmplIdx);
+    setSql(s.sql);
+    setMode(s.mode);
+    setValueCol(s.valueCol);
+    setColorSchemeKey(s.colorSchemeKey);
+    setLabelCol(s.labelCol);
+    setQuantityCol(s.quantityCol);
+    setLatCol(""); setLngCol("");
+    setFilterLocation(s.location);
+    setFilterCollection(s.collection);
+    setVisible(true);
+    clearResults();
+  };
+
+  const getState = (): LayerState => ({
+    db, tmplIdx, sql, mode, quantityCol, labelCol, latCol, lngCol, valueCol,
+    colorSchemeKey, columns, rows, executionTime, error,
+    filterCollection, filterLocation, filterNRARFCN, filterLink,
+    selectedGroup, selectedBuckets, visible,
+  });
+
+  const setState = (s: LayerState) => {
+    setDb(s.db); setTmplIdx(s.tmplIdx); setSql(s.sql); setMode(s.mode);
+    setQuantityCol(s.quantityCol); setLabelCol(s.labelCol);
+    setLatCol(s.latCol); setLngCol(s.lngCol); setValueCol(s.valueCol);
+    setColorSchemeKey(s.colorSchemeKey); setColumns(s.columns); setRows(s.rows);
+    setExecutionTime(s.executionTime); setError(s.error);
+    setFilterCollection(s.filterCollection); setFilterLocation(s.filterLocation);
+    setFilterNRARFCN(s.filterNRARFCN); setFilterLink(s.filterLink);
+    setSelectedGroup(s.selectedGroup); setSelectedBuckets(s.selectedBuckets);
+    setVisible(s.visible);
+  };
 
   const runQuery = async () => {
-    if (!localDb) { setError("Επιλέξτε database πρώτα."); return; }
+    if (!db) { setError("Επιλέξτε database πρώτα."); return; }
     if (!filtersReady) { setError("Επιλέξτε Collection και ASideLocation πριν εκτελέσετε το query."); return; }
-    setIsRunning(true); setError(null); setMapLoading(true); setSelectedGroup(null); setSelectedBuckets(new Set());
+    setIsRunning(true); setError(null); setSelectedGroup(null); setSelectedBuckets(new Set());
     const esc = (s: string) => s.replace(/'/g, "''");
     let effectiveSql = sql;
     if (filterCollection) {
       effectiveSql = effectiveSql.replace(/\{collection\}/g, esc(filterCollection));
     } else {
-      effectiveSql = effectiveSql.split('\n').filter((line) => !line.includes('{collection}')).join('\n');
+      effectiveSql = effectiveSql.split("\n").filter((line) => !line.includes("{collection}")).join("\n");
     }
     if (filterLocation) {
       effectiveSql = effectiveSql.replace(/\{location\}/g, esc(filterLocation));
     } else {
-      effectiveSql = effectiveSql.split('\n').filter((line) => !line.includes('{location}')).join('\n');
+      effectiveSql = effectiveSql.split("\n").filter((line) => !line.includes("{location}")).join("\n");
     }
     try {
-      const result = await runBenchmarkApi(localDb, [effectiveSql]);
+      const result = await runBenchmarkApi(db, [effectiveSql]);
       if (result.results.length > 0) {
         const r = result.results[0];
         setColumns(r.columns); setRows(r.data); setExecutionTime(r.executionTime);
-        if (!currentTemplate?.colorScheme) {
+        if (!template?.colorScheme) {
           const colsLower = r.columns.map((c) => c.toLowerCase());
           const match = Object.entries(COLOR_SCHEMES).find(([, s]) => colsLower.includes(s.suggestCol.toLowerCase()));
           if (match) setColorSchemeKey(match[0]);
         }
-        setTimeout(() => setMapLoading(false), 600);
-      } else {
-        setMapLoading(false);
       }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Σφάλμα εκτέλεσης query");
-      setMapLoading(false);
     } finally { setIsRunning(false); }
   };
 
-  // Keep ref pointing to latest runQuery so external trigger avoids stale closure
-  latestRunQuery.current = runQuery;
-  useEffect(() => {
-    if (!runTrigger) return;
-    latestRunQuery.current();
-  }, [runTrigger]);
+  // Keep ref pointing to latest runQuery so external triggers avoid stale closures
+  const runRef = useRef<() => void>(() => {});
+  runRef.current = runQuery;
 
   const bubblePoints = useMemo(() => {
     if (mode !== "bubble" || !effQtyCol || filteredRows.length === 0) return [];
@@ -1813,9 +1928,12 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     return pointMarkers.filter((p) => selectedBuckets.has(p.bucketKey));
   }, [pointMarkers, selectedBuckets]);
 
-  const allMapPoints = mode === "bubble"
+  // Memoized: MapBounds re-fits whenever this array identity changes, so a fresh
+  // array on every render would reset the user's pan/zoom on any state change.
+  const mapPoints = useMemo(() => (mode === "bubble"
     ? visibleBubblePoints.map((p) => ({ lat: p.lat, lng: p.lng }))
-    : visiblePointMarkers.map((p) => ({ lat: p.lat, lng: p.lng }));
+    : visiblePointMarkers.map((p) => ({ lat: p.lat, lng: p.lng }))),
+    [mode, visibleBubblePoints, visiblePointMarkers]);
 
   const bucketCounters = useMemo(() => {
     if (mode !== "points" || !effValCol || filteredRows.length === 0) return new Map<string, number>();
@@ -1823,6 +1941,426 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
   }, [mode, filteredRows, effValCol, currentScheme]);
 
   const pointsTotal = [...bucketCounters.values()].reduce((a, b) => a + b, 0);
+
+  return {
+    db, setDb, collections, collectionsLoading, locations,
+    tmplIdx, setTmplIdx, sql, setSql, mode, setMode, template,
+    quantityCol, labelCol, valueCol, colorSchemeKey,
+    isRunning, error, setError, columns, rows, executionTime,
+    filterCollection, setFilterCollection, filterLocation, setFilterLocation,
+    filterNRARFCN, setFilterNRARFCN, filterLink, setFilterLink,
+    selectedGroup, setSelectedGroup, selectedBuckets, setSelectedBuckets, toggleBucket,
+    visible, setVisible,
+    effLatCol, effLngCol, effQtyCol, effValCol, effLabelCol,
+    uniqueCollections, filteredRows, currentScheme, availableNRARFCNs, availableLinks,
+    filtersReady, selectTemplate, applySync, getState, setState, clearResults,
+    runQuery, runRef,
+    visibleBubblePoints, bubbleTierCounts, visiblePointMarkers, mapPoints,
+    bucketCounters, pointsTotal,
+  };
+}
+
+type QueryLayer = ReturnType<typeof useQueryLayer>;
+
+// Short name of a layer, shown in tabs / tooltips / legend headers
+function layerName(L: QueryLayer, index: number): string {
+  return `L${index + 1} · ${L.template?.label ?? "—"}`;
+}
+
+// ── Σχήμα κουκκίδας ενός layer, για legend & layer strip ─────────────────────
+// Χωρίς `color` παίρνει το accent του layer (header/tab)· με `color` δείχνει το
+// χρώμα της τιμής στο σχήμα του layer (γραμμές του legend).
+const LayerShapeSwatch = ({ index, color, size = 11 }: { index: number; color?: string; size?: number }) => {
+  const st = markerStyleFor(index);
+  const c = color ?? LAYER_ACCENTS[index] ?? LAYER_ACCENTS[0];
+  const mid = size / 2;
+  const r = mid - (st.shape === "circle" ? 1.4 : 1.8);
+  return (
+    <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="shrink-0">
+      <path d={shapePathD(mid, mid, r, st.shape)}
+        fill={c} fillOpacity={st.fillOpacity || 0}
+        stroke={c} strokeWidth={st.shape === "cross" ? 2 : 1}
+        strokeLinecap="round" />
+    </svg>
+  );
+};
+
+// ── Markers of one layer, drawn inside the shared <MapContainer> ──────────────
+const LayerMarkers = ({ L, index, name, showName }: {
+  L: QueryLayer; index: number; name: string; showName: boolean;
+}) => {
+  if (!L.visible) return null;
+
+  if (L.mode === "bubble") {
+    return (
+      <>
+        {L.visibleBubblePoints.map((pt, i) => {
+          const { fill, stroke } = bubbleColor(pt.normalized);
+          const label = L.effLabelCol ? String(pt.row[L.effLabelCol] ?? `#${i}`) : `#${i}`;
+          const extra = Object.entries(pt.row).filter(([k]) => k !== L.effLabelCol && k !== L.effLatCol && k !== L.effLngCol && k !== L.effQtyCol);
+          return (
+            <CircleMarker key={i} center={[pt.lat, pt.lng]} radius={pt.radius}
+              pathOptions={{ fillColor: fill, fillOpacity: 0.78, color: index === 0 ? stroke : LAYER_ACCENTS[index], weight: index === 0 ? 2 : 3 }}
+              eventHandlers={{
+                click: () => L.effLabelCol && L.setSelectedGroup((g) => (g === label ? null : label)),
+              }}>
+              <Tooltip direction="top" offset={[0, -pt.radius]} opacity={0.97}>
+                <div className="font-sans text-center space-y-0.5 min-w-[120px]">
+                  {showName && (
+                    <div className="text-[9px] font-semibold uppercase tracking-wide" style={{ color: LAYER_ACCENTS[index] }}>{name}</div>
+                  )}
+                  <div className="font-bold text-xs border-b border-gray-200 pb-1 mb-1">{label}</div>
+                  {L.effLabelCol && (
+                    <div className="text-[9px] text-gray-400 italic">
+                      {L.selectedGroup === label ? "κλικ για επαναφορά όλων" : "κλικ για προβολή μόνο αυτής"}
+                    </div>
+                  )}
+                  <div className="text-xs">
+                    <span className="text-gray-500">{L.effQtyCol}:</span>{" "}
+                    <span className="font-mono font-bold" style={{ color: stroke }}>
+                      {pt.qty % 1 === 0 ? pt.qty.toLocaleString() : pt.qty.toFixed(2)}
+                    </span>
+                  </div>
+                  {extra.map(([k, v]) => (
+                    <div key={k} className="text-[10px] text-gray-500">
+                      {k}: <span className="text-gray-700 font-mono">{v != null ? String(v) : "—"}</span>
+                    </div>
+                  ))}
+                </div>
+              </Tooltip>
+            </CircleMarker>
+          );
+        })}
+      </>
+    );
+  }
+
+  // Σχήμα ανά layer (όχι λευκό περίγραμμα: σε πυκνά δεδομένα τα περιγράμματα
+  // αλληλοκαλύπτονταν και δημιουργούσαν «μισοφέγγαρα»).
+  const st = markerStyleFor(index);
+  return (
+    <>
+      {L.visiblePointMarkers.map((pt, i) => {
+        const displayVal = typeof pt.val === "number"
+          ? (pt.val % 1 === 0 ? pt.val.toLocaleString() : pt.val.toFixed(2))
+          : String(pt.val);
+        return (
+          <ShapeMarker key={i} center={[pt.lat, pt.lng]} radius={st.radius} shape={st.shape}
+            pathOptions={{
+              fillColor: pt.color, fillOpacity: st.fillOpacity, fill: st.fillOpacity > 0,
+              color: pt.color, weight: st.weight, lineCap: "round",
+            }}
+            eventHandlers={{
+              click: () => pt.label && L.setSelectedGroup((g) => (g === pt.label ? null : pt.label)),
+            }}>
+            <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
+              <div className="font-sans text-center space-y-0.5">
+                {showName && (
+                  <div className="text-[9px] font-semibold uppercase tracking-wide" style={{ color: LAYER_ACCENTS[index] }}>{name}</div>
+                )}
+                {pt.label && <div className="font-bold text-xs border-b border-gray-200 pb-0.5 mb-0.5">{pt.label}</div>}
+                <div className="text-xs">
+                  <span className="text-gray-500">{L.effValCol}:</span>{" "}
+                  <span className="font-mono font-bold" style={{ color: pt.color }}>{displayVal}</span>
+                </div>
+                {pt.label && (
+                  <div className="text-[9px] text-gray-400 italic">
+                    {L.selectedGroup === pt.label ? "κλικ για επαναφορά όλων" : "κλικ για προβολή μόνο αυτής"}
+                  </div>
+                )}
+              </div>
+            </Tooltip>
+          </ShapeMarker>
+        );
+      })}
+    </>
+  );
+};
+
+// ── Legend of one layer — stacked, one block per visible layer ────────────────
+const LayerLegend = ({ L, index, name, showName }: {
+  L: QueryLayer; index: number; name: string; showName: boolean;
+}) => {
+  const rowCls = (cnt: number, active: boolean) =>
+    `w-full flex items-center gap-1 rounded px-0.5 text-left transition-colors ${cnt === 0 ? "opacity-25 cursor-default" : "cursor-pointer hover:bg-primary/10"} ${active ? "bg-primary/15 ring-1 ring-inset ring-primary/40" : ""}`;
+
+  return (
+    <div className={showName ? "pt-1 mt-1 border-t border-border/60 first:pt-0 first:mt-0 first:border-t-0" : ""}>
+      {showName && (
+        <div className="flex items-center gap-1 mb-0.5">
+          <LayerShapeSwatch index={index} />
+          <p className="text-[9px] font-bold uppercase tracking-wide text-foreground/80 truncate flex-1">{name}</p>
+        </div>
+      )}
+      {L.mode === "bubble" ? (
+        <>
+          <div className="flex items-center justify-between gap-1 mb-0.5">
+            <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Κλίμακα</p>
+            {L.selectedBuckets.size > 0 && (
+              <button type="button" onClick={() => L.setSelectedBuckets(new Set())}
+                title="Εμφάνιση όλων" className="text-primary/70 hover:text-primary">
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+          {BUBBLE_TIERS.map(({ label, fill }) => {
+            const cnt = L.bubbleTierCounts.get(label) ?? 0;
+            const active = L.selectedBuckets.has(label);
+            return (
+              <button type="button" key={label} disabled={cnt === 0}
+                title={cnt > 0 ? "Κλικ για προσθήκη/αφαίρεση από την επιλογή (πολλαπλή επιλογή)" : undefined}
+                onClick={() => L.toggleBucket(label)}
+                className={rowCls(cnt, active)}>
+                <LayerShapeSwatch index={L.mode === "bubble" ? 0 : index} color={fill} size={10} />
+                <span className="text-[10px] text-muted-foreground flex-1 leading-none">{label}</span>
+                {cnt > 0 && (
+                  <span className="text-[9px] font-mono text-muted-foreground/60 whitespace-nowrap">{cnt.toLocaleString()}</span>
+                )}
+              </button>
+            );
+          })}
+          <p className="text-[9px] text-muted-foreground border-t border-border/50 pt-0.5 mt-0.5">∝ {L.effQtyCol || "qty"}</p>
+        </>
+      ) : (
+        <>
+          <div className="flex items-center justify-between gap-1 mb-0.5">
+            <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground truncate">{L.currentScheme.label}</p>
+            {L.selectedBuckets.size > 0 && (
+              <button type="button" onClick={() => L.setSelectedBuckets(new Set())}
+                title="Εμφάνιση όλων" className="text-primary/70 hover:text-primary shrink-0">
+                <X className="h-3 w-3" />
+              </button>
+            )}
+          </div>
+          {L.currentScheme.type === "range"
+            ? L.currentScheme.buckets.map((b) => {
+                const cnt = L.bucketCounters.get(b.label) ?? 0;
+                const active = L.selectedBuckets.has(b.label);
+                return (
+                  <button type="button" key={b.label} disabled={cnt === 0}
+                    title={cnt > 0 ? "Κλικ για προσθήκη/αφαίρεση από την επιλογή (πολλαπλή επιλογή)" : undefined}
+                    onClick={() => L.toggleBucket(b.label)}
+                    className={rowCls(cnt, active)}>
+                    <LayerShapeSwatch index={L.mode === "bubble" ? 0 : index} color={b.color} size={10} />
+                    <span className="text-[10px] text-muted-foreground flex-1 leading-none">{b.label}</span>
+                    {cnt > 0 && (
+                      <span className="text-[9px] font-mono text-muted-foreground/60 whitespace-nowrap">
+                        {cnt.toLocaleString()} <span className="text-primary/70">{(cnt / L.pointsTotal * 100).toFixed(1)}%</span>
+                      </span>
+                    )}
+                  </button>
+                );
+              })
+            : L.currentScheme.categories.map((c) => {
+                const cnt = L.bucketCounters.get(c.value) ?? 0;
+                const active = L.selectedBuckets.has(c.value);
+                return (
+                  <button type="button" key={c.value} disabled={cnt === 0}
+                    title={cnt > 0 ? "Κλικ για προσθήκη/αφαίρεση από την επιλογή (πολλαπλή επιλογή)" : undefined}
+                    onClick={() => L.toggleBucket(c.value)}
+                    className={rowCls(cnt, active)}>
+                    <LayerShapeSwatch index={L.mode === "bubble" ? 0 : index} color={c.color} size={10} />
+                    <span className="text-[10px] text-muted-foreground flex-1 leading-none">{c.value}</span>
+                    {cnt > 0 && (
+                      <span className="text-[9px] font-mono text-muted-foreground/60 whitespace-nowrap">
+                        {cnt.toLocaleString()} <span className="text-primary/70">{(cnt / L.pointsTotal * 100).toFixed(1)}%</span>
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+          <p className="text-[9px] text-muted-foreground/60 border-t border-border/50 pt-0.5 mt-0.5 font-mono truncate">
+            {L.effValCol || "—"} · {L.pointsTotal.toLocaleString()} pts
+          </p>
+        </>
+      )}
+    </div>
+  );
+};
+
+// ── Filters of the active layer (Collection / ASideLocation / NRARFCN / link) ─
+const LayerFilters = ({ L }: { L: QueryLayer }) => (
+  <div className="space-y-2">
+    <div className="grid grid-cols-2 gap-1.5">
+      <div>
+        <label className="text-[10px] text-muted-foreground block mb-0.5">Collection</label>
+        <select
+          value={L.filterCollection}
+          onChange={(e) => { L.setFilterCollection(e.target.value); L.setSelectedGroup(null); }}
+          className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
+        >
+          <option value="">— Όλα —</option>
+          {(() => {
+            const base = L.collections.length > 0 ? L.collections : L.uniqueCollections;
+            const extra = L.filterCollection && !base.includes(L.filterCollection) ? [L.filterCollection] : [];
+            return [...extra, ...base].map((v) => <option key={v} value={v}>{v}</option>);
+          })()}
+        </select>
+      </div>
+      <div>
+        <label className="text-[10px] text-muted-foreground block mb-0.5">ASideLocation</label>
+        <select
+          value={L.filterLocation}
+          onChange={(e) => { L.setFilterLocation(e.target.value); L.setSelectedGroup(null); }}
+          className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
+        >
+          <option value="">— Όλες —</option>
+          {L.locations.map((v) => <option key={v} value={v}>{v}</option>)}
+        </select>
+      </div>
+    </div>
+
+    {/* NRARFCN filter — εμφανίζεται μόνο για 5G templates */}
+    {L.template?.nrarfcnCol && (
+      <div>
+        <label className="text-[10px] text-muted-foreground block mb-0.5">
+          NRARFCN
+          {L.availableNRARFCNs.length > 0 && (
+            <span className="ml-1 text-primary/70">({L.availableNRARFCNs.length} διαθέσιμα)</span>
+          )}
+        </label>
+        <select
+          value={L.filterNRARFCN}
+          onChange={(e) => L.setFilterNRARFCN(e.target.value)}
+          className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
+        >
+          <option value="">— Όλα τα NRARFCN —</option>
+          {L.availableNRARFCNs.map((v) => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+        </select>
+      </div>
+    )}
+
+    {/* Link filter — εμφανίζεται μόνο όταν το template έχει στήλη [link] */}
+    {L.template?.linkCol && (
+      <div>
+        <label className="text-[10px] text-muted-foreground block mb-0.5">
+          Link
+          {L.availableLinks.length > 0 && (
+            <span className="ml-1 text-primary/70">({L.availableLinks.length} διαθέσιμα)</span>
+          )}
+        </label>
+        <select
+          value={L.filterLink}
+          onChange={(e) => L.setFilterLink(e.target.value)}
+          className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
+        >
+          <option value="">— Όλα τα links —</option>
+          {L.availableLinks.map((v) => (
+            <option key={v} value={v}>{v}</option>
+          ))}
+        </select>
+      </div>
+    )}
+  </div>
+);
+
+// ── Single self-contained map panel (1 χάρτης, 1–3 layers) ───────────────────
+interface SingleMapPanelProps {
+  databases: string[];
+  defaultDatabase?: string;
+  panelIndex?: number;
+  label?: string;
+  onRemove?: () => void;
+  syncTarget?: SyncPayload | null;
+  onSyncRequest?: (payload: SyncPayload, collections: string[], locations: string[]) => void;
+  runTrigger?: number;
+}
+
+const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label, onRemove, syncTarget, onSyncRequest, runTrigger }: SingleMapPanelProps) => {
+  // Fixed number of hook calls; only the first `layerCount` are active
+  const layer0 = useQueryLayer(defaultDatabase);
+  const layer1 = useQueryLayer("");
+  const layer2 = useQueryLayer("");
+  const allLayers = [layer0, layer1, layer2];
+
+  const [layerCount, setLayerCount] = useState(1);
+  const [activeLayer, setActiveLayer] = useState(0);
+  const [showExpanded, setShowExpanded] = useState(false);
+  const [mapLoading, setMapLoading] = useState(false);
+
+  const layers = allLayers.slice(0, layerCount);
+  const activeIdx = Math.min(activeLayer, layerCount - 1);
+  const L = allLayers[activeIdx];
+  const multiLayer = layerCount > 1;
+
+  const addLayer = () => {
+    if (layerCount >= MAX_LAYERS) return;
+    const next = allLayers[layerCount];
+    // The slot may still hold the results of a layer that was removed earlier —
+    // clear them so no ghost markers come back with the new layer.
+    next.clearResults();
+    // Νέο layer πάνω στα ίδια δεδομένα: ίδιο db / collection / location
+    next.setDb(layer0.db || defaultDatabase);
+    next.setFilterCollection(layer0.filterCollection);
+    next.setFilterLocation(layer0.filterLocation);
+    next.setVisible(true);
+    setActiveLayer(layerCount);
+    setLayerCount(layerCount + 1);
+  };
+
+  // Layers are positional (fixed hook slots), so removing one shifts every
+  // following layer's whole state down by a slot.
+  const removeLayer = (idx: number) => {
+    if (layerCount <= 1) return;
+    for (let i = idx; i < layerCount - 1; i++) allLayers[i].setState(allLayers[i + 1].getState());
+    setLayerCount(layerCount - 1);
+    setActiveLayer((a) => Math.max(0, Math.min(a, layerCount - 2)));
+  };
+
+  // Apply sync from panel 1 (operator sync) — every layer of the source panel
+  useEffect(() => {
+    if (!syncTarget) return;
+    const incoming = syncTarget.layers.slice(0, MAX_LAYERS);
+    incoming.forEach((s, i) => allLayers[i].applySync(s, syncTarget.db));
+    setLayerCount(Math.max(1, incoming.length));
+    setActiveLayer(0);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [syncTarget]);
+
+  const runAll = () => {
+    const withDb = layers.filter((l) => l.db);
+    if (withDb.length === 0) { layer0.runRef.current(); return; }
+    withDb.forEach((l) => l.runRef.current());
+  };
+  const latestRunAll = useRef<() => void>(() => {});
+  latestRunAll.current = runAll;
+
+  useEffect(() => {
+    if (!runTrigger) return;
+    latestRunAll.current();
+  }, [runTrigger]);
+
+  // Keep the map overlay up a beat after the last query so markers are painted
+  const anyRunning = layers.some((l) => l.isRunning);
+  useEffect(() => {
+    if (anyRunning) { setMapLoading(true); return; }
+    const t = setTimeout(() => setMapLoading(false), 600);
+    return () => clearTimeout(t);
+  }, [anyRunning]);
+
+  // Union of every visible layer's points — MapBounds fits the map to all of them
+  const allMapPoints = useMemo(
+    () => allLayers.slice(0, layerCount).filter((l) => l.visible).flatMap((l) => l.mapPoints),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [layerCount, layer0.visible, layer1.visible, layer2.visible,
+     layer0.mapPoints, layer1.mapPoints, layer2.mapPoints],
+  );
+  const anyRows = layers.some((l) => l.rows.length > 0);
+
+  // Τα ενεργά φίλτρα παρουσιάζονται και καθαρίζονται για όλα τα layers μαζί
+  const selectionCount = layers.reduce(
+    (n, l) => n + l.selectedBuckets.size + (l.selectedGroup !== null ? 1 : 0), 0);
+
+  const clearAllSelections = () => layers.forEach((l) => {
+    l.setSelectedBuckets(new Set()); l.setSelectedGroup(null);
+  });
+
+  const resetAllFilters = () => layers.forEach((l) => {
+    l.setFilterCollection(""); l.setFilterLocation(""); l.setFilterNRARFCN("");
+    l.setSelectedGroup(null); l.setSelectedBuckets(new Set());
+  });
 
   return (
     <div className="rounded-lg border border-border bg-card flex flex-col overflow-hidden">
@@ -1849,24 +2387,76 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
           </div>
         )}
 
-        {/* Row 0: Database selector */}
+        {/* Row -0.5: Layer strip — πολλαπλά queries πάνω στον ίδιο χάρτη */}
+        <div className="flex items-center gap-1 flex-wrap">
+          {layers.map((lyr, i) => {
+            const active = i === activeIdx;
+            return (
+              <div
+                key={i}
+                className={`flex items-center gap-1 rounded border pl-1 pr-0.5 py-0.5 transition-all ${active ? "border-primary/60 bg-primary/10" : "border-border bg-background hover:border-primary/30"}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={lyr.visible}
+                  onChange={(e) => lyr.setVisible(e.target.checked)}
+                  title={lyr.visible ? "Απόκρυψη layer από τον χάρτη" : "Εμφάνιση layer στον χάρτη"}
+                  className="h-3 w-3 accent-primary cursor-pointer shrink-0"
+                />
+                <button
+                  type="button"
+                  onClick={() => setActiveLayer(i)}
+                  title={`${layerName(lyr, i)} — κλικ για επεξεργασία αυτού του layer`}
+                  className="flex items-center gap-1 max-w-[150px]"
+                >
+                  <LayerShapeSwatch index={i} size={10} />
+                  <span className={`text-[10px] truncate ${active ? "text-foreground font-medium" : "text-muted-foreground"}`}>
+                    L{i + 1}{lyr.effValCol ? ` · ${lyr.effValCol}` : ""}
+                  </span>
+                </button>
+                {multiLayer && (
+                  <button
+                    type="button"
+                    onClick={() => removeLayer(i)}
+                    title="Αφαίρεση layer"
+                    className="p-0.5 rounded text-muted-foreground/60 hover:text-destructive"
+                  >
+                    <X className="h-2.5 w-2.5" />
+                  </button>
+                )}
+              </div>
+            );
+          })}
+          {layerCount < MAX_LAYERS && (
+            <button
+              type="button"
+              onClick={addLayer}
+              title="Προσθήκη layer στον ίδιο χάρτη (π.χ. calls πάνω από free RSRP)"
+              className="flex items-center gap-0.5 rounded border border-dashed border-border px-1.5 py-0.5 text-[10px] text-muted-foreground hover:text-primary hover:border-primary/50 transition-all"
+            >
+              <Plus className="h-3 w-3" /> Layer
+            </button>
+          )}
+        </div>
+
+        {/* Row 0: Database selector (του ενεργού layer) */}
         <select
-          value={localDb}
-          onChange={(e) => { setLocalDb(e.target.value); setRows([]); setColumns([]); }}
+          value={L.db}
+          onChange={(e) => { L.setDb(e.target.value); L.clearResults(); }}
           className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
         >
           <option value="">— Επιλέξτε Database —</option>
           {databases.map((db) => <option key={db} value={db}>{db}</option>)}
         </select>
-        {collectionsLoading && (
+        {L.collectionsLoading && (
           <p className="text-[10px] text-muted-foreground">Φόρτωση collections…</p>
         )}
 
         {/* Row 1: Template + mode + run */}
         <div className="flex items-center gap-1.5">
           <select
-            value={tmplIdx}
-            onChange={(e) => handleTemplateChange(Number(e.target.value))}
+            value={L.tmplIdx}
+            onChange={(e) => L.selectTemplate(Number(e.target.value))}
             className="flex-1 min-w-0 bg-background border border-border rounded px-2 py-1 text-xs truncate"
           >
             {TEMPLATES.map((t, i) => (
@@ -1875,31 +2465,39 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
           </select>
 
           {/* mode pills */}
-          <button type="button" onClick={() => { setMode("bubble"); setSelectedBuckets(new Set()); }}
+          <button type="button" onClick={() => { L.setMode("bubble"); L.setSelectedBuckets(new Set()); }}
             title="Bubble mode"
-            className={`p-1.5 rounded border text-xs transition-all ${mode === "bubble" ? "bg-background border-border text-foreground shadow-sm" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+            className={`p-1.5 rounded border text-xs transition-all ${L.mode === "bubble" ? "bg-background border-border text-foreground shadow-sm" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
             <Layers className="h-3.5 w-3.5" />
           </button>
-          <button type="button" onClick={() => { setMode("points"); setSelectedBuckets(new Set()); }}
+          <button type="button" onClick={() => { L.setMode("points"); L.setSelectedBuckets(new Set()); }}
             title="GPS Points mode"
-            className={`p-1.5 rounded border text-xs transition-all ${mode === "points" ? "bg-background border-border text-foreground shadow-sm" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
+            className={`p-1.5 rounded border text-xs transition-all ${L.mode === "points" ? "bg-background border-border text-foreground shadow-sm" : "border-transparent text-muted-foreground hover:text-foreground"}`}>
             <MapPin className="h-3.5 w-3.5" />
           </button>
 
-          <Button onClick={runQuery} disabled={isRunning || !localDb} size="sm" className="h-7 px-2.5 gap-1 shrink-0">
-            {isRunning
+          <Button onClick={runAll} disabled={anyRunning || !layers.some((l) => l.db)} size="sm" className="h-7 px-2.5 gap-1 shrink-0"
+            title={multiLayer ? `Εκτέλεση και των ${layerCount} layers` : "Εκτέλεση query"}>
+            {anyRunning
               ? <div className="h-3 w-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
               : <Play className="h-3 w-3" />}
           </Button>
 
-          {panelIndex === 0 && onSyncRequest && (filterLocation || filterCollection) && (
+          {panelIndex === 0 && onSyncRequest && (layer0.filterLocation || layer0.filterCollection) && (
             <button
               type="button"
-              title={`Sync template & operator → Panels 2 & 3\n${filterLocation ? `Location: ${filterLocation}` : `Collection: ${filterCollection}`}`}
+              title={`Sync template & operator → Panels 2 & 3\n${layer0.filterLocation ? `Location: ${layer0.filterLocation}` : `Collection: ${layer0.filterCollection}`}`}
               onClick={() => onSyncRequest(
-                { db: localDb, tmplIdx, sql, mode, valueCol, colorSchemeKey, labelCol, quantityCol, location: filterLocation, collection: filterCollection },
-                localCollections,
-                localLocations,
+                {
+                  db: layer0.db,
+                  layers: layers.map((lyr) => ({
+                    tmplIdx: lyr.tmplIdx, sql: lyr.sql, mode: lyr.mode, valueCol: lyr.valueCol,
+                    colorSchemeKey: lyr.colorSchemeKey, labelCol: lyr.labelCol, quantityCol: lyr.quantityCol,
+                    location: lyr.filterLocation, collection: lyr.filterCollection,
+                  })),
+                },
+                layer0.collections,
+                layer0.locations,
               )}
               className="p-1.5 rounded border border-border text-muted-foreground hover:text-primary hover:border-primary text-xs transition-all shrink-0"
             >
@@ -1908,79 +2506,8 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
           )}
         </div>
 
-        {/* Row 2: Filters */}
-        <div className="grid grid-cols-2 gap-1.5">
-          <div>
-            <label className="text-[10px] text-muted-foreground block mb-0.5">Collection</label>
-            <select
-              value={filterCollection}
-              onChange={(e) => { setFilterCollection(e.target.value); setSelectedGroup(null); }}
-              className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
-            >
-              <option value="">— Όλα —</option>
-              {(() => {
-                const base = localCollections.length > 0 ? localCollections : uniqueCollections;
-                const extra = filterCollection && !base.includes(filterCollection) ? [filterCollection] : [];
-                return [...extra, ...base].map((v) => <option key={v} value={v}>{v}</option>);
-              })()}
-            </select>
-          </div>
-          <div>
-            <label className="text-[10px] text-muted-foreground block mb-0.5">ASideLocation</label>
-            <select
-              value={filterLocation}
-              onChange={(e) => { setFilterLocation(e.target.value); setSelectedGroup(null); }}
-              className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
-            >
-              <option value="">— Όλες —</option>
-              {localLocations.map((v) => <option key={v} value={v}>{v}</option>)}
-            </select>
-          </div>
-        </div>
-
-        {/* Row 2b: NRARFCN filter — εμφανίζεται μόνο για 5G templates */}
-        {currentTemplate?.nrarfcnCol && (
-          <div>
-            <label className="text-[10px] text-muted-foreground block mb-0.5">
-              NRARFCN
-              {availableNRARFCNs.length > 0 && (
-                <span className="ml-1 text-primary/70">({availableNRARFCNs.length} διαθέσιμα)</span>
-              )}
-            </label>
-            <select
-              value={filterNRARFCN}
-              onChange={(e) => setFilterNRARFCN(e.target.value)}
-              className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
-            >
-              <option value="">— Όλα τα NRARFCN —</option>
-              {availableNRARFCNs.map((v) => (
-                <option key={v} value={v}>{v}</option>
-              ))}
-            </select>
-          </div>
-        )}
-
-        {/* Row 2c: Link filter — εμφανίζεται μόνο όταν το template έχει στήλη [link] */}
-        {currentTemplate?.linkCol && (
-          <div>
-            <label className="text-[10px] text-muted-foreground block mb-0.5">
-              Link
-              {availableLinks.length > 0 && (
-                <span className="ml-1 text-primary/70">({availableLinks.length} διαθέσιμα)</span>
-              )}
-            </label>
-            <select
-              value={filterLink}
-              onChange={(e) => setFilterLink(e.target.value)}
-              className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
-            >
-              <option value="">— Όλα τα links —</option>
-              {availableLinks.map((v) => (
-                <option key={v} value={v}>{v}</option>
-              ))}
-            </select>
-          </div>
-        )}
+        {/* Row 2: Filters (του ενεργού layer) */}
+        <LayerFilters L={L} />
 
         {/* Row 3: Expand toggle */}
         <button
@@ -1989,7 +2516,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
           className="flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
         >
           <Settings2 className="h-3 w-3" />
-          SQL / Ρυθμίσεις
+          SQL / Ρυθμίσεις{multiLayer ? ` — L${activeIdx + 1}` : ""}
           <ChevronDown className={`h-3 w-3 ml-0.5 transition-transform ${showExpanded ? "rotate-180" : ""}`} />
         </button>
 
@@ -1998,8 +2525,8 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
             <div>
               <label className="text-[10px] text-muted-foreground block mb-0.5">SQL Query</label>
               <textarea
-                value={sql}
-                onChange={(e) => { setSql(e.target.value); setTmplIdx(TEMPLATES.length - 1); }}
+                value={L.sql}
+                onChange={(e) => { L.setSql(e.target.value); L.setTmplIdx(TEMPLATES.length - 1); }}
                 className="w-full h-32 font-mono text-[11px] bg-background border border-border rounded px-2 py-1.5 resize-y focus:outline-none focus:ring-1 focus:ring-primary"
                 spellCheck={false}
               />
@@ -2007,37 +2534,59 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
           </div>
         )}
 
-        {/* Status row */}
-        {rows.length > 0 && !isRunning && (
+        {/* Status row — stats του ενεργού layer, ενεργά φίλτρα ΟΛΩΝ των layers μαζί */}
+        {anyRows && !anyRunning && (
           <div className="flex items-center gap-2 text-[10px] text-muted-foreground font-mono flex-wrap">
-            <span className={allMapPoints.length === 0 ? "text-destructive" : "text-primary"}>
-              {allMapPoints.length} pts
-            </span>
-            <span>/ {filteredRows.length !== rows.length ? `${filteredRows.length} filtered /` : ""} {rows.length} rows</span>
-            {executionTime != null && <span className="ml-auto">{executionTime.toFixed(0)} ms</span>}
-            {selectedGroup !== null && (
-              <button type="button" onClick={() => setSelectedGroup(null)}
-                title="Καθαρισμός επιλογής ομάδας — εμφάνιση όλων"
-                className="ml-1 flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 truncate max-w-[160px]">
-                <X className="h-2.5 w-2.5 shrink-0" /> <span className="truncate">{selectedGroup}</span>
-              </button>
-            )}
-            {[...selectedBuckets].map((label) => (
-              <button type="button" key={label} onClick={() => toggleBucket(label)}
-                title="Αφαίρεση αυτής της τιμής από την επιλογή"
-                className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 truncate max-w-[160px]">
-                <X className="h-2.5 w-2.5 shrink-0" /> <span className="truncate">{label}</span>
-              </button>
+            {/* Ένα checkbox ανά layer: κρύβει ΜΟΝΟ τα δείγματα & το legend του */}
+            {layers.map((lyr, i) => (
+              <label key={i} className="flex items-center gap-1 cursor-pointer select-none shrink-0"
+                title={`${lyr.visible ? "Απόκρυψη" : "Εμφάνιση"} δειγμάτων & legend — ${layerName(lyr, i)}`}>
+                <input type="checkbox" checked={lyr.visible}
+                  onChange={(e) => lyr.setVisible(e.target.checked)}
+                  className="h-3 w-3 accent-primary cursor-pointer" />
+                <LayerShapeSwatch index={i} size={9} />
+                <span className={lyr.visible ? "text-foreground/70" : "opacity-50 line-through"}>
+                  L{i + 1}{lyr.effValCol ? ` · ${lyr.effValCol}` : ""}
+                </span>
+              </label>
             ))}
-            {selectedBuckets.size > 1 && (
-              <button type="button" onClick={() => setSelectedBuckets(new Set())}
-                title="Καθαρισμός επιλογής legend — εμφάνιση όλων"
+            <span className={L.mapPoints.length === 0 ? "text-destructive" : "text-primary"}>
+              {L.mapPoints.length} pts
+            </span>
+            <span>/ {L.filteredRows.length !== L.rows.length ? `${L.filteredRows.length} filtered /` : ""} {L.rows.length} rows</span>
+            {L.executionTime != null && <span className="ml-auto">{L.executionTime.toFixed(0)} ms</span>}
+
+            {/* Κάθε ενεργό value-filter κάθε layer — με χρωματική κουκκίδα του layer */}
+            {layers.flatMap((lyr, i) => {
+              const dot = multiLayer
+                ? <LayerShapeSwatch index={i} size={9} />
+                : null;
+              const chip = (key: string, text: string, title: string, onClick: () => void) => (
+                <button type="button" key={key} onClick={onClick} title={title}
+                  className="flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-primary/10 text-primary hover:bg-primary/20 truncate max-w-[160px]">
+                  <X className="h-2.5 w-2.5 shrink-0" />{dot}<span className="truncate">{text}</span>
+                </button>
+              );
+              const chips = [];
+              if (lyr.selectedGroup !== null) {
+                chips.push(chip(`g${i}`, lyr.selectedGroup, "Καθαρισμός επιλογής ομάδας — εμφάνιση όλων", () => lyr.setSelectedGroup(null)));
+              }
+              for (const b of lyr.selectedBuckets) {
+                chips.push(chip(`b${i}-${b}`, b, "Αφαίρεση αυτής της τιμής από την επιλογή", () => lyr.toggleBucket(b)));
+              }
+              return chips;
+            })}
+
+            {selectionCount > 1 && (
+              <button type="button" onClick={clearAllSelections}
+                title="Καθαρισμός επιλογών legend σε όλα τα layers"
                 className="text-[9px] text-muted-foreground hover:text-primary underline underline-offset-2">
                 καθαρισμός όλων
               </button>
             )}
-            {(filterCollection || filterLocation) && (
-              <button type="button" onClick={() => { setFilterCollection(""); setFilterLocation(""); setFilterNRARFCN(""); setSelectedGroup(null); setSelectedBuckets(new Set()); }}
+            {layers.some((lyr) => lyr.filterCollection || lyr.filterLocation) && (
+              <button type="button" onClick={resetAllFilters}
+                title={multiLayer ? "Καθαρισμός φίλτρων σε όλα τα layers" : "Καθαρισμός φίλτρων"}
                 className="text-primary/70 hover:text-primary flex items-center gap-0.5">
                 <X className="h-2.5 w-2.5" /> reset
               </button>
@@ -2045,13 +2594,13 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
           </div>
         )}
 
-        {/* Error */}
-        {error && (
-          <div className="flex items-start gap-1.5 p-2 rounded bg-destructive/10 border border-destructive/30 text-[11px] text-destructive">
+        {/* Errors (όλων των layers) */}
+        {layers.map((lyr, i) => lyr.error && (
+          <div key={i} className="flex items-start gap-1.5 p-2 rounded bg-destructive/10 border border-destructive/30 text-[11px] text-destructive">
             <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-            <span className="break-all">{error}</span>
+            <span className="break-all">{multiLayer ? `L${i + 1}: ` : ""}{lyr.error}</span>
           </div>
-        )}
+        ))}
       </div>
 
       {/* ── Map ── */}
@@ -2073,165 +2622,32 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
           />
           <MapBounds points={allMapPoints} />
 
-          {mode === "bubble" && visibleBubblePoints.map((pt, i) => {
-            const { fill, stroke } = bubbleColor(pt.normalized);
-            const label = effLabelCol ? String(pt.row[effLabelCol] ?? `#${i}`) : `#${i}`;
-            const extra = Object.entries(pt.row).filter(([k]) => k !== effLabelCol && k !== effLatCol && k !== effLngCol && k !== effQtyCol);
-            return (
-              <CircleMarker key={i} center={[pt.lat, pt.lng]} radius={pt.radius}
-                pathOptions={{ fillColor: fill, fillOpacity: 0.78, color: stroke, weight: 2 }}
-                eventHandlers={{
-                  click: () => effLabelCol && setSelectedGroup((g) => (g === label ? null : label)),
-                }}>
-                <Tooltip direction="top" offset={[0, -pt.radius]} opacity={0.97}>
-                  <div className="font-sans text-center space-y-0.5 min-w-[120px]">
-                    <div className="font-bold text-xs border-b border-gray-200 pb-1 mb-1">{label}</div>
-                    {effLabelCol && (
-                      <div className="text-[9px] text-gray-400 italic">
-                        {selectedGroup === label ? "κλικ για επαναφορά όλων" : "κλικ για προβολή μόνο αυτής"}
-                      </div>
-                    )}
-                    <div className="text-xs">
-                      <span className="text-gray-500">{effQtyCol}:</span>{" "}
-                      <span className="font-mono font-bold" style={{ color: stroke }}>
-                        {pt.qty % 1 === 0 ? pt.qty.toLocaleString() : pt.qty.toFixed(2)}
-                      </span>
-                    </div>
-                    {extra.map(([k, v]) => (
-                      <div key={k} className="text-[10px] text-gray-500">
-                        {k}: <span className="text-gray-700 font-mono">{v != null ? String(v) : "—"}</span>
-                      </div>
-                    ))}
-                  </div>
-                </Tooltip>
-              </CircleMarker>
-            );
-          })}
-
-          {mode === "points" && visiblePointMarkers.map((pt, i) => {
-            const displayVal = typeof pt.val === "number"
-              ? (pt.val % 1 === 0 ? pt.val.toLocaleString() : pt.val.toFixed(2))
-              : String(pt.val);
-            return (
-              <CircleMarker key={i} center={[pt.lat, pt.lng]} radius={4}
-                pathOptions={{ fillColor: pt.color, fillOpacity: 0.85, color: pt.color, weight: 1 }}
-                eventHandlers={{
-                  click: () => pt.label && setSelectedGroup((g) => (g === pt.label ? null : pt.label)),
-                }}>
-                <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
-                  <div className="font-sans text-center space-y-0.5">
-                    {pt.label && <div className="font-bold text-xs border-b border-gray-200 pb-0.5 mb-0.5">{pt.label}</div>}
-                    <div className="text-xs">
-                      <span className="text-gray-500">{effValCol}:</span>{" "}
-                      <span className="font-mono font-bold" style={{ color: pt.color }}>{displayVal}</span>
-                    </div>
-                    {pt.label && (
-                      <div className="text-[9px] text-gray-400 italic">
-                        {selectedGroup === pt.label ? "κλικ για επαναφορά όλων" : "κλικ για προβολή μόνο αυτής"}
-                      </div>
-                    )}
-                  </div>
-                </Tooltip>
-              </CircleMarker>
-            );
-          })}
+          {/* Layer 1 πρώτο = από κάτω· τα επόμενα ζωγραφίζονται από πάνω */}
+          {layers.map((lyr, i) => (
+            <LayerMarkers key={i} L={lyr} index={i} name={layerName(lyr, i)} showName={multiLayer} />
+          ))}
         </MapContainer>
 
-        {/* Legend overlay */}
+        {/* Legend overlay — ένα block ανά ορατό layer (on/off ανά layer, status row) */}
         {allMapPoints.length > 0 && (
-          <div className="absolute bottom-2 right-2 bg-card/95 backdrop-blur-sm border border-border/60 rounded-md p-1.5 space-y-0.5 z-[1000] shadow-md max-h-[220px] overflow-y-auto min-w-[140px]">
-            {mode === "bubble" ? (
-              <>
-                <div className="flex items-center justify-between gap-1 mb-0.5">
-                  <p className="text-[8px] font-bold uppercase tracking-widest text-muted-foreground">Κλίμακα</p>
-                  {selectedBuckets.size > 0 && (
-                    <button type="button" onClick={() => setSelectedBuckets(new Set())}
-                      title="Εμφάνιση όλων" className="text-primary/70 hover:text-primary">
-                      <X className="h-2.5 w-2.5" />
-                    </button>
-                  )}
-                </div>
-                {BUBBLE_TIERS.map(({ label, fill }) => {
-                  const cnt = bubbleTierCounts.get(label) ?? 0;
-                  const active = selectedBuckets.has(label);
-                  return (
-                    <button type="button" key={label} disabled={cnt === 0}
-                      title={cnt > 0 ? "Κλικ για προσθήκη/αφαίρεση από την επιλογή (πολλαπλή επιλογή)" : undefined}
-                      onClick={() => toggleBucket(label)}
-                      className={`w-full flex items-center gap-1 rounded px-0.5 text-left transition-colors ${cnt === 0 ? "opacity-25 cursor-default" : "cursor-pointer hover:bg-primary/10"} ${active ? "bg-primary/15 ring-1 ring-inset ring-primary/40" : ""}`}>
-                      <div className="rounded-full shrink-0" style={{ width: 7, height: 7, backgroundColor: fill }} />
-                      <span className="text-[9px] text-muted-foreground flex-1 leading-none">{label}</span>
-                      {cnt > 0 && (
-                        <span className="text-[8px] font-mono text-muted-foreground/60 whitespace-nowrap">{cnt.toLocaleString()}</span>
-                      )}
-                    </button>
-                  );
-                })}
-                <p className="text-[8px] text-muted-foreground border-t border-border/50 pt-0.5 mt-0.5">∝ {effQtyCol || "qty"}</p>
-              </>
-            ) : (
-              <>
-                <div className="flex items-center justify-between gap-1 mb-0.5">
-                  <p className="text-[8px] font-bold uppercase tracking-widest text-muted-foreground truncate">{currentScheme.label}</p>
-                  {selectedBuckets.size > 0 && (
-                    <button type="button" onClick={() => setSelectedBuckets(new Set())}
-                      title="Εμφάνιση όλων" className="text-primary/70 hover:text-primary shrink-0">
-                      <X className="h-2.5 w-2.5" />
-                    </button>
-                  )}
-                </div>
-                {currentScheme.type === "range"
-                  ? currentScheme.buckets.map((b) => {
-                      const cnt = bucketCounters.get(b.label) ?? 0;
-                      const active = selectedBuckets.has(b.label);
-                      return (
-                        <button type="button" key={b.label} disabled={cnt === 0}
-                          title={cnt > 0 ? "Κλικ για προσθήκη/αφαίρεση από την επιλογή (πολλαπλή επιλογή)" : undefined}
-                          onClick={() => toggleBucket(b.label)}
-                          className={`w-full flex items-center gap-1 rounded px-0.5 text-left transition-colors ${cnt === 0 ? "opacity-25 cursor-default" : "cursor-pointer hover:bg-primary/10"} ${active ? "bg-primary/15 ring-1 ring-inset ring-primary/40" : ""}`}>
-                          <div className="rounded-full shrink-0" style={{ width: 7, height: 7, backgroundColor: b.color }} />
-                          <span className="text-[9px] text-muted-foreground flex-1 leading-none">{b.label}</span>
-                          {cnt > 0 && (
-                            <span className="text-[8px] font-mono text-muted-foreground/60 whitespace-nowrap">
-                              {cnt.toLocaleString()} <span className="text-primary/70">{(cnt / pointsTotal * 100).toFixed(1)}%</span>
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })
-                  : currentScheme.categories.map((c) => {
-                      const cnt = bucketCounters.get(c.value) ?? 0;
-                      const active = selectedBuckets.has(c.value);
-                      return (
-                        <button type="button" key={c.value} disabled={cnt === 0}
-                          title={cnt > 0 ? "Κλικ για προσθήκη/αφαίρεση από την επιλογή (πολλαπλή επιλογή)" : undefined}
-                          onClick={() => toggleBucket(c.value)}
-                          className={`w-full flex items-center gap-1 rounded px-0.5 text-left transition-colors ${cnt === 0 ? "opacity-25 cursor-default" : "cursor-pointer hover:bg-primary/10"} ${active ? "bg-primary/15 ring-1 ring-inset ring-primary/40" : ""}`}>
-                          <div className="rounded-full shrink-0" style={{ width: 7, height: 7, backgroundColor: c.color }} />
-                          <span className="text-[9px] text-muted-foreground flex-1 leading-none">{c.value}</span>
-                          {cnt > 0 && (
-                            <span className="text-[8px] font-mono text-muted-foreground/60 whitespace-nowrap">
-                              {cnt.toLocaleString()} <span className="text-primary/70">{(cnt / pointsTotal * 100).toFixed(1)}%</span>
-                            </span>
-                          )}
-                        </button>
-                      );
-                    })}
-                <p className="text-[8px] text-muted-foreground/60 border-t border-border/50 pt-0.5 mt-0.5 font-mono truncate">
-                  {effValCol || "—"} · {pointsTotal.toLocaleString()} pts
-                </p>
-              </>
-            )}
+          <div className="absolute bottom-2 right-2 bg-muted/70 backdrop-blur-sm border border-border/50 rounded-md p-2 space-y-0.5 z-[1000] shadow-md max-h-[368px] overflow-y-auto min-w-[161px]">
+            {layers.map((lyr, i) => (lyr.visible && lyr.mapPoints.length > 0) && (
+              <LayerLegend key={i} L={lyr} index={i} name={layerName(lyr, i)} showName={multiLayer} />
+            ))}
           </div>
         )}
 
         {/* Empty state */}
-        {allMapPoints.length === 0 && !isRunning && (
+        {allMapPoints.length === 0 && !anyRunning && (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="text-center space-y-2">
               <MapPin className="h-10 w-10 text-muted-foreground/20 mx-auto" />
               <p className="text-xs text-muted-foreground/60">
-                {rows.length > 0 ? "Δεν βρέθηκαν συντεταγμένες" : "Εκτελέστε query"}
+                {!anyRows
+                  ? "Εκτελέστε query"
+                  : layers.every((l) => !l.visible)
+                    ? "Όλα τα layers είναι κρυμμένα"
+                    : "Δεν βρέθηκαν συντεταγμένες"}
               </p>
             </div>
           </div>
@@ -2279,28 +2695,34 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
   };
 
   const handleSyncRequest = (payload: SyncPayload, collections: string[], locations: string[]) => {
-    // Detect operator from location first (e.g. "Cosmote Free A"), fall back to collection
-    const refOp = detectOperator(payload.location) || detectOperator(payload.collection);
+    // Detect operator from the 1st layer's location (e.g. "Cosmote Free A"), fall back to collection
+    const first = payload.layers[0];
+    if (!first) return;
+    const refOp = detectOperator(first.location) || detectOperator(first.collection);
     const others = OPERATOR_GROUPS.filter(g => g.name !== refOp);
     // Sync targets are the 2nd and 3rd map panels, if present
     const targetIds = panels.slice(1, 3);
     const updates: Record<number, SyncPayload | null> = {};
     targetIds.forEach((id, i) => {
       const targetOp = others[i];
-      // Swap location to the matching operator location (e.g. "Vodafone Free A")
-      const locCandidates = locations.filter(l => detectOperator(l) === targetOp?.name);
-      const bestLoc = targetOp
-        ? bestCollectionForOperator(payload.location, refOp ?? "", targetOp.name, locCandidates) ?? ""
-        : "";
-      // Swap collection only if it also contains an operator name; otherwise keep same
-      const collRefOp = detectOperator(payload.collection);
-      const collCandidates = collRefOp && targetOp
-        ? collections.filter(c => detectOperator(c) === targetOp.name)
-        : [];
-      const bestColl = collRefOp && targetOp && collCandidates.length > 0
-        ? bestCollectionForOperator(payload.collection, collRefOp, targetOp.name, collCandidates) ?? payload.collection
-        : payload.collection;
-      updates[id] = { ...payload, collection: bestColl, location: bestLoc };
+      // Every layer of the source panel is swapped to the target operator
+      const layers = payload.layers.map((layer) => {
+        // Swap location to the matching operator location (e.g. "Vodafone Free A")
+        const locCandidates = locations.filter(l => detectOperator(l) === targetOp?.name);
+        const bestLoc = targetOp
+          ? bestCollectionForOperator(layer.location, refOp ?? "", targetOp.name, locCandidates) ?? ""
+          : "";
+        // Swap collection only if it also contains an operator name; otherwise keep same
+        const collRefOp = detectOperator(layer.collection);
+        const collCandidates = collRefOp && targetOp
+          ? collections.filter(c => detectOperator(c) === targetOp.name)
+          : [];
+        const bestColl = collRefOp && targetOp && collCandidates.length > 0
+          ? bestCollectionForOperator(layer.collection, collRefOp, targetOp.name, collCandidates) ?? layer.collection
+          : layer.collection;
+        return { ...layer, collection: bestColl, location: bestLoc };
+      });
+      updates[id] = { db: payload.db, layers };
     });
     setSyncTargets((prev) => ({ ...prev, ...updates }));
   };
@@ -2314,8 +2736,8 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
         </h2>
         <span className="text-[11px] text-muted-foreground">
           {panels.length > 1
-            ? "Κάθε χάρτης έχει ανεξάρτητο query, φίλτρα και χρωματική κλίμακα"
-            : "Ανεξάρτητο query, φίλτρα και χρωματική κλίμακα"}
+            ? "Κάθε χάρτης έχει ανεξάρτητο query· «+ Layer» για πολλαπλά queries στον ίδιο χάρτη"
+            : "Ανεξάρτητο query, φίλτρα και χρωματική κλίμακα · «+ Layer» για overlay (π.χ. calls πάνω σε free RSRP)"}
         </span>
 
         <button
