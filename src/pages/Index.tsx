@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, useRef, Fragment } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback, Fragment } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp, History, Search } from "lucide-react";
@@ -17,6 +17,7 @@ import QueryMap from "@/components/QueryMap";
 import ValidationTab from "@/components/ValidationTab";
 import SummaryTab from "@/components/SummaryTab";
 import HistoricTab from "@/components/HistoricTab";
+import { useDebouncedValue } from "@/hooks/use-debounced-value"; //καθυστερεί το fetch μεχρι να ησυχασει η επιλογη
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import { useUrlNullableStringState, useUrlStringListState, useUrlStringState } from "@/hooks/use-url-state"; //state που ζει στο URL (shareable link), με localStorage fallback
 import type { CallRecord } from "@/lib/callData";
@@ -663,72 +664,83 @@ const Index = () => {
   // (το /api/srvcc είναι 3 γραμμές, το /api/calls/ping_1000 χιλιάδες). Το react-query
   // δίνει επιπλέον cache ανά (database, collections) και race-safety στη γρήγορη αλλαγή
   // επιλογής — δεν μπορεί παλιό response να γράψει πάνω σε νεότερο.
-  const summaryEnabled = Boolean(summaryDatabase) && summaryCollections.length > 0;
+  /**
+   * ΤΑ QUERIES ΚΡΕΜΟΝΤΑΙ ΑΠΟ ΑΥΤΟ, ΟΧΙ ΑΠΟ ΤΟ summaryCollections. Κάθε κλικ σε checkbox
+   * άλλαζε αμέσως το queryKey και έστελνε 11 νέα βαριά SQL queries· τα προηγούμενα ΔΕΝ
+   * σταματούσαν (ο SQL Server τα τελειώνει ό,τι κι αν κάνει ο browser), οπότε το
+   * "Select all" πάνω σε 20 collections έριχνε ~220 queries στον server και ό,τι
+   * προλάβαινε τελείωνε — από εκεί έρχονταν τα timeouts. Με 600ms ησυχία πριν το fetch,
+   * ένα πέρασμα επιλογών = ένα κύμα από 11 queries.
+   */
+  const summaryCollectionsForQuery = useDebouncedValue(summaryCollections, 600);
+  /** True όσο ο χρήστης ακόμα κλικάρει — τα skeletons πρέπει να μένουν ορατά. */
+  const summarySelectionSettling = summaryCollections !== summaryCollectionsForQuery;
+  const summaryEnabled = Boolean(summaryDatabase) && summaryCollectionsForQuery.length > 0;
   // Ταξινομημένα collections μέσα στο key: αλλαγή σειράς δεν είναι αλλαγή dataset.
-  const summaryCollectionsKey = useMemo(() => [...summaryCollections].sort(), [summaryCollections]);
+  const summaryCollectionsKey = useMemo(() => [...summaryCollectionsForQuery].sort(), [summaryCollectionsForQuery]);
 
   const summaryQueries = useQueries({
     queries: [
       {
         queryKey: ["summary", "calls", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchAllCalls(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchAllCalls(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled,
       },
       {
         queryKey: ["summary", "dataCalls", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchDataCalls(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchDataCalls(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled,
       },
       {
         // "Technology mix" row δεν είναι στο COMPACT_VOICE_ROW_ORDER — άχρηστο σε compact
         // (βλ. σχόλιο στο summaryCompact state).
         queryKey: ["summary", "technologyMix", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchTechnologyMix(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchTechnologyMix(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled && !summaryCompact,
       },
       {
         queryKey: ["summary", "servingBandTech", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchServingBandTech(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchServingBandTech(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled,
       },
       {
         queryKey: ["summary", "cellBandCount", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchCellBandCount(summaryDatabase, summaryCollections),
+        queryFn: ({ signal }) => fetchCellBandCount(summaryDatabase, summaryCollectionsForQuery, { signal }),
         enabled: summaryEnabled,
       },
       {
         queryKey: ["summary", "srvcc", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchSrvcc(summaryDatabase, summaryCollections),
+        queryFn: ({ signal }) => fetchSrvcc(summaryDatabase, summaryCollectionsForQuery, { signal }),
         enabled: summaryEnabled,
       },
       {
         queryKey: ["summary", "ookla", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchOokla(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchOokla(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled,
       },
       {
         queryKey: ["summary", "ping1000", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchPing1000(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchPing1000(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled,
       },
       {
         // "Interactivity (eGaming)" section καταργείται εντελώς σε compact (βλ.
         // COMPACT_EXCLUDED_SECTION_LABELS στο SummaryTab.tsx) — άχρηστο fetch.
         queryKey: ["summary", "interactivity", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchInteractivity(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchInteractivity(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled && !summaryCompact,
       },
       {
         // "DNS Resolution" section, ίδιο σκεπτικό.
         queryKey: ["summary", "dns", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchDns(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchDns(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled && !summaryCompact,
       },
       {
         // Capacity (grx)/(akamai) breakdown: ρητά Full-only (βλ. σχόλιο στο
         // COMPACT_EXCLUDED_SECTION_LABELS), άχρηστο fetch σε compact.
         queryKey: ["summary", "capacityLink", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchCapacityLink(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchCapacityLink(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled && !summaryCompact,
       },
     ],
@@ -771,22 +783,39 @@ const Index = () => {
    * capacity_link), οπότε το `data` είναι pending όσο έστω μία από αυτές τρέχει — αλλιώς
    * ο πίνακας θα εμφανιζόταν μισός σαν να ήταν πλήρης.
    */
-  const voicePending = summaryEnabled && summaryVoiceQuery.isPending;
+  // Όσο τρέχει το debounce window (summarySelectionSettling) τα queries ΔΕΝ έχουν ξεκινήσει
+  // ακόμα για τη νέα επιλογή, οπότε χωρίς αυτό ο πίνακας θα έδειχνε τα ΠΑΛΙΑ δεδομένα σαν
+  // τελειωμένα για ~600ms μετά το κλικ.
+  const voicePending = summarySelectionSettling || (summaryEnabled && summaryVoiceQuery.isPending);
   const dataPending =
-    summaryEnabled &&
-    [
-      summaryDataQuery,
-      summaryOoklaQuery,
-      summaryPing1000Query,
-      summaryInteractivityQuery,
-      summaryDnsQuery,
-      summaryCapacityLinkQuery,
-    ].some((query) => isQueryLoading(query));
-  const technologyMixPending = summaryEnabled && isQueryLoading(summaryTechnologyMixQuery);
-  const servingBandTechPending = summaryEnabled && summaryServingBandTechQuery.isPending;
-  const summarySourcesDone = summaryEnabled
-    ? summaryQueries.filter((query) => !isQueryLoading(query)).length
-    : summaryQueries.length;
+    summarySelectionSettling ||
+    (summaryEnabled &&
+      [
+        summaryDataQuery,
+        summaryOoklaQuery,
+        summaryPing1000Query,
+        summaryInteractivityQuery,
+        summaryDnsQuery,
+        summaryCapacityLinkQuery,
+      ].some((query) => isQueryLoading(query)));
+  const technologyMixPending = summarySelectionSettling || (summaryEnabled && isQueryLoading(summaryTechnologyMixQuery));
+  const servingBandTechPending = summarySelectionSettling || (summaryEnabled && summaryServingBandTechQuery.isPending);
+  const summarySourcesDone = summarySelectionSettling
+    ? 0
+    : summaryEnabled
+      ? summaryQueries.filter((query) => !isQueryLoading(query)).length
+      : summaryQueries.length;
+  /**
+   * Πόσες πηγές τα παράτησαν (timeout/δίκτυο/SQL error). Το SummaryTab το δείχνει σαν chip
+   * με Retry αντί να υποβαθμίζεται σιωπηλά — πριν, μια πηγή που έκανε timeout φαινόταν
+   * ίδια με "δεν υπάρχουν δεδομένα".
+   */
+  const summarySourcesFailed = summaryEnabled ? summaryQueries.filter((query) => query.isError).length : 0;
+  const retrySummarySources = useCallback(() => {
+    for (const query of summaryQueries) {
+      if (query.isError) void query.refetch();
+    }
+  }, [summaryQueries]);
 
   // Memo σε primitives (όχι στο summaryQueries array, που αλλάζει ταυτότητα κάθε render)
   // ώστε το prop να μένει σταθερό όσο δεν αλλάζει πραγματικά κάποιο loading state.
@@ -798,8 +827,17 @@ const Index = () => {
       servingBandTech: servingBandTechPending,
       done: summarySourcesDone,
       totalSources: summaryQueries.length,
+      failed: summarySourcesFailed,
     }),
-    [voicePending, dataPending, technologyMixPending, servingBandTechPending, summarySourcesDone, summaryQueries.length],
+    [
+      voicePending,
+      dataPending,
+      technologyMixPending,
+      servingBandTechPending,
+      summarySourcesDone,
+      summaryQueries.length,
+      summarySourcesFailed,
+    ],
   );
 
   // "Ookla DL"/"Ookla UL" (mapOoklaRowsToDataCallRows), "Ping 40"/"Ping 800"/"Ping 1000"
@@ -1496,6 +1534,7 @@ const Index = () => {
               onToggleCollection={toggleSummaryCollection}
               onSelectAllCollections={selectAllSummaryCollections}
               onClearCollections={clearSummaryCollectionSelection}
+              onRetryFailedSources={retrySummarySources}
             />
           </TabsContent>
 

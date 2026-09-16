@@ -31,44 +31,141 @@ export class ApiClientError extends Error {
   }
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * Πόσο περιμένουμε ΕΝΑ request πριν το κόψουμε. Τα summary endpoints πάνω σε ΟΛΑ τα
+ * collections μιας βάσης (π.χ. PEL_26H2) είναι λεπτά, όχι δευτερόλεπτα: το /api/calls
+ * χτίζει 6 #temp tables, το /api/data_calls γυρίζει 30k+ γραμμές. Χωρίς ρητό όριο
+ * κληρώναμε ό,τι όριο είχε ο network stack του browser/proxy — γι' αυτό "έκανε timeout
+ * εύκολα". 15' default, override με VITE_API_TIMEOUT_MS (0 = καθόλου όριο).
+ */
+const readNumberEnv = (raw: unknown, fallback: number): number => {
+  const parsed = Number(raw);
+  return raw == null || raw === "" || !Number.isFinite(parsed) || parsed < 0 ? fallback : parsed;
+};
+
+const DEFAULT_TIMEOUT_MS = readNumberEnv(import.meta.env.VITE_API_TIMEOUT_MS, 15 * 60_000);
+
+/** Πόσες φορές ξαναδοκιμάζουμε ΜΟΝΟ τα transient σφάλματα (δες isRetryable). */
+const MAX_RETRIES = readNumberEnv(import.meta.env.VITE_API_RETRIES, 2);
+
+/**
+ * Ό,τι δέχεται το fetch (άρα και `signal`, π.χ. από το react-query queryFn ({ signal })),
+ * συν per-request override του timeout. 0 = καθόλου όριο.
+ */
+export type RequestOptions = RequestInit & { timeoutMs?: number };
+
+/**
+ * Transient = αξίζει retry: χαμένο/μισό δίκτυο, δικό μας timeout, ή gateway/overload
+ * απαντήσεις. Ένα HTTP-500 από SQL error ΔΕΝ είναι transient — θα ξαναγυρίσει το ίδιο.
+ */
+const isRetryable = (error: unknown): boolean => {
+  if (error instanceof ApiClientError) {
+    if (error.code === "NET-001" || error.code === "NET-TIMEOUT") return true;
+    return error.status === 429 || error.status === 502 || error.status === 503 || error.status === 504;
+  }
+  return false;
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Ένα signal που ανάβει είτε από τον caller (react-query cancel) είτε από το δικό μας
+ * timeout. Χειροκίνητα αντί για AbortSignal.any(), που δεν υπάρχει σε παλιότερα browsers.
+ * Γυρίζει και `timedOut` ώστε να ξεχωρίσουμε "το έκοψε ο χρήστης" από "άργησε".
+ */
+const withTimeout = (timeoutMs: number, external?: AbortSignal) => {
+  const controller = new AbortController();
+  const state = { timedOut: false };
+
+  const abortFromExternal = () => controller.abort();
+  external?.addEventListener("abort", abortFromExternal);
+
+  const timer =
+    timeoutMs > 0
+      ? setTimeout(() => {
+          state.timedOut = true;
+          controller.abort();
+        }, timeoutMs)
+      : undefined;
+
+  return {
+    signal: controller.signal,
+    state,
+    cleanup: () => {
+      if (timer !== undefined) clearTimeout(timer);
+      external?.removeEventListener("abort", abortFromExternal);
+    },
+  };
+};
+
+async function requestJson<T>(path: string, options?: RequestOptions): Promise<T> {
   const endpoint = `${API_BASE_URL}${path}`;
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal: externalSignal, ...init } = options ?? {};
 
-  try {
-    const res = await fetch(endpoint, init);
+  let lastError: unknown;
 
-    if (!res.ok) {
-      let serverMessage = `Request failed with status ${res.status}`;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+    // Ο caller ακύρωσε όσο περιμέναμε το backoff — μη ξεκινήσεις νέο attempt.
+    if (externalSignal?.aborted) throw lastError ?? new DOMException("Aborted", "AbortError");
 
-      try {
-        const json = await res.json();
-        serverMessage = json.detail || json.message || serverMessage;
-      } catch {
-        const text = await res.text();
-        if (text) serverMessage = text;
+    const guard = withTimeout(timeoutMs, externalSignal ?? undefined);
+
+    try {
+      const res = await fetch(endpoint, { ...init, signal: guard.signal });
+
+      if (!res.ok) {
+        let serverMessage = `Request failed with status ${res.status}`;
+
+        try {
+          const json = await res.json();
+          serverMessage = json.detail || json.message || serverMessage;
+        } catch {
+          const text = await res.text();
+          if (text) serverMessage = text;
+        }
+
+        throw new ApiClientError({
+          code: `HTTP-${res.status}`,
+          endpoint,
+          status: res.status,
+          message: serverMessage,
+          hint: "The Python API responded, but returned an application error.",
+        });
       }
 
-      throw new ApiClientError({
-        code: `HTTP-${res.status}`,
-        endpoint,
-        status: res.status,
-        message: serverMessage,
-        hint: "The Python API responded, but returned an application error.",
-      });
+      return (await res.json()) as T;
+    } catch (error) {
+      // Ακύρωση από τον caller: πέτα το ως είναι, ΧΩΡΙΣ retry και χωρίς toast-άξιο error.
+      if (externalSignal?.aborted && !guard.state.timedOut) throw error;
+
+      lastError = guard.state.timedOut
+        ? new ApiClientError({
+            code: "NET-TIMEOUT",
+            endpoint,
+            message: `Το request ξεπέρασε τα ${Math.round(timeoutMs / 1000)}s και κόπηκε.`,
+            hint:
+              "Πολλά collections μαζί = λεπτά SQL. Ανέβασε το VITE_API_TIMEOUT_MS ή διάλεξε λιγότερα collections.",
+          })
+        : error instanceof ApiClientError
+          ? error
+          : new ApiClientError({
+              code: "NET-001",
+              endpoint,
+              message: error instanceof Error ? error.message : "Failed to fetch",
+              hint:
+                "The preview cannot reach localhost on your computer. Run the frontend locally too, or expose the Python API with a public tunnel URL.",
+            });
+
+      if (attempt === MAX_RETRIES || !isRetryable(lastError)) throw lastError;
+
+      // 1s, 2s, 4s ... — δίνει χρόνο στον SQL Server να αποσυμφορηθεί πριν ξαναρωτήσουμε.
+      await sleep(1000 * 2 ** attempt);
+    } finally {
+      guard.cleanup();
     }
-
-    return res.json();
-  } catch (error) {
-    if (error instanceof ApiClientError) throw error;
-
-    throw new ApiClientError({
-      code: "NET-001",
-      endpoint,
-      message: error instanceof Error ? error.message : "Failed to fetch",
-      hint:
-        "The preview cannot reach localhost on your computer. Run the frontend locally too, or expose the Python API with a public tunnel URL.",
-    });
   }
+
+  throw lastError;
 }
 
 export async function fetchDatabases(): Promise<string[]> {
@@ -181,6 +278,7 @@ export async function fetchAllCalls(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<AllCallsRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -189,7 +287,7 @@ export async function fetchAllCalls(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: AllCallsRow[] }>(`/api/calls?${params.toString()}`);
+  const json = await requestJson<{ rows: AllCallsRow[] }>(`/api/calls?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -210,6 +308,7 @@ export async function fetchTechnologyMix(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<TechnologyMixRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -218,7 +317,7 @@ export async function fetchTechnologyMix(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: TechnologyMixRow[] }>(`/api/technology_mix?${params.toString()}`);
+  const json = await requestJson<{ rows: TechnologyMixRow[] }>(`/api/technology_mix?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -235,12 +334,12 @@ export interface CellBandCountRow {
   cellCount: number;
 }
 
-export async function fetchCellBandCount(database: string, collections: string[] = []): Promise<CellBandCountRow[]> {
+export async function fetchCellBandCount(database: string, collections: string[] = [], options?: RequestOptions): Promise<CellBandCountRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
     if (collection) params.append("collection", collection);
   }
-  const json = await requestJson<{ rows: CellBandCountRow[] }>(`/api/cell_band_count?${params.toString()}`);
+  const json = await requestJson<{ rows: CellBandCountRow[] }>(`/api/cell_band_count?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -257,12 +356,12 @@ export interface SrvccRow {
   count: number;
 }
 
-export async function fetchSrvcc(database: string, collections: string[] = []): Promise<SrvccRow[]> {
+export async function fetchSrvcc(database: string, collections: string[] = [], options?: RequestOptions): Promise<SrvccRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
     if (collection) params.append("collection", collection);
   }
-  const json = await requestJson<{ rows: SrvccRow[] }>(`/api/srvcc?${params.toString()}`);
+  const json = await requestJson<{ rows: SrvccRow[] }>(`/api/srvcc?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -288,6 +387,7 @@ export async function fetchDns(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<DnsRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -296,7 +396,7 @@ export async function fetchDns(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: DnsRow[] }>(`/api/dns?${params.toString()}`);
+  const json = await requestJson<{ rows: DnsRow[] }>(`/api/dns?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -336,6 +436,7 @@ export async function fetchOokla(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<OoklaRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -344,7 +445,7 @@ export async function fetchOokla(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: OoklaRow[] }>(`/api/ookla?${params.toString()}`);
+  const json = await requestJson<{ rows: OoklaRow[] }>(`/api/ookla?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -376,6 +477,7 @@ export async function fetchCapacityLink(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<CapacityLinkRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -384,7 +486,7 @@ export async function fetchCapacityLink(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: CapacityLinkRow[] }>(`/api/capacity_link?${params.toString()}`);
+  const json = await requestJson<{ rows: CapacityLinkRow[] }>(`/api/capacity_link?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -420,6 +522,7 @@ export async function fetchPing1000(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<PingRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -428,7 +531,7 @@ export async function fetchPing1000(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: PingRow[] }>(`/api/ping_1000?${params.toString()}`);
+  const json = await requestJson<{ rows: PingRow[] }>(`/api/ping_1000?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -470,6 +573,7 @@ export async function fetchInteractivity(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<InteractivityRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -478,7 +582,7 @@ export async function fetchInteractivity(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: InteractivityRow[] }>(`/api/interactivity?${params.toString()}`);
+  const json = await requestJson<{ rows: InteractivityRow[] }>(`/api/interactivity?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -503,6 +607,7 @@ export async function fetchServingBandTech(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<ServingBandTechRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -511,7 +616,7 @@ export async function fetchServingBandTech(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: ServingBandTechRow[] }>(`/api/serving_band_tech?${params.toString()}`);
+  const json = await requestJson<{ rows: ServingBandTechRow[] }>(`/api/serving_band_tech?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -552,6 +657,7 @@ export async function fetchDataCalls(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<DataCallRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -560,7 +666,7 @@ export async function fetchDataCalls(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: DataCallRow[] }>(`/api/data_calls?${params.toString()}`);
+  const json = await requestJson<{ rows: DataCallRow[] }>(`/api/data_calls?${params.toString()}`, options);
   return json.rows;
 }
 

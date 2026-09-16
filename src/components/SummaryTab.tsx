@@ -57,6 +57,11 @@ export interface SummaryLoading {
   /** Πόσες από τις πηγές έχουν φορτώσει — για το "Loaded n/10" chip. */
   done: number;
   totalSources: number;
+  /**
+   * Πόσες πηγές τα παράτησαν (timeout / δίκτυο / SQL error). Optional για τα tests και για
+   * καλούντες που δεν το ξέρουν· 0/undefined = κανένα σφάλμα, το chip δεν εμφανίζεται.
+   */
+  failed?: number;
 }
 
 const NOT_LOADING: SummaryLoading = {
@@ -66,6 +71,7 @@ const NOT_LOADING: SummaryLoading = {
   servingBandTech: false,
   done: 0,
   totalSources: 0,
+  failed: 0,
 };
 
 interface SummaryTabProps {
@@ -105,6 +111,8 @@ interface SummaryTabProps {
   onToggleCollection?: (name: string) => void;
   onSelectAllCollections?: () => void;
   onClearCollections?: () => void;
+  /** Ξανατρέχει ΜΟΝΟ τις πηγές που απέτυχαν — βλ. loading.failed. */
+  onRetryFailedSources?: () => void;
 }
 
 /* ────────────────────────── Χρώματα & κατώφλια ────────────────────────── */
@@ -1199,6 +1207,7 @@ const SummaryTab = ({
   onToggleCollection,
   onSelectAllCollections,
   onClearCollections,
+  onRetryFailedSources,
 }: SummaryTabProps) => {
   const [hideEmptyRows, setHideEmptyRows] = useState(false);
   const [markBest, setMarkBest] = useState(true);
@@ -1451,6 +1460,31 @@ const SummaryTab = ({
                     <span className="flex items-center gap-1.5">
                       <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
                       {loading.done}/{loading.totalSources} sources
+                    </span>
+                  }
+                />
+              )}
+              {/* Μια πηγή που έκανε timeout έδειχνε ΙΔΙΑ με "δεν υπάρχουν δεδομένα" — σιωπηλά
+                  κενά κελιά. Ρητό chip + Retry μόνο για τις αποτυχημένες, ώστε να μην
+                  ξαναζητηθούν από την αρχή και οι 11 πηγές. */}
+              {(loading.failed ?? 0) > 0 && (
+                <MetaChip
+                  label="Failed"
+                  value={
+                    <span className="flex items-center gap-2">
+                      <span className="flex items-center gap-1.5 text-red-500">
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                        {loading.failed}/{loading.totalSources} sources
+                      </span>
+                      {onRetryFailedSources && (
+                        <button
+                          type="button"
+                          onClick={onRetryFailedSources}
+                          className="rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider hover:bg-muted/70"
+                        >
+                          Retry
+                        </button>
+                      )}
                     </span>
                   }
                 />
