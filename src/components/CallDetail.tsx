@@ -50,6 +50,9 @@ interface CallDetailProps {
  */
 const HOVER_TOLERANCE_MS = 1500;
 
+// ±60s για CS (GSM-only) κλήσεις, ±30s για όλες τις υπόλοιπες.
+const defaultContextWindowSec = (callMode?: string | null) => (callMode === "CS" ? 60 : 30);
+
 // Χρωματισμός LTE RSRP: πράσινο καλό, πορτοκαλί οριακό, κόκκινο κακό (χρησιμοποιείται στο χάρτη)
 function rsrpColor(val: number | null | undefined): string {
   if (val == null) return "#6b7280";
@@ -201,7 +204,16 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   const [gsmContextSignalBSide, setGsmContextSignalBSide] = useState<any[]>([]);
   const [nr5gContextSignal, setNr5gContextSignal] = useState<any[]>([]);
   const [nr5gContextSignalBSide, setNr5gContextSignalBSide] = useState<any[]>([]);
-  const [contextWindowSec, setContextWindowSec] = useState(30);
+  // Default παράθυρο context: οι CS κλήσεις ανοίγουν στα ±60s (το GSM σκέλος δίνει πιο αραιά
+  // δείγματα, οπότε τα ±30s των packet κλήσεων αφήνουν την καμπύλη σχεδόν άδεια).
+  const [contextWindowSec, setContextWindowSec] = useState(() => defaultContextWindowSec(call.callMode));
+  // Το CallDetail δεν ξαναγίνεται mount όταν αλλάζει κλήση, οπότε επαναφέρουμε το default
+  // κατά το render (πριν τρέξουν τα effects) ώστε να μη γίνει διπλό fetch του context.
+  const [contextWindowCallId, setContextWindowCallId] = useState(call.callId);
+  if (contextWindowCallId !== call.callId) {
+    setContextWindowCallId(call.callId);
+    setContextWindowSec(defaultContextWindowSec(call.callMode));
+  }
   const [contextTechnology, setContextTechnology] = useState<any[]>([]);
   // Περίοδοι τεχνολογίας (FactRadioTechnology) — η πηγή του Session Overview, ανά πλευρά
   const [techPeriods, setTechPeriods] = useState<TechnologyPeriodRow[]>([]);
