@@ -720,7 +720,10 @@ const Index = () => {
       },
       {
         queryKey: ["summary", "ping1000", summaryDatabase, summaryCollectionsKey],
-        queryFn: ({ signal }) => fetchPing1000(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
+        // aggregate=true: το Summary θέλει μόνο Total/Success Rate/Mean RTT ανά operator
+        // & packet size. Τα raw packets ήταν 63k γραμμές / ~20 MB ανά βάση και πάγωναν
+        // τον browser — βλ. fetchPing1000.
+        queryFn: ({ signal }) => fetchPing1000(summaryDatabase, summaryCollectionsForQuery, [], { signal }, true),
         enabled: summaryEnabled,
       },
       {

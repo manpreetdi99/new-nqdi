@@ -745,18 +745,34 @@ describe("PS data KPIs", () => {
     ...overrides,
   });
 
-  it("mapDnsRowsToDataCallRows expands each aggregated (location, status, count) group into `count` DataCallRows", () => {
+  it("mapDnsRowsToDataCallRows keeps ONE row per aggregated group, carrying `count` as weight", () => {
     const mapped = mapDnsRowsToDataCallRows([
       dnsRow({ status: "Success", count: 3, avg: 20 }),
       dnsRow({ status: "Failed", count: 1, avg: 100 }),
     ]);
 
-    expect(mapped).toHaveLength(4);
-    expect(mapped.filter((r) => r.scoringStatus === "Success")).toHaveLength(3);
-    expect(mapped.filter((r) => r.scoringStatus === "Failed")).toHaveLength(1);
+    // Μία γραμμή ανά group, ΟΧΙ `count` αντίγραφα: 6 γραμμές DNS του PEL_26H2 έφτιαχναν
+    // 169.381 αντικείμενα και πάγωναν το tab (βλ. σχόλιο στο mapDnsRowsToDataCallRows).
+    expect(mapped).toHaveLength(2);
+    expect(mapped.map((r) => r.weight)).toEqual([3, 1]);
     expect(mapped.every((r) => r.testType === "DNS")).toBe(true);
-    // Κάθε αντίγραφο ενός group κρατάει το group's avg σαν "duration" (πάνω στο pingRttAvg).
-    expect(mapped.filter((r) => r.scoringStatus === "Success").every((r) => r.pingRttAvg === 20)).toBe(true);
+    // Κάθε group κρατάει το avg του σαν "duration" (πάνω στο pingRttAvg).
+    expect(mapped.find((r) => r.scoringStatus === "Success")?.pingRttAvg).toBe(20);
+  });
+
+  it("weights count/success/failed by row.weight — ένα aggregated group δεν μετράει σαν ένα test", () => {
+    const [section] = buildDataSections([
+      dataTest({ testType: "Ping 1000", direction: null, scoringStatus: "success", pingRttAvg: 10, weight: 50, metricSamples: 50 }),
+      // Failed group: μετράει στο Total/Failed, αλλά δεν έχει RTT να μπει στον μέσο όρο.
+      dataTest({ testType: "Ping 1000", direction: null, scoringStatus: "failed", pingRttAvg: null, weight: 5, metricSamples: 0 }),
+    ]);
+
+    expect(section.total.total).toBe(55);
+    expect(section.total.success).toBe(50);
+    expect(section.total.failed).toBe(5);
+    expect(section.total.metrics[0].label).toBe("Mean RTT");
+    expect(section.total.metrics[0].value).toBeCloseTo(10, 6);
+    expect(section.total.metrics[0].samples).toBe(50);
   });
 
   it("feeds DNS rows through buildDataSections into its own 'DNS' section, weighted-averaging across (location, status) groups", () => {

@@ -505,24 +505,39 @@ export async function fetchCapacityLink(
  */
 export interface PingRow {
   location: string | null;
-  sessionId: string;
-  testId: number | null;
+  /** Λείπει σε aggregate mode — ένα group δεν ανήκει σε ένα session. */
+  sessionId?: string;
+  testId?: number | null;
   host: string | null;
+  /** Raw mode: το RTT του packet. Aggregate mode: ο μέσος όρος πάνω σε `rttSamples`. */
   rtt: number | null;
   packetSize: number | null;
-  errorCode: string | null;
+  errorCode?: string | null;
   success: number;
   failed: number;
-  sequenceNumber: number | null;
+  sequenceNumber?: number | null;
   collectionName: string | null;
   aSideFileName: string | null;
+  /** Aggregate mode μόνο: πόσα packets αντιπροσωπεύει η γραμμή. Λείπει = raw, δηλαδή 1. */
+  count?: number;
+  /** Aggregate mode μόνο: πόσα από αυτά έχουν RTT > 0, δηλαδή μπαίνουν στο Mean RTT. */
+  rttSamples?: number;
 }
 
+/**
+ * `aggregate`: ΕΝΑ row ανά (location, collection, host, packet size, outcome) αντί για ένα
+ * ανά packet. Το Summary δεν κοιτάζει ποτέ μεμονωμένο packet και τα raw packets ήταν 63k
+ * γραμμές / ~20 MB ανά βάση (PEL_26H2) — με aggregate είναι ~300 γραμμές / 85 KB και τα
+ * νούμερα βγαίνουν ΙΔΙΑ (επαληθεύτηκε πάνω σε PEL_26H2: total/success/failed/mean RTT
+ * ανά operator & packet size, μηδέν αποκλίσεις). Άφησέ το false όπου χρειάζεσαι per-packet
+ * ανάλυση.
+ */
 export async function fetchPing1000(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
   options?: RequestOptions,
+  aggregate = false,
 ): Promise<PingRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -531,6 +546,7 @@ export async function fetchPing1000(
   for (const location of locations) {
     params.append("location", location);
   }
+  if (aggregate) params.append("aggregate", "1");
   const json = await requestJson<{ rows: PingRow[] }>(`/api/ping_1000?${params.toString()}`, options);
   return json.rows;
 }
@@ -651,6 +667,23 @@ export interface DataCallRow {
   comment: string | null;
   latitude: number | null;
   longitude: number | null;
+  /**
+   * Πόσα tests αντιπροσωπεύει αυτή η γραμμή. Λείπει/undefined = 1, δηλαδή ό,τι ίσχυε
+   * πάντα για τα raw rows του /api/data_calls.
+   *
+   * Υπάρχει για τις ΗΔΗ-ΑΘΡΟΙΣΜΕΝΕΣ πηγές: το /api/dns γυρίζει 6 γραμμές με count, και
+   * το /api/ping_1000?aggregate=1 μία γραμμή ανά (location, packet size, host, outcome).
+   * Πριν, το frontend τις ΞΕΔΙΠΛΩΝΕ σε ένα fake object ανά test για να περάσουν από το
+   * ίδιο pipeline — 6 γραμμές DNS γίνονταν 169.381 αντικείμενα των 24 πεδίων στο
+   * PEL_26H2 και κρέμαγαν το tab. Τώρα η γραμμή μένει μία και κουβαλάει το πλήθος της.
+   */
+  weight?: number;
+  /**
+   * Πόσα από τα `weight` tests έχουν έγκυρη τιμή στη μετρική του section. Λείπει =
+   * όσα και τα tests. Χρειάζεται μόνο όπου τα δύο διαφέρουν: ένα failed ping μετράει
+   * κανονικά στο Total/Failed αλλά δεν έχει RTT, οπότε δεν πρέπει να μπει στο Mean RTT.
+   */
+  metricSamples?: number;
 }
 
 export async function fetchDataCalls(

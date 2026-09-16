@@ -1238,6 +1238,7 @@ def get_ping_1000(
     database: str = Query(..., min_length=1),
     collection: list[str] | None = Query(default=None),
     location: list[str] | None = Query(default=None),
+    aggregate: bool = Query(default=False),
 ):
     """Ping 40/800/1000 (PS Data Stats) — δεν φτάνουν σαν δικό τους TestName από το
     CDRCombined view (βλ. /api/data_calls· από εκεί φτάνει μόνο "Ping"/"Payload Ping
@@ -1260,6 +1261,15 @@ def get_ping_1000(
     μετατρέπει σε DataCallRow σχήμα (testType="Ping 40"/"Ping 800"/"Ping 1000") ώστε να
     μπουν στο ίδιο buildDataSections pipeline με τα υπόλοιπα PS Data tests — βλ.
     mapPing1000RowsToDataCallRows στο attachmentC.ts.
+
+    aggregate=1 (2026-09-16): ΕΝΑ row ανά (location, collection, host, packetSize,
+    success) με `count` (πόσα packets) + `rttSamples`/`rtt` (μέσο RTT και πάνω σε πόσα
+    δείγματα) αντί για τα raw packets. Το Summary δεν κοιτάζει ποτέ μεμονωμένο packet —
+    μόνο Total/Success Rate/Mean RTT ανά operator και packet size — και τα raw packets
+    ήταν 63k γραμμές / ~20 MB JSON ανά βάση, που πάγωναν τον browser. Τα ίδια ακριβώς
+    νούμερα βγαίνουν από ~λίγες δεκάδες γραμμές, γιατί ο μέσος όρος σταθμίζεται με το
+    rttSamples στο frontend (βλ. DataCallRow.weight/metricSamples). Το raw mode μένει
+    default για όποιον θέλει per-packet ανάλυση (π.χ. το "Ping RAW" saved query).
     """
     try:
         conn = get_connection(database)
@@ -1300,6 +1310,54 @@ def get_ping_1000(
             placeholders = ", ".join(["?"] * len(selected_locations))
             query += f" AND FileList.ASideLocation IN ({placeholders})"
             params.extend(selected_locations)
+
+        if aggregate:
+            # Τα ίδια rows, ομαδοποιημένα. Το GROUP BY κρατάει ΑΚΡΙΒΩΣ ό,τι ξεχωρίζει ένα
+            # section/στήλη στο Attachment C: location -> operator, packetSize -> "Ping N",
+            # success -> Successful/Failed. Το host μπαίνει κι αυτό (λίγες διακριτές τιμές)
+            # ώστε να μη χαθεί πληροφορία που ίσως θελήσει αργότερα το UI.
+            #
+            # rttSamples/rtt μετριούνται ΜΟΝΟ πάνω σε RTT > 0 — ίδιο φίλτρο με το
+            # collect() του buildDataMetrics, ώστε το σταθμισμένο mean του frontend να
+            # βγάζει bit-για-bit ό,τι έβγαζε πάνω στα raw packets.
+            query = """
+                SELECT
+                    MIN(FileList.ASideFileName) AS aSideFileName,
+                    FileList.CollectionName AS collectionName,
+                    FileList.ASideLocation AS location,
+                    ResultsPingTest.Host AS host,
+                    ResultsPingTest.PacketSize AS packetSize,
+                    CASE WHEN ResultsPingTest.ErrorCode = 0 THEN 1 ELSE 0 END AS success,
+                    CASE WHEN ResultsPingTest.ErrorCode = 0 THEN 0 ELSE 1 END AS failed,
+                    COUNT_BIG(*) AS count,
+                    SUM(CASE WHEN ResultsPingTest.ErrorCode = 0 AND ResultsPingTest.RTT > 0 THEN 1 ELSE 0 END) AS rttSamples,
+                    AVG(CASE WHEN ResultsPingTest.ErrorCode = 0 AND ResultsPingTest.RTT > 0
+                             THEN CAST(ResultsPingTest.RTT AS float) END) AS rtt
+                FROM FileList, Sessions, TestInfo, NetworkInfo, ResultsPingTest, ErrorCodes
+                WHERE Sessions.Valid = 1 AND TestInfo.Valid = 1
+                  AND FileList.FileId = Sessions.FileId
+                  AND TestInfo.SessionId = Sessions.SessionId
+                  AND ResultsPingTest.TestId = TestInfo.TestId
+                  AND ResultsPingTest.ErrorCode = ErrorCodes.Code
+                  AND TestInfo.NetworkId = NetworkInfo.NetworkId
+            """
+
+            if selected_collections:
+                placeholders = ", ".join(["?"] * len(selected_collections))
+                query += f" AND FileList.CollectionName IN ({placeholders})"
+            if selected_locations:
+                placeholders = ", ".join(["?"] * len(selected_locations))
+                query += f" AND FileList.ASideLocation IN ({placeholders})"
+
+            query += """
+                GROUP BY
+                    FileList.CollectionName,
+                    FileList.ASideLocation,
+                    ResultsPingTest.Host,
+                    ResultsPingTest.PacketSize,
+                    CASE WHEN ResultsPingTest.ErrorCode = 0 THEN 1 ELSE 0 END,
+                    CASE WHEN ResultsPingTest.ErrorCode = 0 THEN 0 ELSE 1 END
+            """
 
         cursor.execute(query, tuple(params))
 

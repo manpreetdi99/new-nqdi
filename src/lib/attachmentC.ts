@@ -155,15 +155,48 @@ export interface Sample {
 
 const EMPTY_SAMPLE: Sample = { avg: null, samples: 0, min: null, max: null };
 
-const mean = (values: number[]): Sample =>
-  values.length === 0
-    ? EMPTY_SAMPLE
-    : {
-        avg: values.reduce((sum, v) => sum + v, 0) / values.length,
-        samples: values.length,
-        min: Math.min(...values),
-        max: Math.max(...values),
-      };
+/**
+ * Μέσος όρος + min/max σε ΕΝΑ πέρασμα, ΧΩΡΙΣ spread.
+ *
+ * Το `Math.min(...values)` έσκαγε σε RangeError ("Maximum call stack size exceeded")
+ * πάνω από ~124k τιμές, γιατί κάθε τιμή γίνεται ξεχωριστό argument. Ακριβώς αυτό
+ * συνέβαινε όταν το Summary φόρτωνε ΟΛΑ τα collections μιας βάσης (PEL_26H2: 169k DNS
+ * δείγματα) — η εξαίρεση ανέβαινε μέσα από το render του SummaryTab και έριχνε όλο το
+ * tab. Η μορφή του Sample δεν αλλάζει.
+ */
+const mean = (values: number[]): Sample => {
+  let sum = 0;
+  let min: number | null = null;
+  let max: number | null = null;
+
+  for (const value of values) {
+    sum += value;
+    if (min == null || value < min) min = value;
+    if (max == null || value > max) max = value;
+  }
+
+  return values.length === 0 ? EMPTY_SAMPLE : { avg: sum / values.length, samples: values.length, min, max };
+};
+
+/**
+ * Πόσα πραγματικά tests αντιπροσωπεύει μια γραμμή. 1 για κάθε raw row· >1 για τις
+ * ΗΔΗ-ΑΘΡΟΙΣΜΕΝΕΣ πηγές (/api/dns, /api/ping_1000?aggregate=1), που στέλνουν μία γραμμή
+ * ανά group μαζί με το πλήθος του — βλ. DataCallRow.weight.
+ */
+const rowWeight = (row: DataCallRow): number => {
+  const weight = row.weight;
+  return weight == null || !Number.isFinite(weight) || weight < 0 ? 1 : weight;
+};
+
+/**
+ * Πόσα από τα tests της γραμμής έχουν έγκυρη τιμή στη μετρική. Default: όσα και τα tests
+ * (ένα raw row είτε έχει τιμή είτε όχι). Τα ping aggregates το δίνουν ρητά, γιατί ένα
+ * failed ping μετράει στο Total αλλά ΔΕΝ έχει RTT — βλ. DataCallRow.metricSamples.
+ */
+const rowMetricSamples = (row: DataCallRow): number => {
+  const samples = row.metricSamples;
+  return samples == null || !Number.isFinite(samples) || samples < 0 ? rowWeight(row) : samples;
+};
 
 const ratio = (numerator: number, denominator: number): number | null =>
   denominator > 0 ? numerator / denominator : null;
@@ -890,8 +923,36 @@ const sectionLabel = (row: DataCallRow): string => {
 
 const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
   const testType = (rows[0]?.testType ?? "").toLowerCase();
-  const collect = (pick: (row: DataCallRow) => number | null): Sample =>
-    mean(rows.map(pick).filter((value): value is number => value != null && value > 0));
+
+  /**
+   * Σταθμισμένος μέσος όρος σε ένα πέρασμα, χωρίς ενδιάμεσα map/filter arrays (σε ~300k
+   * rows × 5 μετρικές αυτά ήταν από μόνα τους δεκάδες MB garbage). Για raw rows
+   * (weight=1) δίνει ΤΟ ΙΔΙΟ αποτέλεσμα με το προηγούμενο mean(map().filter()).
+   *
+   * `allowZero`: το 0 σημαίνει "δεν υπάρχει τιμή" σχεδόν παντού, αλλά ένα
+   * PacketsLostRate=0 (τέλειο τεστ) είναι έγκυρο και πρέπει να μετρήσει στον μέσο όρο.
+   */
+  const collect = (pick: (row: DataCallRow) => number | null, allowZero = false): Sample => {
+    let weightedSum = 0;
+    let samples = 0;
+    let min: number | null = null;
+    let max: number | null = null;
+
+    for (const row of rows) {
+      const value = pick(row);
+      if (value == null || (allowZero ? value < 0 : value <= 0)) continue;
+
+      const rowSamples = rowMetricSamples(row);
+      if (rowSamples <= 0) continue;
+
+      weightedSum += value * rowSamples;
+      samples += rowSamples;
+      if (min == null || value < min) min = value;
+      if (max == null || value > max) max = value;
+    }
+
+    return samples > 0 ? { avg: weightedSum / samples, samples, min, max } : EMPTY_SAMPLE;
+  };
 
   // Έλεγχος πριν το γενικό "ping" — reuse του ίδιου πεδίου (pingRttAvg) για το DNS
   // resolution time, βλ. mapDnsRowsToDataCallRows. Ίδιο σχήμα μετρικής (ένα "Mean X σε
@@ -916,15 +977,10 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
   }
 
   if (testType.includes("interactivity")) {
-    // PacketsLostRate=0 (τέλειο τεστ, καθόλου απώλειες) είναι έγκυρο και θέλουμε να
-    // μετράει στον μέσο όρο — σε αντίθεση με το `collect` παραπάνω (φιλτράρει value>0
-    // παντού αλλού, όπου το 0 σημαίνει "δεν υπάρχει τιμή"), εδώ κρατάμε και τα μηδενικά.
-    const collectAllowZero = (pick: (row: DataCallRow) => number | null): Sample =>
-      mean(rows.map(pick).filter((value): value is number => value != null && value >= 0));
-
     const throughput = collect((row) => numeric(row.throughputKbps));
     const rtt = collect((row) => numeric(row.interactivityRtt));
-    const packetsLostRate = collectAllowZero((row) => numeric(row.interactivityPacketsLostRate));
+    // PacketsLostRate=0 (τέλειο τεστ, καθόλου απώλειες) είναι έγκυρη τιμή, όχι "λείπει".
+    const packetsLostRate = collect((row) => numeric(row.interactivityPacketsLostRate), true);
     const packetDelay = collect((row) => numeric(row.interactivityPacketDelay));
     const qoe = collect((row) => numeric(row.interactivityQoeScore));
 
@@ -969,9 +1025,8 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
 
   if (testType.includes("youtube")) {
     const mos = collect((row) => numeric(row.youtubeMos));
-    const interruptions = mean(
-      rows.map((row) => numeric(row.youtubeInterruptions)).filter((value): value is number => value != null),
-    );
+    // 0 interruptions είναι έγκυρη τιμή (τέλειο playback), γι' αυτό allowZero.
+    const interruptions = collect((row) => numeric(row.youtubeInterruptions), true);
     return [
       { label: "Mean video MOS", unit: "", decimals: 2, higherIsBetter: true, value: mos.avg, samples: mos.samples },
       {
@@ -1013,16 +1068,22 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
 };
 
 const buildDataTestStats = (rows: DataCallRow[]): DataTestStats => {
+  let total = 0;
   let success = 0;
   let failed = 0;
+  // rowWeight αντί για ++ / rows.length: μια γραμμή από ήδη-αθροισμένη πηγή μετράει όσα
+  // tests αντιπροσωπεύει. Για raw rows (weight=1) είναι ακριβώς ό,τι έκανε το ++.
   for (const row of rows) {
+    const weight = rowWeight(row);
+    total += weight;
+
     const outcome = classifyDataTest(row);
-    if (outcome === "success") success++;
-    else if (outcome === "failed") failed++;
+    if (outcome === "success") success += weight;
+    else if (outcome === "failed") failed += weight;
   }
 
   return {
-    total: rows.length,
+    total,
     success,
     failed,
     // Success rate μόνο πάνω στα scored tests — τα "other" δεν κρίθηκαν.
@@ -1634,6 +1695,13 @@ export const mapCapacityLinkRowsToDataCallRows = (rows: CapacityLinkRow[]): Data
  * έχει πάντα packet size) — αν συμβεί, πέφτει σε "Ping ? B" (δεν ταιριάζει με κανένα
  * rename, μένει ορατό ως-έχει αντί να χαθεί σιωπηλά).
  *
+ * AGGREGATE MODE (2026-09-16): όταν το /api/ping_1000 κληθεί με aggregate=1, κάθε row
+ * είναι ΕΝΑ group (location, collection, host, packet size, outcome) με `count` packets
+ * και `rttSamples` από αυτά που έχουν RTT — περνάνε ως weight/metricSamples και βγάζουν
+ * ακριβώς τα ίδια Total/Success Rate/Mean RTT με τα raw packets, από ~300 γραμμές αντί
+ * για 63k. Το ίδιο mapping δουλεύει και για τα δύο modes: χωρίς count/rttSamples, το
+ * weight πέφτει στο 1 (ένα row = ένα packet), δηλαδή ό,τι ίσχυε πάντα.
+ *
  * ΣΗΜΕΙΩΣΗ (2026-08-31): το backend δεν φιλτράρει πια σε PacketSize=1000 — το
  * /api/ping_1000 (A-LEVEL "PING RAW.sql" reference query) γυρνάει packets ΚΑΙ για τα
  * τρία μεγέθη μαζί, βλ. docstring του get_ping_1000 στο backend/routers/calls.py. Τα
@@ -1643,10 +1711,11 @@ export const mapCapacityLinkRowsToDataCallRows = (rows: CapacityLinkRow[]): Data
  * μετρήσει διπλά (μία φορά από το CDRCombined, μία από εδώ).
  */
 export const mapPing1000RowsToDataCallRows = (rows: PingRow[]): DataCallRow[] =>
-  rows.map((row) => ({
+  rows.map((row, groupIndex) => ({
     Location: row.location,
-    SessionId: row.sessionId,
-    TestId: row.testId,
+    // Aggregate mode: μια γραμμή δεν ανήκει σε ένα session — συνθετικό, μοναδικό id.
+    SessionId: row.sessionId ?? `ping-${groupIndex}`,
+    TestId: row.testId ?? null,
     callStartTimeStamp: null,
     testType: row.packetSize != null ? `Ping ${row.packetSize}` : "Ping ? B",
     direction: null,
@@ -1670,6 +1739,11 @@ export const mapPing1000RowsToDataCallRows = (rows: PingRow[]): DataCallRow[] =>
     comment: null,
     latitude: null,
     longitude: null,
+    // Raw mode: count/rttSamples λείπουν -> weight 1, metricSamples = weight (ένα packet,
+    // με RTT ή χωρίς). Aggregate mode: η γραμμή μετράει `count` packets, από τα οποία μόνο
+    // `rttSamples` έχουν RTT > 0 και μπαίνουν στο Mean RTT — βλ. DataCallRow.weight.
+    weight: row.count,
+    metricSamples: row.rttSamples,
   }));
 
 /**
@@ -1739,51 +1813,55 @@ export const mapInteractivityRowsToDataCallRows = (rows: InteractivityRow[]): Da
  * view, βλ. σχόλιο στο /api/data_calls) σε DataCallRow σχήμα (testType="DNS") ώστε να
  * μπουν στο ίδιο buildDataSections pipeline με τα υπόλοιπα PS Data tests.
  *
- * Σε αντίθεση με τα Ookla/Ping1000/Interactivity mappings (raw, ένα row ανά πραγματικό
- * test), εδώ η SQL φτάνει ήδη ομαδοποιημένη ανά (location, status) — δεν έχουμε per-
- * attempt δείγματα. Για να δουλέψει σωστά το ίδιο weighted-average σκεπτικό με το
- * buildDataTestStats/buildDataMetrics (ένα row = ένα test), φτιάχνουμε `count`
- * συνθετικά rows ανά group με value = το group's avg — το unweighted mean πάνω σε
- * αυτά τα αντίγραφα ισοδυναμεί ακριβώς με το σωστό, count-σταθμισμένο mean μεταξύ
- * groups (sum(avg_i × count_i) / sum(count_i)). Η πραγματική min/max ανά attempt χάνεται
- * (όλα τα αντίγραφα ενός group έχουν την ίδια τιμή), αλλά το DataMetric δεν τη δείχνει
- * ούτως ή άλλως — μόνο τον μέσο όρο (βλ. buildDataMetrics's "dns" branch).
+ * Σε αντίθεση με τα Ookla/Interactivity mappings (raw, ένα row ανά πραγματικό test), εδώ
+ * η SQL φτάνει ήδη ομαδοποιημένη ανά (location, status) — δεν έχουμε per-attempt δείγματα.
+ * ΕΝΑ DataCallRow ανά group, με `weight: count`: το buildDataTestStats μετράει το group
+ * σαν `count` tests και το buildDataMetrics σταθμίζει τον μέσο όρο με το ίδιο count, άρα
+ * sum(avg_i × count_i) / sum(count_i) — ακριβώς το σωστό, count-σταθμισμένο mean.
+ *
+ * ΠΡΟΣΟΧΗ (2026-09-16): πριν, το ίδιο αποτέλεσμα βγαίνε με `count` ΣΥΝΘΕΤΙΚΑ αντίγραφα
+ * ανά group. Σε μία βάση αυτό ήταν 169.381 αντικείμενα των 24 πεδίων από 6 γραμμές JSON
+ * (742 bytes!) — πάγωνε το tab, και το mean() έσκαγε σε RangeError πάνω από ~124k τιμές.
+ * Μη γυρίσεις σε expansion: ό,τι χρειάζεται το Attachment C από το DNS είναι
+ * count/success/failed/avg, και τα τέσσερα βγαίνουν σταθμισμένα.
+ *
+ * Η πραγματική min/max ανά attempt δεν υπάρχει (όπως και πριν) — το DataMetric δείχνει
+ * μόνο τον μέσο όρο, βλ. buildDataMetrics's "dns" branch.
  *
  * `pingRttAvg` reused ως γενικό "duration σε ms" πεδίο (ίδιο σχήμα μετρικής με το
  * Ping — δες buildDataMetrics) — δεν σημαίνει RTT εδώ, σημαίνει DNS resolution time.
  */
 export const mapDnsRowsToDataCallRows = (rows: DnsRow[]): DataCallRow[] =>
-  rows.flatMap((row, groupIndex) =>
-    Array.from({ length: Math.max(row.count, 0) }, (_, i) => ({
-      Location: row.location,
-      // Συνθετικό, μοναδικό ανά group — δεν αντιστοιχεί σε πραγματικό session.
-      SessionId: `dns-${groupIndex}-${i}`,
-      TestId: null,
-      callStartTimeStamp: null,
-      testType: "DNS",
-      direction: null,
-      status: row.status,
-      scoringStatus: row.status,
-      host: null,
-      pingRttAvg: row.avg,
-      throughputKbps: null,
-      capacityThroughputKbps: null,
-      youtubeMos: null,
-      youtubeInterruptions: null,
-      interactivityQoeScore: null,
-      interactivityRtt: null,
-      interactivityPacketsLostRate: null,
-      interactivityPacketDelay: null,
-      technology: null,
-      startTechnology: null,
-      CollectionName: null,
-      ASideFileName: null,
-      isValid: 1,
-      comment: null,
-      latitude: null,
-      longitude: null,
-    })),
-  );
+  rows.map((row, groupIndex) => ({
+    Location: row.location,
+    // Συνθετικό, μοναδικό ανά group — δεν αντιστοιχεί σε πραγματικό session.
+    SessionId: `dns-${groupIndex}`,
+    TestId: null,
+    callStartTimeStamp: null,
+    testType: "DNS",
+    direction: null,
+    status: row.status,
+    scoringStatus: row.status,
+    host: null,
+    pingRttAvg: row.avg,
+    throughputKbps: null,
+    capacityThroughputKbps: null,
+    youtubeMos: null,
+    youtubeInterruptions: null,
+    interactivityQoeScore: null,
+    interactivityRtt: null,
+    interactivityPacketsLostRate: null,
+    interactivityPacketDelay: null,
+    technology: null,
+    startTechnology: null,
+    CollectionName: null,
+    ASideFileName: null,
+    isValid: 1,
+    comment: null,
+    latitude: null,
+    longitude: null,
+    weight: Math.max(row.count, 0),
+  }));
 
 /* ────────────────────────── Technology mix ────────────────────────── */
 
