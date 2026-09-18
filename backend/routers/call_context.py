@@ -1,5 +1,18 @@
 """Σελίδα Call Detail — context window γύρω από την κλήση:
-σήμα (LTE/GSM, A & B side) και αλλαγές τεχνολογίας σε παράθυρο ±window_sec."""
+σήμα (LTE/GSM, A & B side) και αλλαγές τεχνολογίας σε παράθυρο ±window_sec.
+
+ΠΡΟΣΟΧΗ στην αρχή της κλήσης: το CallAnalysis.callStartTimeStamp είναι NULL σε
+~26% των κλήσεων (1539/5590 στο EAE_26H2, 1834/7184 στο CRETE_26H2, ίδια τάξη
+μεγέθους παντού). Όλα τα παράθυρα εδώ χτίζονται με
+COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) — ΑΚΡΙΒΩΣ η ίδια πηγή
+με το callStartTimeStamp που δίνει το /api/calls στη λίστα, ώστε το παράθυρο να
+συμφωνεί με την ώρα που βλέπει ο χρήστης.
+
+Χωρίς αυτό το COALESCE, το DATEADD πάνω σε NULL έβγαζε NULL παράθυρο, το
+BETWEEN NULL AND NULL δεν ταίριαζε ΚΑΜΙΑ γραμμή, και το endpoint γύριζε 200 OK
+με άδειο "signal" — δηλαδή άδεια/λάθος διαγράμματα σε μία στις τέσσερις κλήσεις,
+χωρίς κανένα σφάλμα στα logs (βλ. session 871878361096 στο EAE_26H2).
+"""
 from fastapi import APIRouter, HTTPException, Query
 
 from db import get_connection
@@ -13,9 +26,14 @@ def get_gsm_context_signal(
     session_id: str = Query(..., min_length=1),
     window_sec: int = Query(default=10, ge=10, le=300)
 ):
-    """GSM RxLev/RxQual in a ±window_sec window around the call, queried by TIME (not FileId).
+    """GSM RxLev/RxQual in a ±window_sec window around the call.
     Falls back from RxLevSub→RxLevFull and RxQualSub→RxQualFull when Sub is NULL.
-    Each row carries phase='before'|'during'|'after'."""
+    Each row carries phase='before'|'during'|'after'.
+
+    Scoped to the sessions of the call's own FileId (same as the LTE context query). Filtering
+    by time alone pulled in GSMMeasReport rows of every other device recorded in the same
+    window, which the chart then drew as one interleaved saw-tooth curve.
+    """
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
@@ -23,9 +41,16 @@ def get_gsm_context_signal(
         cursor.execute("""
             ;WITH call_info AS (
                 SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
-                    DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp) AS end_time
+                    COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
+                    ) AS end_time,
+                    CA.FileId,
+                    CA.SessionId
                 FROM CallAnalysis CA
+                LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
             ),
             win AS (
@@ -33,7 +58,19 @@ def get_gsm_context_signal(
                     DATEADD(SECOND, -?, ci.start_time) AS window_start,
                     DATEADD(SECOND,  ?, ci.end_time)   AS window_end,
                     ci.start_time,
-                    ci.end_time
+                    ci.end_time,
+                    ci.FileId
+                FROM call_info ci
+            ),
+            own_sessions AS (
+                SELECT s.SessionId AS SID
+                FROM Sessions s
+                INNER JOIN call_info ci ON s.FileId = ci.FileId
+
+                UNION
+
+                -- Safety net: the call's own session, even if it is not listed under Sessions
+                SELECT ci.SessionId AS SID
                 FROM call_info ci
             )
             SELECT
@@ -49,8 +86,10 @@ def get_gsm_context_signal(
                     ELSE 'during'
                 END AS phase
             FROM win w
+            INNER JOIN own_sessions os ON 1=1
             INNER JOIN GSMMeasReport g
-                ON  g.MsgTime BETWEEN w.window_start AND w.window_end
+                ON  g.SessionId = os.SID
+                AND g.MsgTime BETWEEN w.window_start AND w.window_end
             LEFT JOIN Position p
                 ON  p.PosId = g.PosId
             ORDER BY g.MsgTime
@@ -80,13 +119,15 @@ def get_call_context_signal(
         cursor.execute("""
             ;WITH call_info AS (
                 SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) AS start_time,
                     COALESCE(
                         CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
                     ) AS end_time,
                     CA.FileId
                 FROM CallAnalysis CA
+                LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
             ),
             win AS (
@@ -166,12 +207,14 @@ def get_call_context_signal_b_side(
             ),
             call_info AS (
                 SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) AS start_time,
                     COALESCE(
                         CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
                     ) AS end_time
                 FROM CallAnalysis CA
+                LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 INNER JOIN b_side BS ON CA.SessionId = BS.BSessionId
             ),
             b_sessions AS (
@@ -266,9 +309,14 @@ def get_gsm_context_signal_b_side(
             ),
             call_info AS (
                 SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
-                    DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp) AS end_time
+                    COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
+                    ) AS end_time
                 FROM CallAnalysis CA
+                LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 INNER JOIN b_side BS ON CA.SessionId = BS.BSessionId
             ),
             b_sessions AS (
@@ -327,6 +375,203 @@ def get_gsm_context_signal_b_side(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/nr5g_context_signal")
+def get_nr5g_context_signal(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1),
+    window_sec: int = Query(default=10, ge=5, le=300)
+):
+    """5G NR SS-RSRP/SS-RSRQ/SINR in a ±window_sec window around the call.
+
+    Same shape as the LTE context query, so the merged signal chart can plot the NR leg of a
+    VoNR call on the one time axis. Returns an empty list on schemas without FactNR5GRadio.
+    """
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'FactNR5GRadio'
+        """)
+        if cursor.fetchone() is None:
+            conn.close()
+            return {"signal": []}
+
+        cursor.execute("""
+            ;WITH call_info AS (
+                SELECT TOP 1
+                    COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
+                    ) AS end_time,
+                    CA.FileId,
+                    CA.SessionId
+                FROM CallAnalysis CA
+                LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+            ),
+            win AS (
+                SELECT
+                    DATEADD(SECOND, -?, ci.start_time) AS window_start,
+                    DATEADD(SECOND,  ?, ci.end_time)   AS window_end,
+                    ci.start_time,
+                    ci.end_time,
+                    ci.FileId
+                FROM call_info ci
+            ),
+            own_sessions AS (
+                SELECT s.SessionId AS SID
+                FROM Sessions s
+                INNER JOIN call_info ci ON s.FileId = ci.FileId
+
+                UNION
+
+                SELECT ci.SessionId AS SID
+                FROM call_info ci
+            )
+            SELECT
+                fr.FullDate AS MsgTime,
+                fr.SessionId,
+                fr.NRARFCN,
+                fr.CarrierIndex,
+                ROUND(fr.RSRP, 2) AS RSRP,
+                ROUND(fr.RSRQ, 2) AS RSRQ,
+                ROUND(fr.SINR, 2) AS SINR,
+                dp.Latitude,
+                dp.Longitude,
+                CASE
+                    WHEN fr.FullDate < w.start_time THEN 'before'
+                    WHEN fr.FullDate > w.end_time   THEN 'after'
+                    ELSE 'during'
+                END AS phase
+            FROM win w
+            INNER JOIN own_sessions os ON 1=1
+            INNER JOIN FactNR5GRadio fr
+                ON  fr.SessionId = os.SID
+                AND fr.FullDate BETWEEN w.window_start AND w.window_end
+            LEFT JOIN DmnPosition dp ON dp.DmnId = fr.DmnIdPosition
+            ORDER BY fr.FullDate
+        """, (session_id, window_sec, window_sec))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+        conn.close()
+
+        return {"signal": [{columns[i]: row[i] for i in range(len(columns))} for row in rows]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/nr5g_context_signal_b_side")
+def get_nr5g_context_signal_b_side(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1),
+    window_sec: int = Query(default=10, ge=5, le=300)
+):
+    """5G NR SS-RSRP/SS-RSRQ/SINR in ±window_sec window for the B-side session of the call."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            SELECT 1 FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_NAME = 'FactNR5GRadio'
+        """)
+        if cursor.fetchone() is None:
+            conn.close()
+            return {"signal": []}
+
+        cursor.execute("""
+            ;WITH pair_root AS (
+                SELECT TOP (1)
+                    CASE WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                         ELSE CA.SessionId END AS ASessionId
+                FROM CallAnalysis CA
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+                   OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
+            ),
+            b_side AS (
+                SELECT TOP (1)
+                    CA.SessionId AS BSessionId,
+                    COALESCE(CA.FileId, S.FileId, SB.FileId) AS BFileId
+                FROM CallAnalysis CA
+                LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+                INNER JOIN pair_root PR ON CA.SessionIdA = PR.ASessionId
+                WHERE CA.Side = 'B'
+            ),
+            call_info AS (
+                SELECT TOP 1
+                    COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
+                    ) AS end_time
+                FROM CallAnalysis CA
+                LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+                INNER JOIN b_side BS ON CA.SessionId = BS.BSessionId
+            ),
+            b_sessions AS (
+                SELECT S.SessionId AS SID
+                FROM Sessions S
+                CROSS JOIN b_side bs
+                WHERE S.FileId = bs.BFileId
+
+                UNION
+
+                SELECT SB.SessionId AS SID
+                FROM SessionsB SB
+                CROSS JOIN b_side bs
+                WHERE SB.FileId = bs.BFileId
+
+                UNION
+
+                SELECT bs.BSessionId AS SID
+                FROM b_side bs
+            ),
+            win AS (
+                SELECT
+                    DATEADD(SECOND, -?, ci.start_time) AS window_start,
+                    DATEADD(SECOND,  ?, ci.end_time)   AS window_end,
+                    ci.start_time,
+                    ci.end_time
+                FROM call_info ci
+            )
+            SELECT
+                fr.FullDate AS MsgTime,
+                fr.SessionId,
+                fr.NRARFCN,
+                fr.CarrierIndex,
+                ROUND(fr.RSRP, 2) AS RSRP,
+                ROUND(fr.RSRQ, 2) AS RSRQ,
+                ROUND(fr.SINR, 2) AS SINR,
+                dp.Latitude,
+                dp.Longitude,
+                CASE
+                    WHEN fr.FullDate < w.start_time THEN 'before'
+                    WHEN fr.FullDate > w.end_time   THEN 'after'
+                    ELSE 'during'
+                END AS phase
+            FROM win w
+            INNER JOIN b_sessions bss ON 1=1
+            INNER JOIN FactNR5GRadio fr
+                ON  fr.SessionId = bss.SID
+                AND fr.FullDate BETWEEN w.window_start AND w.window_end
+            LEFT JOIN DmnPosition dp ON dp.DmnId = fr.DmnIdPosition
+            ORDER BY fr.FullDate
+        """, (session_id, session_id, window_sec, window_sec))
+
+        columns = [col[0] for col in cursor.description] if cursor.description else []
+        rows = cursor.fetchall() if cursor.description else []
+        conn.close()
+
+        return {"signal": [{columns[i]: row[i] for i in range(len(columns))} for row in rows]}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/technology_periods")
 def get_technology_periods(
     database: str = Query(..., min_length=1),
@@ -372,10 +617,10 @@ def get_technology_periods(
                 )
                 SELECT TOP 1
                     COALESCE(CA.FileId, S.FileId, SB.FileId) AS FileId,
-                    CA.callStartTimeStamp,
+                    COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) AS start_time,
                     COALESCE(
                         CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
                     ) AS end_time
                 FROM CallAnalysis CA
                 LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
@@ -387,12 +632,14 @@ def get_technology_periods(
             cursor.execute("""
                 SELECT TOP 1
                     CA.FileId,
-                    CA.callStartTimeStamp,
+                    COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) AS start_time,
                     COALESCE(
                         CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
                     ) AS end_time
                 FROM CallAnalysis CA
+                LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
             """, (session_id,))
 
@@ -453,13 +700,15 @@ def get_call_context_technology(
         cursor.execute("""
             ;WITH call_info AS (
                 SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) AS start_time,
                     COALESCE(
                         CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
                     ) AS end_time,
                     CA.FileId
                 FROM CallAnalysis CA
+                LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
             ),
             win AS (

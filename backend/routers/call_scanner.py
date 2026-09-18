@@ -75,11 +75,13 @@ def get_lte_serving_vs_scanner(
         cursor.execute("""
             ;WITH win AS (
                 SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) AS start_time,
                     COALESCE(CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration,0), CA.callStartTimeStamp)
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration,0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
                     ) AS end_time
                 FROM CallAnalysis CA
+                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
             )
             SELECT
@@ -104,11 +106,13 @@ def get_lte_serving_vs_scanner(
         cursor.execute("""
             ;WITH win AS (
                 SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) AS start_time,
                     COALESCE(CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration,0), CA.callStartTimeStamp)
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration,0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
                     ) AS end_time
                 FROM CallAnalysis CA
+                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
             )
             SELECT
@@ -313,12 +317,14 @@ def get_lte_scanner_measurement(
         cursor.execute("""
             ;WITH call_time AS (
                 SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) AS start_time,
                     COALESCE(
                         CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
                     ) AS end_time
                 FROM CallAnalysis CA
+                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
             )
             SELECT
@@ -365,13 +371,15 @@ def get_lte_scanner_measurement(
             ),
             b_time AS (
                 SELECT TOP 1
-                    CA.callStartTimeStamp AS start_time,
+                    COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime) AS start_time,
                     COALESCE(
                         CA.callEndTimeStamp,
-                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), CA.callStartTimeStamp)
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
                     ) AS end_time
                 FROM CallAnalysis CA
                 INNER JOIN b_session B ON CA.SessionId = B.BSessionId
+                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
             )
             SELECT
                 fs.EARFCN,

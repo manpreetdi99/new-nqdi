@@ -31,44 +31,141 @@ export class ApiClientError extends Error {
   }
 }
 
-async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
+/**
+ * Πόσο περιμένουμε ΕΝΑ request πριν το κόψουμε. Τα summary endpoints πάνω σε ΟΛΑ τα
+ * collections μιας βάσης (π.χ. PEL_26H2) είναι λεπτά, όχι δευτερόλεπτα: το /api/calls
+ * χτίζει 6 #temp tables, το /api/data_calls γυρίζει 30k+ γραμμές. Χωρίς ρητό όριο
+ * κληρώναμε ό,τι όριο είχε ο network stack του browser/proxy — γι' αυτό "έκανε timeout
+ * εύκολα". 15' default, override με VITE_API_TIMEOUT_MS (0 = καθόλου όριο).
+ */
+const readNumberEnv = (raw: unknown, fallback: number): number => {
+  const parsed = Number(raw);
+  return raw == null || raw === "" || !Number.isFinite(parsed) || parsed < 0 ? fallback : parsed;
+};
+
+const DEFAULT_TIMEOUT_MS = readNumberEnv(import.meta.env.VITE_API_TIMEOUT_MS, 15 * 60_000);
+
+/** Πόσες φορές ξαναδοκιμάζουμε ΜΟΝΟ τα transient σφάλματα (δες isRetryable). */
+const MAX_RETRIES = readNumberEnv(import.meta.env.VITE_API_RETRIES, 2);
+
+/**
+ * Ό,τι δέχεται το fetch (άρα και `signal`, π.χ. από το react-query queryFn ({ signal })),
+ * συν per-request override του timeout. 0 = καθόλου όριο.
+ */
+export type RequestOptions = RequestInit & { timeoutMs?: number };
+
+/**
+ * Transient = αξίζει retry: χαμένο/μισό δίκτυο, δικό μας timeout, ή gateway/overload
+ * απαντήσεις. Ένα HTTP-500 από SQL error ΔΕΝ είναι transient — θα ξαναγυρίσει το ίδιο.
+ */
+const isRetryable = (error: unknown): boolean => {
+  if (error instanceof ApiClientError) {
+    if (error.code === "NET-001" || error.code === "NET-TIMEOUT") return true;
+    return error.status === 429 || error.status === 502 || error.status === 503 || error.status === 504;
+  }
+  return false;
+};
+
+const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Ένα signal που ανάβει είτε από τον caller (react-query cancel) είτε από το δικό μας
+ * timeout. Χειροκίνητα αντί για AbortSignal.any(), που δεν υπάρχει σε παλιότερα browsers.
+ * Γυρίζει και `timedOut` ώστε να ξεχωρίσουμε "το έκοψε ο χρήστης" από "άργησε".
+ */
+const withTimeout = (timeoutMs: number, external?: AbortSignal) => {
+  const controller = new AbortController();
+  const state = { timedOut: false };
+
+  const abortFromExternal = () => controller.abort();
+  external?.addEventListener("abort", abortFromExternal);
+
+  const timer =
+    timeoutMs > 0
+      ? setTimeout(() => {
+          state.timedOut = true;
+          controller.abort();
+        }, timeoutMs)
+      : undefined;
+
+  return {
+    signal: controller.signal,
+    state,
+    cleanup: () => {
+      if (timer !== undefined) clearTimeout(timer);
+      external?.removeEventListener("abort", abortFromExternal);
+    },
+  };
+};
+
+async function requestJson<T>(path: string, options?: RequestOptions): Promise<T> {
   const endpoint = `${API_BASE_URL}${path}`;
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal: externalSignal, ...init } = options ?? {};
 
-  try {
-    const res = await fetch(endpoint, init);
+  let lastError: unknown;
 
-    if (!res.ok) {
-      let serverMessage = `Request failed with status ${res.status}`;
+  for (let attempt = 0; attempt <= MAX_RETRIES; attempt += 1) {
+    // Ο caller ακύρωσε όσο περιμέναμε το backoff — μη ξεκινήσεις νέο attempt.
+    if (externalSignal?.aborted) throw lastError ?? new DOMException("Aborted", "AbortError");
 
-      try {
-        const json = await res.json();
-        serverMessage = json.detail || json.message || serverMessage;
-      } catch {
-        const text = await res.text();
-        if (text) serverMessage = text;
+    const guard = withTimeout(timeoutMs, externalSignal ?? undefined);
+
+    try {
+      const res = await fetch(endpoint, { ...init, signal: guard.signal });
+
+      if (!res.ok) {
+        let serverMessage = `Request failed with status ${res.status}`;
+
+        try {
+          const json = await res.json();
+          serverMessage = json.detail || json.message || serverMessage;
+        } catch {
+          const text = await res.text();
+          if (text) serverMessage = text;
+        }
+
+        throw new ApiClientError({
+          code: `HTTP-${res.status}`,
+          endpoint,
+          status: res.status,
+          message: serverMessage,
+          hint: "The Python API responded, but returned an application error.",
+        });
       }
 
-      throw new ApiClientError({
-        code: `HTTP-${res.status}`,
-        endpoint,
-        status: res.status,
-        message: serverMessage,
-        hint: "The Python API responded, but returned an application error.",
-      });
+      return (await res.json()) as T;
+    } catch (error) {
+      // Ακύρωση από τον caller: πέτα το ως είναι, ΧΩΡΙΣ retry και χωρίς toast-άξιο error.
+      if (externalSignal?.aborted && !guard.state.timedOut) throw error;
+
+      lastError = guard.state.timedOut
+        ? new ApiClientError({
+            code: "NET-TIMEOUT",
+            endpoint,
+            message: `Το request ξεπέρασε τα ${Math.round(timeoutMs / 1000)}s και κόπηκε.`,
+            hint:
+              "Πολλά collections μαζί = λεπτά SQL. Ανέβασε το VITE_API_TIMEOUT_MS ή διάλεξε λιγότερα collections.",
+          })
+        : error instanceof ApiClientError
+          ? error
+          : new ApiClientError({
+              code: "NET-001",
+              endpoint,
+              message: error instanceof Error ? error.message : "Failed to fetch",
+              hint:
+                "The preview cannot reach localhost on your computer. Run the frontend locally too, or expose the Python API with a public tunnel URL.",
+            });
+
+      if (attempt === MAX_RETRIES || !isRetryable(lastError)) throw lastError;
+
+      // 1s, 2s, 4s ... — δίνει χρόνο στον SQL Server να αποσυμφορηθεί πριν ξαναρωτήσουμε.
+      await sleep(1000 * 2 ** attempt);
+    } finally {
+      guard.cleanup();
     }
-
-    return res.json();
-  } catch (error) {
-    if (error instanceof ApiClientError) throw error;
-
-    throw new ApiClientError({
-      code: "NET-001",
-      endpoint,
-      message: error instanceof Error ? error.message : "Failed to fetch",
-      hint:
-        "The preview cannot reach localhost on your computer. Run the frontend locally too, or expose the Python API with a public tunnel URL.",
-    });
   }
+
+  throw lastError;
 }
 
 export async function fetchDatabases(): Promise<string[]> {
@@ -141,7 +238,17 @@ export interface AllCallsRow {
    * ώστε το "Codec Type Usage %" να ζυγίζεται με πραγματικό όγκο tests, όχι με τον
    * ένα "dominant" codec ανά session.
    */
+  /**
+   * Το παλιό, ενιαίο "FR AMR WB" bucket του cosmote backend (calls.py εδώ γυρίζει ακόμα
+   * αυτό, όχι τα αναλυτικά codecEvs / codecAmr του main). Το attachmentC.ts το διαβάζει
+   * για το "Codec Type Usage %" — μην το αφαιρέσεις πριν έρθει και το calls.py του main.
+   */
   codecFrAmrWbCount?: number | null;
+  codecEvsCount?: number | null;
+  codecEvsWbCount?: number | null;
+  codecAmrUmtsCount?: number | null;
+  codecAmrFrCount?: number | null;
+  codecAmrWbCount?: number | null;
   codecAmrHrCount?: number | null;
   codecAmrCount?: number | null;
   codecEfrCount?: number | null;
@@ -177,6 +284,7 @@ export async function fetchAllCalls(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<AllCallsRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -185,7 +293,7 @@ export async function fetchAllCalls(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: AllCallsRow[] }>(`/api/calls?${params.toString()}`);
+  const json = await requestJson<{ rows: AllCallsRow[] }>(`/api/calls?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -206,6 +314,7 @@ export async function fetchTechnologyMix(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<TechnologyMixRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -214,7 +323,7 @@ export async function fetchTechnologyMix(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: TechnologyMixRow[] }>(`/api/technology_mix?${params.toString()}`);
+  const json = await requestJson<{ rows: TechnologyMixRow[] }>(`/api/technology_mix?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -231,12 +340,12 @@ export interface CellBandCountRow {
   cellCount: number;
 }
 
-export async function fetchCellBandCount(database: string, collections: string[] = []): Promise<CellBandCountRow[]> {
+export async function fetchCellBandCount(database: string, collections: string[] = [], options?: RequestOptions): Promise<CellBandCountRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
     if (collection) params.append("collection", collection);
   }
-  const json = await requestJson<{ rows: CellBandCountRow[] }>(`/api/cell_band_count?${params.toString()}`);
+  const json = await requestJson<{ rows: CellBandCountRow[] }>(`/api/cell_band_count?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -253,12 +362,12 @@ export interface SrvccRow {
   count: number;
 }
 
-export async function fetchSrvcc(database: string, collections: string[] = []): Promise<SrvccRow[]> {
+export async function fetchSrvcc(database: string, collections: string[] = [], options?: RequestOptions): Promise<SrvccRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
     if (collection) params.append("collection", collection);
   }
-  const json = await requestJson<{ rows: SrvccRow[] }>(`/api/srvcc?${params.toString()}`);
+  const json = await requestJson<{ rows: SrvccRow[] }>(`/api/srvcc?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -284,6 +393,7 @@ export async function fetchDns(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<DnsRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -292,7 +402,7 @@ export async function fetchDns(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: DnsRow[] }>(`/api/dns?${params.toString()}`);
+  const json = await requestJson<{ rows: DnsRow[] }>(`/api/dns?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -332,6 +442,7 @@ export async function fetchOokla(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<OoklaRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -340,7 +451,7 @@ export async function fetchOokla(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: OoklaRow[] }>(`/api/ookla?${params.toString()}`);
+  const json = await requestJson<{ rows: OoklaRow[] }>(`/api/ookla?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -372,6 +483,7 @@ export async function fetchCapacityLink(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<CapacityLinkRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -380,7 +492,7 @@ export async function fetchCapacityLink(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: CapacityLinkRow[] }>(`/api/capacity_link?${params.toString()}`);
+  const json = await requestJson<{ rows: CapacityLinkRow[] }>(`/api/capacity_link?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -399,23 +511,39 @@ export async function fetchCapacityLink(
  */
 export interface PingRow {
   location: string | null;
-  sessionId: string;
-  testId: number | null;
+  /** Λείπει σε aggregate mode — ένα group δεν ανήκει σε ένα session. */
+  sessionId?: string;
+  testId?: number | null;
   host: string | null;
+  /** Raw mode: το RTT του packet. Aggregate mode: ο μέσος όρος πάνω σε `rttSamples`. */
   rtt: number | null;
   packetSize: number | null;
-  errorCode: string | null;
+  errorCode?: string | null;
   success: number;
   failed: number;
-  sequenceNumber: number | null;
+  sequenceNumber?: number | null;
   collectionName: string | null;
   aSideFileName: string | null;
+  /** Aggregate mode μόνο: πόσα packets αντιπροσωπεύει η γραμμή. Λείπει = raw, δηλαδή 1. */
+  count?: number;
+  /** Aggregate mode μόνο: πόσα από αυτά έχουν RTT > 0, δηλαδή μπαίνουν στο Mean RTT. */
+  rttSamples?: number;
 }
 
+/**
+ * `aggregate`: ΕΝΑ row ανά (location, collection, host, packet size, outcome) αντί για ένα
+ * ανά packet. Το Summary δεν κοιτάζει ποτέ μεμονωμένο packet και τα raw packets ήταν 63k
+ * γραμμές / ~20 MB ανά βάση (PEL_26H2) — με aggregate είναι ~300 γραμμές / 85 KB και τα
+ * νούμερα βγαίνουν ΙΔΙΑ (επαληθεύτηκε πάνω σε PEL_26H2: total/success/failed/mean RTT
+ * ανά operator & packet size, μηδέν αποκλίσεις). Άφησέ το false όπου χρειάζεσαι per-packet
+ * ανάλυση.
+ */
 export async function fetchPing1000(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
+  aggregate = false,
 ): Promise<PingRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -424,7 +552,8 @@ export async function fetchPing1000(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: PingRow[] }>(`/api/ping_1000?${params.toString()}`);
+  if (aggregate) params.append("aggregate", "1");
+  const json = await requestJson<{ rows: PingRow[] }>(`/api/ping_1000?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -466,6 +595,7 @@ export async function fetchInteractivity(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<InteractivityRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -474,7 +604,7 @@ export async function fetchInteractivity(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: InteractivityRow[] }>(`/api/interactivity?${params.toString()}`);
+  const json = await requestJson<{ rows: InteractivityRow[] }>(`/api/interactivity?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -499,6 +629,7 @@ export async function fetchServingBandTech(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<ServingBandTechRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -507,7 +638,7 @@ export async function fetchServingBandTech(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: ServingBandTechRow[] }>(`/api/serving_band_tech?${params.toString()}`);
+  const json = await requestJson<{ rows: ServingBandTechRow[] }>(`/api/serving_band_tech?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -542,12 +673,30 @@ export interface DataCallRow {
   comment: string | null;
   latitude: number | null;
   longitude: number | null;
+  /**
+   * Πόσα tests αντιπροσωπεύει αυτή η γραμμή. Λείπει/undefined = 1, δηλαδή ό,τι ίσχυε
+   * πάντα για τα raw rows του /api/data_calls.
+   *
+   * Υπάρχει για τις ΗΔΗ-ΑΘΡΟΙΣΜΕΝΕΣ πηγές: το /api/dns γυρίζει 6 γραμμές με count, και
+   * το /api/ping_1000?aggregate=1 μία γραμμή ανά (location, packet size, host, outcome).
+   * Πριν, το frontend τις ΞΕΔΙΠΛΩΝΕ σε ένα fake object ανά test για να περάσουν από το
+   * ίδιο pipeline — 6 γραμμές DNS γίνονταν 169.381 αντικείμενα των 24 πεδίων στο
+   * PEL_26H2 και κρέμαγαν το tab. Τώρα η γραμμή μένει μία και κουβαλάει το πλήθος της.
+   */
+  weight?: number;
+  /**
+   * Πόσα από τα `weight` tests έχουν έγκυρη τιμή στη μετρική του section. Λείπει =
+   * όσα και τα tests. Χρειάζεται μόνο όπου τα δύο διαφέρουν: ένα failed ping μετράει
+   * κανονικά στο Total/Failed αλλά δεν έχει RTT, οπότε δεν πρέπει να μπει στο Mean RTT.
+   */
+  metricSamples?: number;
 }
 
 export async function fetchDataCalls(
   database: string,
   collections: string[] = [],
   locations: string[] = [],
+  options?: RequestOptions,
 ): Promise<DataCallRow[]> {
   const params = new URLSearchParams({ database });
   for (const collection of collections) {
@@ -556,7 +705,7 @@ export async function fetchDataCalls(
   for (const location of locations) {
     params.append("location", location);
   }
-  const json = await requestJson<{ rows: DataCallRow[] }>(`/api/data_calls?${params.toString()}`);
+  const json = await requestJson<{ rows: DataCallRow[] }>(`/api/data_calls?${params.toString()}`, options);
   return json.rows;
 }
 
@@ -1062,6 +1211,26 @@ export async function fetchGsmContextSignalBSide(
   return requestJson(`/api/gsm_context_signal_b_side?${params.toString()}`);
 }
 
+// 5G NR SS-RSRP/SS-RSRQ γύρω από την κλήση (FactNR5GRadio) — το NR αντίστοιχο των
+// call_context_signal / gsm_context_signal, ώστε το ενιαίο διάγραμμα να έχει σειρά και για VoNR.
+export async function fetchNr5gContextSignal(
+  database: string,
+  session_id: string,
+  window_sec = 10
+): Promise<{ signal: any[] }> {
+  const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
+  return requestJson(`/api/nr5g_context_signal?${params.toString()}`);
+}
+
+export async function fetchNr5gContextSignalBSide(
+  database: string,
+  session_id: string,
+  window_sec = 10
+): Promise<{ signal: any[] }> {
+  const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
+  return requestJson(`/api/nr5g_context_signal_b_side?${params.toString()}`);
+}
+
 export interface HandoverInfoRow {
   MsgId: number;
   SessionId: string | null;
@@ -1150,6 +1319,98 @@ export async function fetchCallSrvccDetail(
   return requestJson(`/api/call_srvcc_detail?${params.toString()}`);
 }
 
+/**
+ * CSFB (CS Fallback) — το ανάλογο του SrvccEventRow: μία γραμμή ανά πλευρά που
+ * όντως έπεσε από LTE σε 2G/3G για να στηθεί η κλήση. Οι διάρκειες ανά φάση
+ * έρχονται από τα "Voice(LTE CSFB)" KPIs (βλ. /api/call_csfb_detail).
+ */
+export interface CsfbEventRow {
+  Side: "A" | "B" | string | null;
+  SessionId: string | number | null;
+  /** Αρχή του fallback (Extended Service Request) και τέλος της τελευταίας φάσης. */
+  FallbackStart: string | null;
+  FallbackEnd: string | null;
+  /** Πότε έφυγε το RRCConnectionRelease με το redirect (KPI 10181). */
+  RedirectTime: string | null;
+  ReturnStart: string | null;
+  ReturnEnd: string | null;
+  RadioRedirectMs: number | null;
+  RadioFallbackMs: number | null;
+  TechChangeMs: number | null;
+  TelephonyFallbackMs: number | null;
+  CsFallbackDelayMs: number | null;
+  TelephonyServiceMs: number | null;
+  ReturnDelayMs: number | null;
+  ErrorCode: number | null;
+  ErrorMessage: string | null;
+  Status: "Success" | "Fail" | "Unknown" | string;
+  /** Από την αρχή του fallback μέχρι την πρώτη 2G/3G κυψέλη στο NetworkInfo. */
+  RadioGapMs: number | null;
+  SourceTime: string | null;
+  SourceTechnology: string | null;
+  SourceRFBand: string | number | null;
+  SourceCGI: string | null;
+  SourceCellId: string | number | null;
+  SourceLAC: string | number | null;
+  SourceEARFCN: string | number | null;
+  SourceOperator: string | null;
+  TargetTime: string | null;
+  TargetTechnology: string | null;
+  TargetRFBand: string | number | null;
+  TargetCGI: string | null;
+  TargetCellId: string | number | null;
+  TargetLAC: string | number | null;
+  TargetRAC: string | number | null;
+  TargetBCCH: string | number | null;
+  TargetBSIC: string | number | null;
+  TargetOperator: string | null;
+  ReturnTime: string | null;
+  ReturnTechnology: string | null;
+  ReturnCGI: string | null;
+  SourceRadioTime: string | null;
+  SourceRadioEARFCN: number | null;
+  SourcePCI: number | null;
+  SourceRadioCGI: string | null;
+  SourceRSRP: number | null;
+  SourceRSRQ: number | null;
+  SourceSINR: number | null;
+  TargetRadioTime: string | null;
+  TargetRadioBand: string | number | null;
+  TargetRadioCGI: string | null;
+  TargetRxLev: number | null;
+  TargetRxQual: number | null;
+}
+
+/** Μία φάση της μετάβασης — ένα KPI row, για τον πίνακα βημάτων. */
+export interface CsfbStepRow {
+  Side: "A" | "B" | string | null;
+  SessionId: string | number | null;
+  KPIId: number;
+  MsgId: number | null;
+  StepName: string;
+  Phase: "fallback" | "return" | string;
+  StartTime: string | null;
+  EndTime: string | null;
+  DurationMs: number | null;
+  ErrorCode: number | null;
+  ErrorMessage: string | null;
+  Status: "Success" | "Fail" | "Unknown" | string;
+}
+
+export interface CsfbDetailResponse {
+  events: CsfbEventRow[];
+  steps: CsfbStepRow[];
+  technology: SrvccTechnologyRow[];
+}
+
+export async function fetchCallCsfbDetail(
+  database: string,
+  session_id: string
+): Promise<CsfbDetailResponse> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/call_csfb_detail?${params.toString()}`);
+}
+
 export interface TechnologyTimelineRow {
   MsgTime: string | null;
   PrevTechnology: string | null;
@@ -1205,6 +1466,151 @@ export async function fetchMarkers(
 ): Promise<{ markers: MarkerRow[] }> {
   const params = new URLSearchParams({ database, session_id });
   return requestJson(`/api/markers?${params.toString()}`);
+}
+
+/**
+ * Historic tab: read-only snapshot από το BI data warehouse (BI_VOICE/BI_DATA), ΕΝΑ
+ * campaign (CollectionName) τη φορά — βλ. backend/routers/historic.py +
+ * src/components/BI_DW_SYSTEM_PROMPT.md. Ξεχωριστό dataset από τα fetchAllCalls/
+ * fetchDataCalls παραπάνω: εκεί ο χρήστης διαλέγει `database` (swissqual-srvsa, live
+ * per-campaign DB)· εδώ η πηγή είναι πάντα το warehouse, οπότε τα endpoints παίρνουν
+ * μόνο `collection`.
+ */
+export async function fetchHistoricCollections(): Promise<string[]> {
+  const json = await requestJson<{ collections: string[] }>("/api/historic/collections");
+  return json.collections;
+}
+
+export interface HistoricScoreRow {
+  operator: string;
+  totalVoice: number | null;
+  totalData: number | null;
+  totalScore: number | null;
+  voiceScoreGsm: number | null;
+  voiceScoreFree: number | null;
+  scoreBrowsing: number | null;
+  scoreHttp: number | null;
+  scoreCap: number | null;
+  scorePing: number | null;
+  scoreYt: number | null;
+}
+
+export interface HistoricBestOperator {
+  category: string;
+  operator: string;
+  score: number | null;
+}
+
+export interface HistoricScorecard {
+  scores: HistoricScoreRow[];
+  winners: HistoricBestOperator[];
+}
+
+export async function fetchHistoricScorecard(collection: string): Promise<HistoricScorecard> {
+  const params = new URLSearchParams({ collection });
+  return requestJson(`/api/historic/scorecard?${params.toString()}`);
+}
+
+export interface HistoricVoiceRow {
+  operator: string;
+  attempts: number;
+  cssr: number | null;
+  dcr: number | null;
+  completionRate: number | null;
+  mos: number | null;
+  voltePct: number | null;
+}
+
+export async function fetchHistoricVoice(collection: string): Promise<HistoricVoiceRow[]> {
+  const params = new URLSearchParams({ collection });
+  const json = await requestJson<{ rows: HistoricVoiceRow[] }>(`/api/historic/voice?${params.toString()}`);
+  return json.rows;
+}
+
+/**
+ * GSM voice (Mobile-to-Fixed) KPIs — βλ. backend/routers/historic.py::get_historic_voice_gsm.
+ * Ίδιο σχήμα με HistoricVoiceRow (FREE/M→M), χωρίς voltePct (χαρακτηριστικό μόνο του FREE
+ * axis) και με avgCallSetupTime αντ' αυτού (MO_CallSetupTime — μονάδα όπως είναι αποθηκευμένη
+ * στη βάση, μη επαληθευμένη).
+ */
+export interface HistoricVoiceGsmRow {
+  operator: string;
+  attempts: number;
+  cssr: number | null;
+  dcr: number | null;
+  completionRate: number | null;
+  mos: number | null;
+  avgCallSetupTime: number | null;
+}
+
+export async function fetchHistoricVoiceGsm(collection: string): Promise<HistoricVoiceGsmRow[]> {
+  const params = new URLSearchParams({ collection });
+  const json = await requestJson<{ rows: HistoricVoiceGsmRow[] }>(`/api/historic/voice_gsm?${params.toString()}`);
+  return json.rows;
+}
+
+/** YouTube/video KPIs — βλ. backend/routers/historic.py::get_historic_video. `freezingPct`
+ * είναι το "test" measure (AVERAGE(Youtube[FreezingTimePerc])) του blueprint §04/§09. */
+export interface HistoricVideoRow {
+  operator: string;
+  attempts: number;
+  successRate: number | null;
+  freezingPct: number | null;
+  avgVmos: number | null;
+}
+
+export async function fetchHistoricVideo(collection: string): Promise<HistoricVideoRow[]> {
+  const params = new URLSearchParams({ collection });
+  const json = await requestJson<{ rows: HistoricVideoRow[] }>(`/api/historic/video?${params.toString()}`);
+  return json.rows;
+}
+
+export interface HistoricDataRow {
+  operator: string;
+  avgThrpDlMbps: number | null;
+  avgThrpUlMbps: number | null;
+  taskSuccessRate: number | null;
+  totalTests: number | null;
+  avgRttMs: number | null;
+  totalPingAttempts: number | null;
+  successPingTests: number | null;
+}
+
+export async function fetchHistoricData(collection: string): Promise<HistoricDataRow[]> {
+  const params = new URLSearchParams({ collection });
+  const json = await requestJson<{ rows: HistoricDataRow[] }>(`/api/historic/data?${params.toString()}`);
+  return json.rows;
+}
+
+/**
+ * Χρονοσειρά ΟΛΩΝ των campaigns, μία γραμμή ανά Scope (π.χ. "2026H2") — βλ.
+ * backend/routers/historic.py::get_historic_trend. Ίδιο πνεύμα με τον πίνακα
+ * "Ποιότητα δεδομένων" + "Δ vs προηγούμενο scope" του §09 του blueprint: pooled
+ * KPIs ανά operator πάνω σε ΟΛΑ τα collections ενός scope, plus coverage counts και
+ * Δ vs το προηγούμενο scope που όντως έχει τιμή (π.χ. 2023H1 συγκρίνεται με 2022H1
+ * γιατί δεν έγινε καμπάνια το 2022H2).
+ */
+export interface HistoricTrendOperatorRow {
+  operator: string;
+  totalScore: number | null;
+  cssr: number | null;
+  avgThrpDlMbps: number | null;
+  deltaTotalScore: number | null;
+  deltaCssr: number | null;
+  deltaAvgThrpDlMbps: number | null;
+}
+
+export interface HistoricTrendScope {
+  scope: string;
+  collections: number | null;
+  voiceCollections: number | null;
+  capacityCollections: number | null;
+  operators: HistoricTrendOperatorRow[];
+}
+
+export async function fetchHistoricTrend(): Promise<HistoricTrendScope[]> {
+  const json = await requestJson<{ scopes: HistoricTrendScope[] }>("/api/historic/trend");
+  return json.scopes;
 }
 
 export interface RunMapResponse {
