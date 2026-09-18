@@ -128,7 +128,9 @@ function MapBounds({ bounds }: { bounds: DataBounds | null }) {
     if (minLat === maxLat && minLng === maxLng) {
       map.setView([minLat, minLng], 12);
     } else {
-      map.fitBounds([[minLat, minLng], [maxLat, maxLng]], { padding: [50, 50], maxZoom: 14 });
+      // Μικρό padding: αρκετό να μην κόβονται οι κουκκίδες στην άκρη, χωρίς να
+      // αφήνει τη διαδρομή μικρή στη μέση ενός στενού panel.
+      map.fitBounds([[minLat, minLng], [maxLat, maxLng]], { padding: [14, 14], maxZoom: 16 });
     }
   }, [bounds, map]);
 
@@ -204,12 +206,12 @@ interface LayerSync {
   colorSchemeKey: string;
   labelCol: string;
   quantityCol: string;
-  location: string;
-  collection: string;
 }
 
 interface SyncPayload {
   db: string;
+  collection: string;
+  location: string;
   layers: LayerSync[];
 }
 
@@ -240,15 +242,48 @@ interface LayerMarkerStyle {
   shape: MarkerShape;
   radius: number;
   weight: number;
+  opacity: number;
+  outline: boolean;
 }
 
 const LAYER_MARKER_STYLES: LayerMarkerStyle[] = [
-  { shape: "circle",   radius: 4, weight: 1 },
-  { shape: "triangle", radius: 7, weight: 1 },
-  { shape: "cross",    radius: 8, weight: 2.5 },
+  // Το L1 είναι σχεδόν πάντα το πυκνό «χαλί»: ξεκινά ήδη στα 3px, όσο και το
+  // preset του ρόλου, ώστε να μην «πηδάει» το μέγεθος μόλις έρθουν τα δεδομένα.
+  { shape: "circle",   radius: 3, weight: 0.5, opacity: 0.85, outline: true },
+  { shape: "diamond", radius: 7, weight: 2,   opacity: 0.9,  outline: false },
+  { shape: "cross",    radius: 8, weight: 2.5, opacity: 1,    outline: false },
 ];
 
 const markerStyleFor = (index: number) => LAYER_MARKER_STYLES[index] ?? LAYER_MARKER_STYLES[0];
+
+// ── Ρόλος layer: «χαλί» vs «σημεία αναφοράς» ──────────────────────────────────
+// Τα δύο στρώματα ενός χάρτη σχεδόν ποτέ δεν είναι ισοδύναμα: το ένα είναι
+// 20.000 δείγματα διαδρομής (διαβάζεται σαν ροή/ίχνος, όχι σαν μεμονωμένα
+// σημεία) και το άλλο 10–100 σημεία αναφοράς που πρέπει να «επιπλέουν» καθαρά
+// από πάνω. Ο ρόλος προκύπτει από την πυκνότητα και οδηγεί ΜΕΓΕΘΟΣ, ΔΙΑΦΑΝΕΙΑ,
+// ΠΕΡΙΓΡΑΜΜΑ και ΣΕΙΡΑ σχεδίασης — το ΣΧΗΜΑ μένει ανέγγιχτο, γιατί αυτό είναι
+// το κανάλι που δηλώνει σε ποιο layer ανήκει μια κουκκίδα.
+type LayerRole = "carpet" | "reference";
+
+/** Κάτω από τόσα δείγματα, ένα layer είναι «σημεία αναφοράς» και όχι «χαλί». */
+const REFERENCE_MAX_POINTS = 200;
+
+const ROLE_PRESETS: Record<LayerRole, LayerMarkerStyle> = {
+  // Μικροσκοπικές κουκκίδες με λεπτό περίγραμμα. Το πάχος μένει στο 0.5: σε
+  // πυκνά δεδομένα τα χοντρά περιγράμματα αλληλοκαλύπτονται και βγάζουν
+  // «μισοφέγγαρα» αντί για συνεχή γραμμή — στα 0.5px το φαινόμενο δεν φαίνεται.
+  carpet:    { shape: "circle",  radius: 3, weight: 0.5, opacity: 0.85, outline: true },
+  // Ρόμβοι με λευκό περίγραμμα: ξεχωρίζουν καθαρά πάνω από το χαλί.
+  reference: { shape: "diamond", radius: 7, weight: 2.5, opacity: 1,    outline: true },
+};
+
+/** Ο ρόλος κρίνεται μόνο από το πλήθος: <100 δείγματα ⇒ ρόμβοι, αλλιώς κουκκίδες. */
+function roleForCount(n: number): LayerRole | null {
+  if (n <= 0) return null;
+  return n < REFERENCE_MAX_POINTS ? "reference" : "carpet";
+}
+
+const OUTLINE_COLOR = "#ffffff";
 
 // SVG path ενός σχήματος γύρω από το (x, y), σε pixel — κοινό για χάρτη & legend
 function shapePathD(x: number, y: number, r: number, shape: MarkerShape): string {
@@ -405,16 +440,25 @@ const LAYER_ACCENTS = ["#3b82f6", "#f59e0b", "#a855f7"];
 // σπάνε το URL. Το custom SQL ΔΕΝ αποθηκεύεται (πολύ μεγάλο για URL) — ένα link
 // επαναφέρει το template, όχι χειρόγραφες αλλαγές στο query. Τα αποτελέσματα
 // δεν εκτελούνται αυτόματα: ο χρήστης πατάει Run όταν θέλει.
+// Database / collection / ASideLocation ανήκουν στον ΧΑΡΤΗ, όχι στο layer: τα
+// layers ενός panel συγκρίνουν πάντα διαφορετικά queries πάνω στα ΙΔΙΑ δεδομένα.
+interface LayerScope {
+  db: string;
+  collection: string;
+  location: string;
+}
+
 interface LayerInit {
-  db?: string;
   tmplIdx?: number;
-  collection?: string;
-  location?: string;
   shape?: MarkerShape;
   radius?: number;
   weight?: number;
   mode?: MapMode;
   visible?: boolean;
+  opacity?: number;
+  outline?: boolean;
+  /** true μόνο όταν ο χρήστης άλλαξε ο ίδιος το στυλ αυτού του layer. */
+  styleTouched?: boolean;
 }
 
 const FIELD_SEP = "~";
@@ -432,55 +476,94 @@ const safeDecode = (v: string) => {
 
 const clamp = (n: number, min: number, max: number) => Math.min(Math.max(n, min), max);
 
+/** Το κοινό scope του panel — πρώτο chunk της σειριοποίησης. */
+function serializeScope(scope: LayerScope): string {
+  return [encField(scope.db), encField(scope.collection), encField(scope.location)].join(FIELD_SEP);
+}
+
 function serializeLayerInit(l: Required<LayerInit>): string {
   return [
-    encField(l.db),
     String(l.tmplIdx),
-    encField(l.collection),
-    encField(l.location),
     l.shape,
     String(l.radius),
     String(l.weight),
     l.mode === "bubble" ? "b" : "p",
     l.visible ? "1" : "0",
+    l.opacity.toFixed(2),
+    l.outline ? "1" : "0",
+    l.styleTouched ? "1" : "0",
   ].join(FIELD_SEP);
 }
 
 function parseLayerInit(raw: string): LayerInit | null {
   const f = raw.split(FIELD_SEP);
-  if (f.length < 4) return null;
-  const tmplIdx = Number(f[1]);
-  const shape = f[4] as MarkerShape;
-  const radius = Number(f[5]);
-  const weight = Number(f[6]);
+  const tmplIdx = Number(f[0]);
+  if (!Number.isInteger(tmplIdx)) return null;
+  const shape = f[1] as MarkerShape;
+  const radius = Number(f[2]);
+  const weight = Number(f[3]);
   return {
-    db: safeDecode(f[0]),
-    tmplIdx: Number.isInteger(tmplIdx) && tmplIdx >= 0 && tmplIdx < TEMPLATES.length ? tmplIdx : 0,
-    collection: safeDecode(f[2]),
-    location: safeDecode(f[3]),
+    tmplIdx: tmplIdx >= 0 && tmplIdx < TEMPLATES.length ? tmplIdx : 0,
     shape: SHAPE_OPTIONS.some((o) => o.value === shape) ? shape : undefined,
     radius: Number.isFinite(radius) ? clamp(radius, 2, 14) : undefined,
-    weight: Number.isFinite(weight) ? clamp(weight, 0.5, 6) : undefined,
-    mode: f[7] === "b" ? "bubble" : f[7] === "p" ? "points" : undefined,
-    visible: f[8] === undefined ? undefined : f[8] === "1",
+    weight: Number.isFinite(weight) ? clamp(weight, 0, 6) : undefined,
+    mode: f[4] === "b" ? "bubble" : f[4] === "p" ? "points" : undefined,
+    visible: f[5] === undefined ? undefined : f[5] === "1",
+    opacity: f[6] && Number.isFinite(Number(f[6])) ? clamp(Number(f[6]), 0.2, 1) : undefined,
+    outline: f[7] === undefined ? undefined : f[7] === "1",
+    styleTouched: f[8] === "1",
   };
 }
 
-/** `?qmap=` → ένας πίνακας layers ανά panel (άκυρα κομμάτια αγνοούνται). */
-function parseQueryMapUrlState(raw: string): LayerInit[][] {
+interface PanelInit {
+  scope: LayerScope;
+  layers: LayerInit[];
+}
+
+/**
+ * `?qmap=` → ένα PanelInit ανά panel. Μορφή:
+ *   panel := db~collection~location ; layer ; layer …
+ *   layer := tmplIdx~shape~radius~weight~mode~visible~opacity~outline
+ * Άκυρα κομμάτια αγνοούνται — ένα χειρόγραφο URL δεν σπάει το UI.
+ *
+ * Συμβατότητα: στην πρώτη έκδοση το db/collection/location ζούσαν ΜΕΣΑ σε κάθε
+ * layer (9+ πεδία ανά chunk). Τέτοια links/localStorage διαβάζονται ακόμη —
+ * επαναφέρουν database, collection, location και template· το στυλ (σχήμα,
+ * μέγεθος, διαφάνεια) πέφτει στα defaults, αφού τα πεδία δεν στοιχίζονται.
+ */
+function parseQueryMapUrlState(raw: string): PanelInit[] {
   if (!raw) return [];
   return raw
     .split(PANEL_SEP)
-    .map((panel) => panel.split(LAYER_SEP)
-      .map(parseLayerInit)
-      .filter((l): l is LayerInit => l !== null)
-      .slice(0, MAX_LAYERS))
-    .filter((layers) => layers.length > 0)
+    .map((panel): PanelInit | null => {
+      const chunks = panel.split(LAYER_SEP).filter(Boolean);
+      if (chunks.length === 0) return null;
+      const first = chunks[0].split(FIELD_SEP);
+      const legacy = first.length >= 9;
+      const scope: LayerScope = legacy
+        ? { db: safeDecode(first[0]), collection: safeDecode(first[2]), location: safeDecode(first[3]) }
+        : { db: safeDecode(first[0]), collection: safeDecode(first[1]), location: safeDecode(first[2]) };
+      // Στο legacy σχήμα τα πεδία δεν στοιχίζονται με το σημερινό: κρατάμε μόνο
+      // το template (αν διαβάζαμε θεσιακά, το "visible" θα έπεφτε πάνω σε άλλο
+      // πεδίο και τα layers θα επανέρχονταν κρυμμένα).
+      const layers = (legacy
+        ? chunks.map((c) => {
+            const tmplIdx = Number(c.split(FIELD_SEP)[1]);
+            return Number.isInteger(tmplIdx) && tmplIdx >= 0 && tmplIdx < TEMPLATES.length
+              ? { tmplIdx } as LayerInit
+              : null;
+          })
+        : chunks.slice(1).map((c) => parseLayerInit(c))
+      )
+        .filter((l): l is LayerInit => l !== null)
+        .slice(0, MAX_LAYERS);
+      return layers.length > 0 ? { scope, layers } : null;
+    })
+    .filter((p): p is PanelInit => p !== null)
     .slice(0, MAX_PANELS);
 }
 
 interface LayerState {
-  db: string;
   tmplIdx: number;
   sql: string;
   mode: MapMode;
@@ -494,8 +577,6 @@ interface LayerState {
   rows: Record<string, CellValue>[];
   executionTime: number | null;
   error: string | null;
-  filterCollection: string;
-  filterLocation: string;
   filterNRARFCN: string;
   filterLink: string;
   selectedGroup: string | null;
@@ -504,15 +585,15 @@ interface LayerState {
   shape: MarkerShape;
   radius: number;
   weight: number;
+  opacity: number;
+  outline: boolean;
+  styleTouched: boolean;
 }
 
-function useQueryLayer(init: LayerInit, index: number) {
+function useQueryLayer(init: LayerInit, index: number, scope: LayerScope) {
   // Αρχικές τιμές από το URL (ή defaults) — διαβάζονται μία φορά, στο mount
   const initTemplate = TEMPLATES[init.tmplIdx ?? 0] ?? TEMPLATES[0];
-  const [db, setDb]                         = useState(init.db ?? "");
-  const [collections, setCollections]       = useState<string[]>([]);
-  const [collectionsLoading, setCollectionsLoading] = useState(false);
-  const [locations, setLocations]           = useState<string[]>([]);
+  const { db, collection: filterCollection, location: filterLocation } = scope;
 
   const [tmplIdx, setTmplIdx]               = useState(init.tmplIdx ?? 0);
   const [sql, setSql]                       = useState(initTemplate.sql);
@@ -528,8 +609,6 @@ function useQueryLayer(init: LayerInit, index: number) {
   const [columns, setColumns]               = useState<string[]>([]);
   const [rows, setRows]                     = useState<Record<string, CellValue>[]>([]);
   const [executionTime, setExecutionTime]   = useState<number | null>(null);
-  const [filterCollection, setFilterCollection] = useState(init.collection ?? "");
-  const [filterLocation, setFilterLocation]     = useState(init.location ?? "");
   const [filterNRARFCN, setFilterNRARFCN]       = useState("");
   const [filterLink, setFilterLink]             = useState("");
   const [selectedGroup, setSelectedGroup]       = useState<string | null>(null);
@@ -537,25 +616,17 @@ function useQueryLayer(init: LayerInit, index: number) {
   const [selectedBuckets, setSelectedBuckets]   = useState<Set<string>>(new Set());
   const [visible, setVisible]                   = useState(init.visible ?? true);
   // Στυλ κουκκίδας — ξεκινά από το URL ή από το default του layer, και αλλάζει δυναμικά
-  const [shape, setShape]   = useState<MarkerShape>(init.shape ?? markerStyleFor(index).shape);
-  const [radius, setRadius] = useState<number>(init.radius ?? markerStyleFor(index).radius);
-  const [weight, setWeight] = useState<number>(init.weight ?? markerStyleFor(index).weight);
-
-  useEffect(() => {
-    if (!db) { setCollections([]); setLocations([]); return; }
-    setCollectionsLoading(true);
-    fetchCollectionNames(db)
-      .then(setCollections)
-      .catch(() => setCollections([]))
-      .finally(() => setCollectionsLoading(false));
-  }, [db]);
-
-  useEffect(() => {
-    if (!db) { setLocations([]); return; }
-    fetchLocations(db, filterCollection ? [filterCollection] : [])
-      .then(setLocations)
-      .catch(() => setLocations([]));
-  }, [db, filterCollection]);
+  const [shape, setShape]     = useState<MarkerShape>(init.shape ?? markerStyleFor(index).shape);
+  const [radius, setRadius]   = useState<number>(init.radius ?? markerStyleFor(index).radius);
+  const [weight, setWeight]   = useState<number>(init.weight ?? markerStyleFor(index).weight);
+  const [opacity, setOpacity] = useState<number>(init.opacity ?? markerStyleFor(index).opacity);
+  const [outline, setOutline] = useState<boolean>(init.outline ?? markerStyleFor(index).outline);
+  // Μόλις ο χρήστης αγγίξει ο ΙΔΙΟΣ το στυλ, σταματάμε να το προσαρμόζουμε
+  // αυτόματα. Το flag ταξιδεύει στο URL: αλλιώς, επειδή αποθηκεύουμε πάντα το
+  // τρέχον στυλ, κάθε reload θα έμοιαζε με «χειροκίνητη» ρύθμιση και το auto
+  // styling δεν θα ξανάπαιζε ποτέ στον πρώτο χάρτη (αυτόν που έχει seed).
+  const [styleTouched, setStyleTouched] = useState(init.styleTouched ?? false);
+  const markStyleTouched = useCallback(() => setStyleTouched(true), []);
 
   // Σταθερό callback: περνά σαν prop στο memoized LayerMarkers
   const toggleGroup = useCallback((label: string) => {
@@ -577,13 +648,6 @@ function useQueryLayer(init: LayerInit, index: number) {
   const effQtyCol   = quantityCol || columns.find((c) => ["total_calls","count","total","calls","sessions","avg","value"].some(k => lc(c).includes(k))) || columns[1] || "";
   const effValCol   = valueCol    || columns.find((c) => lc(c) === lc(baseScheme.suggestCol))                                         || columns[2]  || "";
   const effLabelCol = labelCol    || columns.find((c) => ["location","asidelocation","name","label"].includes(lc(c)))                 || columns[0]  || "";
-
-  const collectionColName = columns.find((c) => ["collectionname","collection"].includes(lc(c))) ?? "";
-
-  const uniqueCollections = useMemo(() => {
-    if (!collectionColName) return [];
-    return [...new Set(rows.map((r) => String(r[collectionColName] ?? "")).filter(Boolean))].sort();
-  }, [rows, collectionColName]);
 
   const filteredRows = useMemo(() => {
     const nrCol = TEMPLATES[tmplIdx]?.nrarfcnCol;
@@ -644,8 +708,7 @@ function useQueryLayer(init: LayerInit, index: number) {
   };
 
   // Apply an operator-sync payload coming from panel 1
-  const applySync = (s: LayerSync, syncDb: string) => {
-    if (syncDb) setDb(syncDb);
+  const applySync = (s: LayerSync) => {
     setTmplIdx(s.tmplIdx);
     setSql(s.sql);
     setMode(s.mode);
@@ -654,30 +717,28 @@ function useQueryLayer(init: LayerInit, index: number) {
     setLabelCol(s.labelCol);
     setQuantityCol(s.quantityCol);
     setLatCol(""); setLngCol("");
-    setFilterLocation(s.location);
-    setFilterCollection(s.collection);
     setVisible(true);
     clearResults();
   };
 
   const getState = (): LayerState => ({
-    db, tmplIdx, sql, mode, quantityCol, labelCol, latCol, lngCol, valueCol,
+    tmplIdx, sql, mode, quantityCol, labelCol, latCol, lngCol, valueCol,
     colorSchemeKey, columns, rows, executionTime, error,
-    filterCollection, filterLocation, filterNRARFCN, filterLink,
-    selectedGroup, selectedBuckets, visible, shape, radius, weight,
+    filterNRARFCN, filterLink,
+    selectedGroup, selectedBuckets, visible, shape, radius, weight, opacity, outline, styleTouched,
   });
 
   const setState = (s: LayerState) => {
-    setDb(s.db); setTmplIdx(s.tmplIdx); setSql(s.sql); setMode(s.mode);
+    setTmplIdx(s.tmplIdx); setSql(s.sql); setMode(s.mode);
     setQuantityCol(s.quantityCol); setLabelCol(s.labelCol);
     setLatCol(s.latCol); setLngCol(s.lngCol); setValueCol(s.valueCol);
     setColorSchemeKey(s.colorSchemeKey); setColumns(s.columns); setRows(s.rows);
     setExecutionTime(s.executionTime); setError(s.error);
-    setFilterCollection(s.filterCollection); setFilterLocation(s.filterLocation);
     setFilterNRARFCN(s.filterNRARFCN); setFilterLink(s.filterLink);
     setSelectedGroup(s.selectedGroup); setSelectedBuckets(s.selectedBuckets);
     setVisible(s.visible);
     setShape(s.shape); setRadius(s.radius); setWeight(s.weight);
+    setOpacity(s.opacity); setOutline(s.outline); setStyleTouched(s.styleTouched);
   };
 
   const runQuery = async () => {
@@ -790,6 +851,23 @@ function useQueryLayer(init: LayerInit, index: number) {
   // δεν φτιάχνεται πίνακας 20.000 αντικειμένων σε κάθε render.
   const dataBounds = useMemo(() => computeBounds(shownPoints), [shownPoints]);
 
+  // Πυκνό χαλί ή αραιά σημεία αναφοράς; Ο ρόλος βγαίνει από το ΣΥΝΟΛΟ των
+  // σημείων του query — όχι από το πλήθος που έμεινε μετά από φίλτρο legend,
+  // αλλιώς η απομόνωση ενός bucket θα άλλαζε ξαφνικά όλο το στυλ του layer.
+  const dataPointCount = mode === "bubble" ? bubblePoints.length : pointMarkers.length;
+  const role = roleForCount(dataPointCount);
+  const appliedRole = useRef<LayerRole | null>(null);
+  useEffect(() => {
+    if (styleTouched || !role || role === appliedRole.current) return;
+    appliedRole.current = role;
+    const preset = ROLE_PRESETS[role];
+    setShape(preset.shape);
+    setRadius(preset.radius);
+    setWeight(preset.weight);
+    setOpacity(preset.opacity);
+    setOutline(preset.outline);
+  }, [role, styleTouched]);
+
   const bucketCounters = useMemo(() => {
     if (mode !== "points" || !effValCol || filteredRows.length === 0) return new Map<string, number>();
     return computeBucketCounters(filteredRows, effValCol, currentScheme);
@@ -798,17 +876,16 @@ function useQueryLayer(init: LayerInit, index: number) {
   const pointsTotal = [...bucketCounters.values()].reduce((a, b) => a + b, 0);
 
   return {
-    db, setDb, collections, collectionsLoading, locations,
     tmplIdx, setTmplIdx, sql, setSql, mode, setMode, template,
     quantityCol, labelCol, valueCol, colorSchemeKey,
     isRunning, error, setError, columns, rows, executionTime,
-    filterCollection, setFilterCollection, filterLocation, setFilterLocation,
     filterNRARFCN, setFilterNRARFCN, filterLink, setFilterLink,
     selectedGroup, setSelectedGroup, toggleGroup, selectedBuckets, setSelectedBuckets, toggleBucket,
     visible, setVisible,
     shape, setShape, radius, setRadius, weight, setWeight,
+    opacity, setOpacity, outline, setOutline, markStyleTouched, styleTouched, role, dataPointCount,
     effLatCol, effLngCol, effQtyCol, effValCol, effLabelCol,
-    uniqueCollections, filteredRows, currentScheme, availableNRARFCNs, availableLinks,
+    filteredRows, currentScheme, availableNRARFCNs, availableLinks,
     filtersReady, selectTemplate, applySync, getState, setState, clearResults,
     runQuery, runRef,
     visibleBubblePoints, bubbleTierCounts, visiblePointMarkers, pointCount, dataBounds,
@@ -887,6 +964,8 @@ interface LayerMarkersProps {
   shape: MarkerShape;
   radius: number;
   weight: number;
+  opacity: number;
+  outline: boolean;
   dimmed: boolean;
   accent: string;
   isBase: boolean;
@@ -974,7 +1053,7 @@ function pointTooltipHtml(pt: PointMarkerData, ctx: HoverContext): string {
 // χιλιάδες markers δεν ξαναπερνούν καθόλου όταν δεν άλλαξαν τα δεδομένα τους.
 const LayerMarkers = memo(function LayerMarkers({
   visible, mode, bubblePoints, pointMarkers,
-  shape, radius, weight, dimmed, accent, isBase,
+  shape, radius, weight, opacity, outline, dimmed, accent, isBase,
   name, showName, valueCol, qtyCol, labelCol, latCol, lngCol,
   selectedGroup, onToggleGroup,
 }: LayerMarkersProps) {
@@ -1018,16 +1097,25 @@ const LayerMarkers = memo(function LayerMarkers({
   // Ένα pathOptions ΑΝΑ ΧΡΩΜΑ (όχι ανά σημείο): σταθερό reference ⇒ η
   // react-leaflet δεν ξανακαλεί setStyle() σε κάθε marker σε κάθε render.
   const styleByColor = useMemo(() => {
+    // Το περίγραμμα ισχύει μόνο σε γεμάτα σχήματα: στο Χ/σταυρό η γραμμή ΕΙΝΑΙ
+    // το σύμβολο, οπότε λευκό stroke θα έσβηνε το χρώμα της τιμής.
+    const halo = outline && !strokeOnly;
     const m = new Map<string, PathOptions>();
     for (const pt of pointMarkers) {
       if (m.has(pt.color)) continue;
       m.set(pt.color, {
-        fillColor: pt.color, fill: !strokeOnly, fillOpacity: strokeOnly ? 0 : 0.85 * dim,
-        color: pt.color, opacity: dim, weight, lineCap: "round",
+        fillColor: pt.color,
+        fill: !strokeOnly,
+        fillOpacity: strokeOnly ? 0 : opacity * dim,
+        color: halo ? OUTLINE_COLOR : pt.color,
+        opacity: (halo ? 1 : opacity) * dim,
+        stroke: weight > 0,
+        weight,
+        lineCap: "round",
       });
     }
     return m;
-  }, [pointMarkers, strokeOnly, dim, weight]);
+  }, [pointMarkers, strokeOnly, dim, weight, opacity, outline]);
 
   // Ξανα-επιλογή σημείων όποτε αλλάζει το viewport
   const [viewTick, setViewTick] = useState(0);
@@ -1123,13 +1211,14 @@ const LayerLegend = ({ L, index, name, showName, focused, dimmed, onToggleFocus 
           className={`w-full flex items-center gap-1 mb-0.5 rounded px-0.5 text-left transition-colors hover:bg-primary/10 ${focused ? "bg-primary/15 ring-1 ring-inset ring-primary/40" : ""}`}
         >
           <LayerShapeSwatch shape={L.shape} color={LAYER_ACCENTS[index]} />
-          <span className="text-[9px] font-bold uppercase tracking-wide text-foreground/80 truncate flex-1">{name}</span>
+          <span className="text-[9px] font-bold uppercase tracking-wide text-foreground truncate flex-1">{name}</span>
+          <span className="text-[9px] font-mono text-foreground/75 shrink-0">{L.pointCount.toLocaleString()}</span>
         </button>
       )}
       {L.mode === "bubble" ? (
         <>
           <div className="flex items-center justify-between gap-1 mb-0.5">
-            <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground">Κλίμακα</p>
+            <p className="text-[9px] font-bold uppercase tracking-widest text-foreground/90">Κλίμακα</p>
             {L.selectedBuckets.size > 0 && (
               <button type="button" onClick={() => L.setSelectedBuckets(new Set())}
                 title="Εμφάνιση όλων" className="text-primary/70 hover:text-primary">
@@ -1146,19 +1235,19 @@ const LayerLegend = ({ L, index, name, showName, focused, dimmed, onToggleFocus 
                 onClick={() => L.toggleBucket(label)}
                 className={rowCls(cnt, active)}>
                 <LayerShapeSwatch shape={L.mode === "bubble" ? "circle" : L.shape} color={fill} size={10} />
-                <span className="text-[10px] text-muted-foreground flex-1 leading-none">{label}</span>
+                <span className="text-[10px] text-foreground flex-1 leading-none">{label}</span>
                 {cnt > 0 && (
-                  <span className="text-[9px] font-mono text-muted-foreground/60 whitespace-nowrap">{cnt.toLocaleString()}</span>
+                  <span className="text-[9px] font-mono text-foreground/75 whitespace-nowrap">{cnt.toLocaleString()}</span>
                 )}
               </button>
             );
           })}
-          <p className="text-[9px] text-muted-foreground border-t border-border/50 pt-0.5 mt-0.5">∝ {L.effQtyCol || "qty"}</p>
+          <p className="text-[9px] text-foreground/80 border-t border-border/50 pt-0.5 mt-0.5">∝ {L.effQtyCol || "qty"}</p>
         </>
       ) : (
         <>
           <div className="flex items-center justify-between gap-1 mb-0.5">
-            <p className="text-[9px] font-bold uppercase tracking-widest text-muted-foreground truncate">{L.currentScheme.label}</p>
+            <p className="text-[9px] font-bold uppercase tracking-widest text-foreground/90 truncate">{L.currentScheme.label}</p>
             {L.selectedBuckets.size > 0 && (
               <button type="button" onClick={() => L.setSelectedBuckets(new Set())}
                 title="Εμφάνιση όλων" className="text-primary/70 hover:text-primary shrink-0">
@@ -1176,10 +1265,10 @@ const LayerLegend = ({ L, index, name, showName, focused, dimmed, onToggleFocus 
                     onClick={() => L.toggleBucket(b.label)}
                     className={rowCls(cnt, active)}>
                     <LayerShapeSwatch shape={L.mode === "bubble" ? "circle" : L.shape} color={b.color} size={10} />
-                    <span className="text-[10px] text-muted-foreground flex-1 leading-none">{b.label}</span>
+                    <span className="text-[10px] text-foreground flex-1 leading-none">{b.label}</span>
                     {cnt > 0 && (
-                      <span className="text-[9px] font-mono text-muted-foreground/60 whitespace-nowrap">
-                        {cnt.toLocaleString()} <span className="text-primary/70">{(cnt / L.pointsTotal * 100).toFixed(1)}%</span>
+                      <span className="text-[9px] font-mono text-foreground/75 whitespace-nowrap">
+                        {cnt.toLocaleString()} <span className="text-primary">{(cnt / L.pointsTotal * 100).toFixed(1)}%</span>
                       </span>
                     )}
                   </button>
@@ -1194,16 +1283,16 @@ const LayerLegend = ({ L, index, name, showName, focused, dimmed, onToggleFocus 
                     onClick={() => L.toggleBucket(c.value)}
                     className={rowCls(cnt, active)}>
                     <LayerShapeSwatch shape={L.mode === "bubble" ? "circle" : L.shape} color={c.color} size={10} />
-                    <span className="text-[10px] text-muted-foreground flex-1 leading-none">{c.value}</span>
+                    <span className="text-[10px] text-foreground flex-1 leading-none">{c.value}</span>
                     {cnt > 0 && (
-                      <span className="text-[9px] font-mono text-muted-foreground/60 whitespace-nowrap">
-                        {cnt.toLocaleString()} <span className="text-primary/70">{(cnt / L.pointsTotal * 100).toFixed(1)}%</span>
+                      <span className="text-[9px] font-mono text-foreground/75 whitespace-nowrap">
+                        {cnt.toLocaleString()} <span className="text-primary">{(cnt / L.pointsTotal * 100).toFixed(1)}%</span>
                       </span>
                     )}
                   </button>
                 );
               })}
-          <p className="text-[9px] text-muted-foreground/60 border-t border-border/50 pt-0.5 mt-0.5 font-mono truncate">
+          <p className="text-[9px] text-foreground/70 border-t border-border/50 pt-0.5 mt-0.5 font-mono truncate">
             {L.effValCol || "—"} · {L.pointsTotal.toLocaleString()} pts
           </p>
         </>
@@ -1212,38 +1301,46 @@ const LayerLegend = ({ L, index, name, showName, focused, dimmed, onToggleFocus 
   );
 };
 
-// ── Filters of the active layer (Collection / ASideLocation / NRARFCN / link) ─
-const LayerFilters = ({ L }: { L: QueryLayer }) => (
-  <div className="space-y-2">
-    <div className="grid grid-cols-2 gap-1.5">
-      <div>
-        <label className="text-[10px] text-muted-foreground block mb-0.5">Collection</label>
-        <select
-          value={L.filterCollection}
-          onChange={(e) => { L.setFilterCollection(e.target.value); L.setSelectedGroup(null); }}
-          className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
-        >
-          <option value="">— Όλα —</option>
-          {(() => {
-            const base = L.collections.length > 0 ? L.collections : L.uniqueCollections;
-            const extra = L.filterCollection && !base.includes(L.filterCollection) ? [L.filterCollection] : [];
-            return [...extra, ...base].map((v) => <option key={v} value={v}>{v}</option>);
-          })()}
-        </select>
-      </div>
-      <div>
-        <label className="text-[10px] text-muted-foreground block mb-0.5">ASideLocation</label>
-        <select
-          value={L.filterLocation}
-          onChange={(e) => { L.setFilterLocation(e.target.value); L.setSelectedGroup(null); }}
-          className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
-        >
-          <option value="">— Όλες —</option>
-          {L.locations.map((v) => <option key={v} value={v}>{v}</option>)}
-        </select>
-      </div>
+// ── Scope του χάρτη: collection + ASideLocation, κοινά σε όλα τα layers ──────
+const ScopeFilters = ({ collection, location, collections, locations, onCollection, onLocation }: {
+  collection: string;
+  location: string;
+  collections: string[];
+  locations: string[];
+  onCollection: (v: string) => void;
+  onLocation: (v: string) => void;
+}) => (
+  <div className="grid grid-cols-2 gap-1.5">
+    <div>
+      <label className="text-[10px] text-muted-foreground block mb-0.5">Collection</label>
+      <select
+        value={collection}
+        onChange={(e) => onCollection(e.target.value)}
+        className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
+      >
+        <option value="">— Όλα —</option>
+        {(collection && !collections.includes(collection) ? [collection, ...collections] : collections)
+          .map((v) => <option key={v} value={v}>{v}</option>)}
+      </select>
     </div>
+    <div>
+      <label className="text-[10px] text-muted-foreground block mb-0.5">ASideLocation</label>
+      <select
+        value={location}
+        onChange={(e) => onLocation(e.target.value)}
+        className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
+      >
+        <option value="">— Όλες —</option>
+        {(location && !locations.includes(location) ? [location, ...locations] : locations)
+          .map((v) => <option key={v} value={v}>{v}</option>)}
+      </select>
+    </div>
+  </div>
+);
 
+// ── Φίλτρα που εξαρτώνται από το template του ενεργού layer ──────────────────
+const LayerFilters = ({ L }: { L: QueryLayer }) => (
+  <>
     {/* NRARFCN filter — εμφανίζεται μόνο για 5G templates */}
     {L.template?.nrarfcnCol && (
       <div>
@@ -1287,7 +1384,7 @@ const LayerFilters = ({ L }: { L: QueryLayer }) => (
         </select>
       </div>
     )}
-  </div>
+  </>
 );
 
 // ── Single self-contained map panel (1 χάρτης, 1–3 layers) ───────────────────
@@ -1300,39 +1397,84 @@ interface SingleMapPanelProps {
   syncTarget?: SyncPayload | null;
   onSyncRequest?: (payload: SyncPayload, collections: string[], locations: string[]) => void;
   runTrigger?: number;
-  /** Αρχική κατάσταση layers από το URL — διαβάζεται μόνο στο mount. */
-  initialLayers?: LayerInit[];
+  /** Αρχική κατάσταση (scope + layers) από το URL — διαβάζεται μόνο στο mount. */
+  initialPanel?: PanelInit;
   /** Αναφέρει τη serialized κατάσταση του panel στο URL state του γονιού. */
   onPersist?: (serialized: string) => void;
 }
 
-const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label, onRemove, syncTarget, onSyncRequest, runTrigger, initialLayers, onPersist }: SingleMapPanelProps) => {
+const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label, onRemove, syncTarget, onSyncRequest, runTrigger, initialPanel, onPersist }: SingleMapPanelProps) => {
   // Το URL state διαβάζεται ΜΟΝΟ στο mount: μετά κερδίζει ό,τι κάνει ο χρήστης
-  const seed = useRef(initialLayers ?? []).current;
+  const seed = useRef(initialPanel?.layers ?? []).current;
+  const seedScope = useRef(initialPanel?.scope).current;
+
+  // ── Scope του χάρτη: κοινό σε ΟΛΑ τα layers ────────────────────────────────
+  // Τα layers ενός panel συγκρίνουν διαφορετικά queries πάνω στα ίδια δεδομένα,
+  // οπότε database / collection / ASideLocation ζουν εδώ και όχι στο layer.
+  const [db, setDb]                 = useState(seedScope?.db || defaultDatabase);
+  const [collection, setCollection] = useState(seedScope?.collection ?? "");
+  const [location, setLocation]     = useState(seedScope?.location ?? "");
+  const [collections, setCollections] = useState<string[]>([]);
+  const [collectionsLoading, setCollectionsLoading] = useState(false);
+  const [locations, setLocations]   = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!db) { setCollections([]); setLocations([]); return; }
+    setCollectionsLoading(true);
+    fetchCollectionNames(db)
+      .then(setCollections)
+      .catch(() => setCollections([]))
+      .finally(() => setCollectionsLoading(false));
+  }, [db]);
+
+  useEffect(() => {
+    if (!db) { setLocations([]); return; }
+    fetchLocations(db, collection ? [collection] : [])
+      .then(setLocations)
+      .catch(() => setLocations([]));
+  }, [db, collection]);
+
+  const scope = useMemo<LayerScope>(() => ({ db, collection, location }), [db, collection, location]);
+
   // Fixed number of hook calls; only the first `layerCount` are active
-  const layer0 = useQueryLayer(seed[0] ?? { db: defaultDatabase }, 0);
-  const layer1 = useQueryLayer(seed[1] ?? {}, 1);
-  const layer2 = useQueryLayer(seed[2] ?? {}, 2);
+  const layer0 = useQueryLayer(seed[0] ?? {}, 0, scope);
+  const layer1 = useQueryLayer(seed[1] ?? {}, 1, scope);
+  const layer2 = useQueryLayer(seed[2] ?? {}, 2, scope);
   const allLayers = [layer0, layer1, layer2];
+
+  // Αλλαγή scope ⇒ τα αποτελέσματα όλων των layers αφορούν άλλα δεδομένα
+  const changeDb = (value: string) => {
+    setDb(value); setCollection(""); setLocation("");
+    allLayers.forEach((l) => l.clearResults());
+  };
+  const changeCollection = (value: string) => {
+    setCollection(value);
+    allLayers.forEach((l) => l.setSelectedGroup(null));
+  };
+  const changeLocation = (value: string) => {
+    setLocation(value);
+    allLayers.forEach((l) => l.setSelectedGroup(null));
+  };
 
   const [layerCount, setLayerCount] = useState(Math.max(1, Math.min(seed.length, MAX_LAYERS)));
   const [activeLayer, setActiveLayer] = useState(0);
   const [showExpanded, setShowExpanded] = useState(false);
   const [mapLoading, setMapLoading] = useState(false);
-  // Σειρά σχεδίασης, από κάτω προς τα πάνω. Default: L1 κάτω, L2/L3 από πάνω —
-  // ένα uncheck + check φέρνει εκείνο το layer πάνω απ' όλα.
-  const [stackOrder, setStackOrder] = useState<number[]>([0, 1, 2]);
-
-  const bringToTop = (i: number) => setStackOrder((prev) => [...prev.filter((x) => x !== i), i]);
+  // Σειρά σχεδίασης, από κάτω προς τα πάνω: ΠΑΝΤΑ κατά πυκνότητα. Το πυκνό χαλί
+  // πέφτει από κάτω και τα λίγα σημεία επιπλέουν, ανεξάρτητα από το slot τους —
+  // χωρίς χειροκίνητη παράκαμψη, αλλιώς 30 σημεία θάβονται κάτω από 30.000.
+  // (stable sort ⇒ με ίσα πλήθη κρατιέται η σειρά L1 → L2 → L3.)
+  const stackOrder = useMemo(
+    () => allLayers.map((l, i) => ({ i, n: l.dataPointCount })).sort((a, b) => b.n - a.n).map((c) => c.i),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [layer0.dataPointCount, layer1.dataPointCount, layer2.dataPointCount],
+  );
 
   // Κλικ στον τίτλο ενός legend: focus σε αυτό το layer — τα υπόλοιπα στο 70%
   const [focusedLayer, setFocusedLayer] = useState<number | null>(null);
   const toggleFocus = (i: number) => setFocusedLayer((f) => (f === i ? null : i));
 
-  const setLayerVisible = (i: number, on: boolean) => {
-    allLayers[i].setVisible(on);
-    if (on) bringToTop(i);
-  };
+  const setLayerVisible = (i: number, on: boolean) => allLayers[i].setVisible(on);
 
   const layers = allLayers.slice(0, layerCount);
   const activeIdx = Math.min(activeLayer, layerCount - 1);
@@ -1345,12 +1487,8 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     // The slot may still hold the results of a layer that was removed earlier —
     // clear them so no ghost markers come back with the new layer.
     next.clearResults();
-    // Νέο layer πάνω στα ίδια δεδομένα: ίδιο db / collection / location
-    next.setDb(layer0.db || defaultDatabase);
-    next.setFilterCollection(layer0.filterCollection);
-    next.setFilterLocation(layer0.filterLocation);
+    // Το database / collection / location είναι ήδη κοινά σε όλο το panel
     next.setVisible(true);
-    bringToTop(layerCount);
     setActiveLayer(layerCount);
     setLayerCount(layerCount + 1);
   };
@@ -1361,7 +1499,6 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     if (layerCount <= 1) return;
     for (let i = idx; i < layerCount - 1; i++) allLayers[i].setState(allLayers[i + 1].getState());
     setLayerCount(layerCount - 1);
-    setStackOrder([0, 1, 2]);
     setFocusedLayer(null);
     setActiveLayer((a) => Math.max(0, Math.min(a, layerCount - 2)));
   };
@@ -1370,16 +1507,20 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
   useEffect(() => {
     if (!syncTarget) return;
     const incoming = syncTarget.layers.slice(0, MAX_LAYERS);
-    incoming.forEach((s, i) => allLayers[i].applySync(s, syncTarget.db));
+    if (syncTarget.db) setDb(syncTarget.db);
+    setCollection(syncTarget.collection);
+    setLocation(syncTarget.location);
+    incoming.forEach((s, i) => allLayers[i].applySync(s));
     setLayerCount(Math.max(1, incoming.length));
     setActiveLayer(0);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [syncTarget]);
 
   const runAll = () => {
-    const withDb = layers.filter((l) => l.db);
-    if (withDb.length === 0) { layer0.runRef.current(); return; }
-    withDb.forEach((l) => l.runRef.current());
+    // Το database είναι κοινό: ή τρέχουν όλα τα layers, ή κανένα (το πρώτο
+    // layer αναλαμβάνει να δείξει το μήνυμα λάθους).
+    if (!db) { layer0.runRef.current(); return; }
+    layers.forEach((l) => l.runRef.current());
   };
   const latestRunAll = useRef<() => void>(() => {});
   latestRunAll.current = runAll;
@@ -1408,10 +1549,14 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
 
   // Ό,τι αξίζει να ζει σε ένα shareable link. Είναι string, οπότε το effect
   // τρέχει μόνο όταν αλλάζει πραγματικά κάτι από αυτά.
-  const persisted = layers.map((l) => serializeLayerInit({
-    db: l.db, tmplIdx: l.tmplIdx, collection: l.filterCollection, location: l.filterLocation,
-    shape: l.shape, radius: l.radius, weight: l.weight, mode: l.mode, visible: l.visible,
-  })).join(LAYER_SEP);
+  const persisted = [
+    serializeScope(scope),
+    ...layers.map((l) => serializeLayerInit({
+      tmplIdx: l.tmplIdx, shape: l.shape, radius: l.radius, weight: l.weight,
+      mode: l.mode, visible: l.visible, opacity: l.opacity, outline: l.outline,
+      styleTouched: l.styleTouched,
+    })),
+  ].join(LAYER_SEP);
 
   const persistRef = useRef(onPersist);
   persistRef.current = onPersist;
@@ -1426,16 +1571,19 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     l.setSelectedBuckets(new Set()); l.setSelectedGroup(null);
   });
 
-  const resetAllFilters = () => layers.forEach((l) => {
-    l.setFilterCollection(""); l.setFilterLocation(""); l.setFilterNRARFCN("");
-    l.setSelectedGroup(null); l.setSelectedBuckets(new Set());
-  });
+  const resetAllFilters = () => {
+    setCollection(""); setLocation("");
+    layers.forEach((l) => {
+      l.setFilterNRARFCN(""); l.setFilterLink("");
+      l.setSelectedGroup(null); l.setSelectedBuckets(new Set());
+    });
+  };
 
   return (
     <div className="rounded-lg border border-border bg-card flex flex-col overflow-hidden">
 
       {/* ── Controls ── */}
-      <div className="p-2.5 space-y-2 border-b border-border bg-muted/20">
+      <div className="p-2 space-y-1.5 border-b border-border bg-muted/20">
 
         {/* Row -1: Panel label + remove (only when part of a multi-map split) */}
         {(label || onRemove) && (
@@ -1469,7 +1617,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                   type="checkbox"
                   checked={lyr.visible}
                   onChange={(e) => setLayerVisible(i, e.target.checked)}
-                  title={lyr.visible ? "Απόκρυψη layer από τον χάρτη" : "Εμφάνιση layer — πάει πάνω από τα υπόλοιπα"}
+                  title={lyr.visible ? "Απόκρυψη layer από τον χάρτη" : "Εμφάνιση layer στον χάρτη"}
                   className="h-3 w-3 accent-primary cursor-pointer shrink-0"
                 />
                 <button
@@ -1510,16 +1658,23 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
 
         {/* Row 0: Database selector (του ενεργού layer) */}
         <select
-          value={L.db}
-          onChange={(e) => { L.setDb(e.target.value); L.clearResults(); }}
+          value={db}
+          onChange={(e) => changeDb(e.target.value)}
           className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
         >
           <option value="">— Επιλέξτε Database —</option>
           {databases.map((db) => <option key={db} value={db}>{db}</option>)}
         </select>
-        {L.collectionsLoading && (
+        {collectionsLoading && (
           <p className="text-[10px] text-muted-foreground">Φόρτωση collections…</p>
         )}
+
+        {/* Row 0b: Scope του χάρτη — κοινό collection / location για όλα τα layers */}
+        <ScopeFilters
+          collection={collection} location={location}
+          collections={collections} locations={locations}
+          onCollection={changeCollection} onLocation={changeLocation}
+        />
 
         {/* Row 1: Template + mode + run */}
         <div className="flex items-center gap-1.5">
@@ -1545,28 +1700,27 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
             <MapPin className="h-3.5 w-3.5" />
           </button>
 
-          <Button onClick={runAll} disabled={anyRunning || !layers.some((l) => l.db)} size="sm" className="h-7 px-2.5 gap-1 shrink-0"
+          <Button onClick={runAll} disabled={anyRunning || !db} size="sm" className="h-7 px-2.5 gap-1 shrink-0"
             title={multiLayer ? `Εκτέλεση και των ${layerCount} layers` : "Εκτέλεση query"}>
             {anyRunning
               ? <div className="h-3 w-3 border-2 border-current border-t-transparent rounded-full animate-spin" />
               : <Play className="h-3 w-3" />}
           </Button>
 
-          {panelIndex === 0 && onSyncRequest && (layer0.filterLocation || layer0.filterCollection) && (
+          {panelIndex === 0 && onSyncRequest && (location || collection) && (
             <button
               type="button"
-              title={`Sync template & operator → Panels 2 & 3\n${layer0.filterLocation ? `Location: ${layer0.filterLocation}` : `Collection: ${layer0.filterCollection}`}`}
+              title={`Sync template & operator → υπόλοιπα panels\n${location ? `Location: ${location}` : `Collection: ${collection}`}`}
               onClick={() => onSyncRequest(
                 {
-                  db: layer0.db,
+                  db, collection, location,
                   layers: layers.map((lyr) => ({
                     tmplIdx: lyr.tmplIdx, sql: lyr.sql, mode: lyr.mode, valueCol: lyr.valueCol,
                     colorSchemeKey: lyr.colorSchemeKey, labelCol: lyr.labelCol, quantityCol: lyr.quantityCol,
-                    location: lyr.filterLocation, collection: lyr.filterCollection,
                   })),
                 },
-                layer0.collections,
-                layer0.locations,
+                collections,
+                locations,
               )}
               className="p-1.5 rounded border border-border text-muted-foreground hover:text-primary hover:border-primary text-xs transition-all shrink-0"
             >
@@ -1575,7 +1729,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
           )}
         </div>
 
-        {/* Row 2: Filters (του ενεργού layer) */}
+        {/* Row 2: Φίλτρα που εξαρτώνται από το template του ενεργού layer */}
         <LayerFilters L={L} />
 
         {/* Row 3: Expand toggle */}
@@ -1591,17 +1745,35 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
 
         {showExpanded && (
           <div className="space-y-2 pt-2 border-t border-border">
-            {/* Στυλ κουκκίδας του ενεργού layer — σχήμα / μέγεθος / πάχος */}
+            {/* Στυλ κουκκίδας του ενεργού layer — σχήμα / μέγεθος / πάχος / διαφάνεια */}
             <div>
-              <label className="text-[10px] text-muted-foreground block mb-0.5">
-                Κουκκίδα{multiLayer ? ` — L${activeIdx + 1}` : ""}
-              </label>
+              <div className="flex items-center gap-1.5 mb-0.5">
+                <label className="text-[10px] text-muted-foreground">
+                  Κουκκίδα{multiLayer ? ` — L${activeIdx + 1}` : ""}
+                </label>
+                {L.role && (
+                  <span className="text-[9px] px-1 rounded bg-primary/10 text-primary/80"
+                    title={L.role === "carpet"
+                      ? `Πυκνό στρώμα (${L.dataPointCount.toLocaleString()} σημεία ≥ ${REFERENCE_MAX_POINTS}): κουκκίδες 3px`
+                      : `Αραιό στρώμα αναφοράς (${L.dataPointCount.toLocaleString()} σημεία < ${REFERENCE_MAX_POINTS}): ρόμβοι 7px με λευκό περίγραμμα`}>
+                    {L.role === "carpet" ? "χαλί" : "σημεία αναφοράς"}
+                  </span>
+                )}
+                <label className="ml-auto flex items-center gap-1 text-[10px] text-muted-foreground cursor-pointer select-none"
+                  title="Λευκό περίγραμμα ώστε τα σύμβολα να ξεχωρίζουν πάνω από το πυκνό στρώμα">
+                  <input type="checkbox" checked={L.outline}
+                    onChange={(e) => { L.markStyleTouched(); L.setOutline(e.target.checked); }}
+                    disabled={isStrokeOnly(L.shape)}
+                    className="h-3 w-3 accent-primary cursor-pointer disabled:cursor-not-allowed" />
+                  περίγραμμα
+                </label>
+              </div>
               <div className="flex items-end gap-2">
                 <div className="flex items-center gap-1.5 shrink-0">
                   <LayerShapeSwatch shape={L.shape} color={LAYER_ACCENTS[activeIdx]} size={14} />
                   <select
                     value={L.shape}
-                    onChange={(e) => L.setShape(e.target.value as MarkerShape)}
+                    onChange={(e) => { L.markStyleTouched(); L.setShape(e.target.value as MarkerShape); }}
                     className="bg-background border border-border rounded px-1.5 py-1 text-xs"
                   >
                     {SHAPE_OPTIONS.map((o) => (
@@ -1614,15 +1786,23 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                     Μέγεθος <span className="font-mono text-primary/70">{L.radius}</span>
                   </span>
                   <input type="range" min={2} max={14} step={1} value={L.radius}
-                    onChange={(e) => L.setRadius(Number(e.target.value))}
+                    onChange={(e) => { L.markStyleTouched(); L.setRadius(Number(e.target.value)); }}
                     className="w-full h-4 accent-primary cursor-pointer" />
                 </label>
                 <label className="flex-1 min-w-0">
                   <span className="text-[10px] text-muted-foreground block">
                     Πάχος <span className="font-mono text-primary/70">{L.weight}</span>
                   </span>
-                  <input type="range" min={0.5} max={6} step={0.5} value={L.weight}
-                    onChange={(e) => L.setWeight(Number(e.target.value))}
+                  <input type="range" min={0} max={6} step={0.5} value={L.weight}
+                    onChange={(e) => { L.markStyleTouched(); L.setWeight(Number(e.target.value)); }}
+                    className="w-full h-4 accent-primary cursor-pointer" />
+                </label>
+                <label className="flex-1 min-w-0">
+                  <span className="text-[10px] text-muted-foreground block">
+                    Διαφάνεια <span className="font-mono text-primary/70">{L.opacity.toFixed(2)}</span>
+                  </span>
+                  <input type="range" min={0.2} max={1} step={0.05} value={L.opacity}
+                    onChange={(e) => { L.markStyleTouched(); L.setOpacity(Number(e.target.value)); }}
                     className="w-full h-4 accent-primary cursor-pointer" />
                 </label>
               </div>
@@ -1645,9 +1825,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
             {/* Ένα checkbox ανά layer: κρύβει ΜΟΝΟ τα δείγματα & το legend του */}
             {layers.map((lyr, i) => (
               <label key={i} className="flex items-center gap-1 cursor-pointer select-none shrink-0"
-                title={lyr.visible
-                  ? `Απόκρυψη δειγμάτων & legend — ${layerName(lyr, i)}`
-                  : `Εμφάνιση δειγμάτων & legend — ${layerName(lyr, i)} (θα μπει πάνω από τα υπόλοιπα)`}>
+                title={`${lyr.visible ? "Απόκρυψη" : "Εμφάνιση"} δειγμάτων & legend — ${layerName(lyr, i)}`}>
                 <input type="checkbox" checked={lyr.visible}
                   onChange={(e) => setLayerVisible(i, e.target.checked)}
                   className="h-3 w-3 accent-primary cursor-pointer" />
@@ -1691,7 +1869,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                 καθαρισμός όλων
               </button>
             )}
-            {layers.some((lyr) => lyr.filterCollection || lyr.filterLocation) && (
+            {(collection || location) && (
               <button type="button" onClick={resetAllFilters}
                 title={multiLayer ? "Καθαρισμός φίλτρων σε όλα τα layers" : "Καθαρισμός φίλτρων"}
                 className="text-primary/70 hover:text-primary flex items-center gap-0.5">
@@ -1711,7 +1889,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
       </div>
 
       {/* ── Map ── */}
-      <div className="relative" style={{ height: 520 }}>
+      <div className="relative" style={{ height: 560 }}>
         {mapLoading && (
           <div className="absolute inset-0 z-[1001] flex items-center justify-center bg-background/60 backdrop-blur-sm">
             <div className="h-9 w-9 border-4 border-primary border-t-transparent rounded-full animate-spin" />
@@ -1742,6 +1920,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                 bubblePoints={lyr.visibleBubblePoints}
                 pointMarkers={lyr.visiblePointMarkers}
                 shape={lyr.shape} radius={lyr.radius} weight={lyr.weight}
+                opacity={lyr.opacity} outline={lyr.outline}
                 dimmed={focusedLayer !== null && focusedLayer !== i}
                 accent={LAYER_ACCENTS[i]} isBase={i === 0}
                 name={layerName(lyr, i)} showName={multiLayer}
@@ -1847,36 +2026,27 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
   };
 
   const handleSyncRequest = (payload: SyncPayload, collections: string[], locations: string[]) => {
-    // Detect operator from the 1st layer's location (e.g. "Cosmote Free A"), fall back to collection
-    const first = payload.layers[0];
-    if (!first) return;
-    const refOp = detectOperator(first.location) || detectOperator(first.collection);
-    const others = OPERATOR_GROUPS.filter(g => g.name !== refOp);
-    // Κάθε άλλο panel παίρνει το query — τα δύο πρώτα με τους άλλους δύο operators,
-    // τα παραπάνω (4ο panel) με τον ίδιο — πριν έμεναν εκτός συγχρονισμού.
+    // Ο operator ανιχνεύεται από το location (π.χ. "Cosmote Free A"), αλλιώς
+    // από το collection. Το scope είναι ένα ανά panel, οπότε γίνεται μία
+    // αντιστοίχιση — τα layers κουβαλούν μόνο τα queries τους.
+    const refOp = detectOperator(payload.location) || detectOperator(payload.collection);
+    const others = OPERATOR_GROUPS.filter((g) => g.name !== refOp);
     const targetIds = panels.slice(1);
     const updates: Record<number, SyncPayload | null> = {};
     targetIds.forEach((id, i) => {
       const targetOp = others[i];
+      // Πάνω από 3 panels δεν υπάρχει άλλος operator: ίδιο query, ίδιο scope
       if (!targetOp) { updates[id] = payload; return; }
-      // Every layer of the source panel is swapped to the target operator
-      const layers = payload.layers.map((layer) => {
-        // Swap location to the matching operator location (e.g. "Vodafone Free A")
-        const locCandidates = locations.filter(l => detectOperator(l) === targetOp?.name);
-        const bestLoc = targetOp
-          ? bestCollectionForOperator(layer.location, refOp ?? "", targetOp.name, locCandidates) ?? ""
-          : "";
-        // Swap collection only if it also contains an operator name; otherwise keep same
-        const collRefOp = detectOperator(layer.collection);
-        const collCandidates = collRefOp && targetOp
-          ? collections.filter(c => detectOperator(c) === targetOp.name)
-          : [];
-        const bestColl = collRefOp && targetOp && collCandidates.length > 0
-          ? bestCollectionForOperator(layer.collection, collRefOp, targetOp.name, collCandidates) ?? layer.collection
-          : layer.collection;
-        return { ...layer, collection: bestColl, location: bestLoc };
-      });
-      updates[id] = { db: payload.db, layers };
+      // Location του αντίστοιχου operator (π.χ. "Vodafone Free A")
+      const locCandidates = locations.filter((l) => detectOperator(l) === targetOp.name);
+      const bestLoc = bestCollectionForOperator(payload.location, refOp ?? "", targetOp.name, locCandidates) ?? "";
+      // Το collection αλλάζει μόνο αν περιέχει κι αυτό όνομα operator
+      const collRefOp = detectOperator(payload.collection);
+      const collCandidates = collRefOp ? collections.filter((c) => detectOperator(c) === targetOp.name) : [];
+      const bestColl = collRefOp && collCandidates.length > 0
+        ? bestCollectionForOperator(payload.collection, collRefOp, targetOp.name, collCandidates) ?? payload.collection
+        : payload.collection;
+      updates[id] = { ...payload, collection: bestColl, location: bestLoc };
     });
     setSyncTargets((prev) => ({ ...prev, ...updates }));
   };
@@ -1914,7 +2084,7 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
           Run All
         </Button>
       </div>
-      <div className={`grid gap-3 ${gridColsClass(panels.length)}`}>
+      <div className={`grid gap-2 ${gridColsClass(panels.length)}`}>
         {panels.map((id, idx) => (
           <SingleMapPanel
             key={id}
@@ -1925,7 +2095,7 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
             onSyncRequest={idx === 0 ? handleSyncRequest : undefined}
             syncTarget={idx > 0 ? syncTargets[id] ?? null : undefined}
             runTrigger={runAllTrigger}
-            initialLayers={seedPanels[id]}
+            initialPanel={seedPanels[id]}
             onPersist={(serialized) => { snapshots.current.set(id, serialized); persistPanels(); }}
           />
         ))}
