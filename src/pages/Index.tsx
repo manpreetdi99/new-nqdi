@@ -1,4 +1,4 @@
-import { useState, useMemo, useEffect, Fragment } from "react";
+import { useState, useMemo, useEffect, useRef, Fragment } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
 import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp, History } from "lucide-react";
@@ -17,6 +17,7 @@ import QueryMap from "@/components/QueryMap";
 import ValidationTab from "@/components/ValidationTab";
 import SummaryTab from "@/components/SummaryTab";
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
+import { useUrlNullableStringState, useUrlStringListState, useUrlStringState } from "@/hooks/use-url-state"; //state που ζει στο URL (shareable link), με localStorage fallback
 import type { CallRecord } from "@/lib/callData";
 import {
   excludeCdrPingDuplicates,
@@ -113,6 +114,9 @@ const normalizeStatus = (status: string | null | undefined): CallRecord["status"
 };
 
 type StatusFilterKey = "completed" | "dropped" | "failed" | "system release";
+
+/** Οι τιμές που δέχεται το `?sub=` — ό,τι άλλο (χειρόγραφο URL) πέφτει πίσω στο "list". */
+const CALLS_SUB_TABS = ["list", "detail", "data-detail"] as const;
 
 const matchesStatusFilter = (status: string | null | undefined, filter: StatusFilterKey): boolean => {
   const normalized = (status || "").toLowerCase();
@@ -267,10 +271,10 @@ const formatGroupDeviceCount = (callDeviceCount: number, dataDeviceCount: number
 
 const Index = () => {
   const [databases, setDatabases] = useState<string[]>([]);
-  const [selectedDatabase, setSelectedDatabase] = useLocalStorage<string>("perf-insights-selected-db", "");
+  const [selectedDatabase, setSelectedDatabase] = useUrlStringState<string>("db", "", { storageKey: "perf-insights-selected-db" });
   const [collectionNames, setCollectionNames] = useState<string[]>([]);
   const [collectionsLoading, setCollectionsLoading] = useState(false);
-  const [selectedCallsCollections, setSelectedCallsCollections] = useLocalStorage<string[]>("perf-insights-collections", []);
+  const [selectedCallsCollections, setSelectedCallsCollections] = useUrlStringListState("collections", [], { storageKey: "perf-insights-collections" });
   const [locations, setLocations] = useState<string[]>([]);
   const [locationsLoading, setLocationsLoading] = useState(false);
   const [selectedLocations, setSelectedLocations] = useLocalStorage<string[]>("perf-insights-locations", []);
@@ -297,7 +301,7 @@ const Index = () => {
   const [summaryCollectionNames, setSummaryCollectionNames] = useState<string[]>([]);
   const [summaryCollectionsLoading, setSummaryCollectionsLoading] = useState(false);
   const [dataCallsLoading, setDataCallsLoading] = useState(false);
-  const [selectedDataSessionId, setSelectedDataSessionId] = useState<string | null>(null);
+  const [selectedDataSessionId, setSelectedDataSessionId] = useUrlNullableStringState("session");
   const [dataSessionsView, setDataSessionsView] = useLocalStorage<"flat" | "cycle">("perf-insights-data-sessions-view", "flat");
   const [callRecords, setCallRecords] = useState<CallRecord[]>([]);
 
@@ -312,13 +316,34 @@ const Index = () => {
   const [results, setResults] = useState<BenchmarkResult[]>([]);
   const [isRunning, setIsRunning] = useState(false);
   const [totalTime, setTotalTime] = useState(0);
-  const [selectedCall, setSelectedCall] = useState<CallRecord | null>(null);
-  const [activeTab, setActiveTab] = useLocalStorage<string>("perf-insights-active-tab", "queries");
+  // Στο URL ταξιδεύει μόνο το id· το CallRecord το βρίσκουμε ξανά από τα callRecords όταν
+  // φορτώσουν, ώστε ένα share link να ανοίγει το ίδιο Call Detail (και όχι άδεια οθόνη).
+  const [selectedCallId, setSelectedCallId] = useUrlNullableStringState("call");
+  const selectedCall = useMemo(
+    () => (selectedCallId ? callRecords.find((call) => String(call.callId) === selectedCallId) ?? null : null),
+    [callRecords, selectedCallId]
+  );
+  const [activeTab, setActiveTab] = useUrlStringState<string>("tab", "queries", { storageKey: "perf-insights-active-tab" });
+
+  // Το ύψος του sticky header δημοσιεύεται ως CSS variable, ώστε ό,τι άλλο κολλάει στην
+  // κορυφή (π.χ. το καρφιτσωμένο διάγραμμα σήματος στο Call Detail) να ξεκινά ακριβώς από
+  // κάτω του αντί να μαντεύει σταθερό offset — το header ψηλώνει με τα active-filter chips.
+  const headerRef = useRef<HTMLElement>(null);
+  useEffect(() => {
+    const element = headerRef.current;
+    if (!element) return;
+    const publish = () =>
+      document.documentElement.style.setProperty("--app-header-height", `${Math.round(element.getBoundingClientRect().height)}px`);
+    publish();
+    const observer = new ResizeObserver(publish);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, []);
   // "Call Detail" and "Data Detail" live as a sub-navbar inside the "All Calls" tab
-  const [callsSubTab, setCallsSubTab] = useState<"list" | "detail" | "data-detail">("list");
+  const [callsSubTab, setCallsSubTab] = useUrlStringState<"list" | "detail" | "data-detail">("sub", "list", { allowed: CALLS_SUB_TABS });
 
   const openCallDetail = (record: CallRecord) => {
-    setSelectedCall(record);
+    setSelectedCallId(String(record.callId));
     setActiveTab("calls");
     setCallsSubTab("detail");
   };
@@ -464,7 +489,7 @@ const Index = () => {
     setLocations([]);
     setAllCallsRows([]);
     setCallRecords([]);
-    setSelectedCall(null);
+    setSelectedCallId(null);
   };
 
   useEffect(() => {
@@ -577,7 +602,7 @@ const Index = () => {
       if (!selectedDatabase || selectedCallsCollections.length === 0) {
         setAllCallsRows([]);
         setCallRecords([]);
-        setSelectedCall(null);
+        setSelectedCallId(null);
         setDataCallsRows([]);
         setTechnologyMixRows([]);
         return;
@@ -600,12 +625,14 @@ const Index = () => {
       if (voiceResult.status === "fulfilled") {
         setAllCallsRows(voiceResult.value);
         setCallRecords(mapAllCallsRows(voiceResult.value));
-        setSelectedCall(null);
+        // Το selectedCall προκύπτει derived από τα callRecords (βλ. useMemo πάνω), οπότε δεν
+        // χρειάζεται συγχρονισμός εδώ: όσο η κλήση υπάρχει στα νέα αποτελέσματα το Call Detail
+        // μένει ανοιχτό — αν την έκοψαν τα φίλτρα, γίνεται από μόνο του null.
       } else {
         console.error("Failed to fetch voice calls:", voiceResult.reason);
         setAllCallsRows([]);
         setCallRecords([]);
-        setSelectedCall(null);
+        setSelectedCallId(null);
         const toastError = formatApiError(voiceResult.reason, "All Calls Fetch Failed");
         toast({ title: toastError.title, description: toastError.description, variant: "destructive" });
       }
@@ -1320,7 +1347,7 @@ const Index = () => {
         </div>
       )}
 
-      <header className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
+      <header ref={headerRef} className="border-b border-border bg-card/50 backdrop-blur-sm sticky top-0 z-50">
         <div className="w-full px-3 sm:px-6 lg:px-10 mx-auto flex items-center justify-between gap-2 py-3">
           <div className="flex min-w-0 items-center gap-2 sm:gap-3">
             <div className="h-8 w-8 rounded-md bg-primary/10 flex items-center justify-center glow-primary">
@@ -2193,7 +2220,7 @@ const Index = () => {
                   onNavigateToCall={(sessionId) => {
                     const record = callRecords.find((c) => String(c.callId) === String(sessionId));
                     if (record) {
-                      setSelectedCall(record);
+                      setSelectedCallId(String(record.callId));
                     } else {
                       toast({
                         title: "Η κλήση δεν βρέθηκε",
