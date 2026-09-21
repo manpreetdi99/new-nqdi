@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo, useRef, useCallback } from "react";
+import { useState, useEffect, useMemo, useRef, useCallback, Fragment } from "react";
 import { motion } from "framer-motion";
 import {
   ArrowLeft, Signal, Activity, Gauge, ArrowDown, ArrowUp,
@@ -171,6 +171,15 @@ function formatDateTime(iso: string): string {
   });
 }
 
+// Κάθε KPI γραμμή έχει StartTime/EndTime — η διαφορά τους είναι ο χρόνος που κράτησε
+// η διαδικασία (setup, handover κ.λπ.), οπότε τη δείχνουμε έτοιμη αντί να την υπολογίζει ο αναλυτής.
+function kpiDurationLabel(start: string | null | undefined, end: string | null | undefined): string | null {
+  if (!start || !end) return null;
+  const ms = new Date(end).getTime() - new Date(start).getTime();
+  if (!Number.isFinite(ms) || ms < 0) return null;
+  return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(2)} s`;
+}
+
 const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProps) => {
   // LTE/GSM radio measurement rows (A-side and B-side, for the "Radio Measurements" table + chart)
   // For VoNR/N26-HO calls, radioValues holds LTE + NR5G rows merged chronologically (see loadRadio below).
@@ -179,6 +188,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   const [bSideGsmValues, setBSideGsmValues] = useState<any[]>([]);
   const [mosValues, setMosValues] = useState<any[]>([]);
   const [kpiValues, setKpiValues] = useState<any[]>([]);
+  // Ποια γραμμή του KPI πίνακα είναι ανοιχτή (κλικ) και δείχνει όλα τα πεδία του ResultsKPI
+  const [expandedKpiRow, setExpandedKpiRow] = useState<string | null>(null);
   const [tracelogValues, setTracelogValues] = useState<TraceLogRow[]>([]);
   const [sideComparison, setSideComparison] = useState<CallSideComparisonRow[]>([]);
   const [bSideLteValues, setBSideLteValues] = useState<any[]>([]);
@@ -468,6 +479,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
 
         if (kpiRes.status === "fulfilled") {
           setKpiValues(kpiRes.value.kpiValues || []);
+          // Νέα κλήση → το ανοιχτό detail της προηγούμενης δεν αφορά αυτά τα δεδομένα
+          setExpandedKpiRow(null);
         }
 
         if (comparisonRes.status === "fulfilled") {
@@ -1766,6 +1779,41 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     return { times, lanes, callStart, callEnd };
   }, [unifiedDomain, callBounds, contextTechnology, techPeriods, techPeriodsBSide, selectedLteSide, srvccDetail, csfbDetail, call.callType, call.callMode, call.status]);
 
+  /**
+   * Ο πίνακας "Technology Timeline" και ο πίνακας "Αλλαγές τεχνολογίας" έδειχναν τα ίδια
+   * events από δύο διαφορετικά endpoints: το πρώτο μόνο μέσα στην κλήση, το δεύτερο σε
+   * παράθυρο ±contextWindowSec γύρω της (με phase). Τα ενώνουμε σε έναν πίνακα: βάση είναι
+   * τα context rows (έχουν phase), και όποιο timeline row δεν καλύπτεται από αυτά μπαίνει ως
+   * "during" — κάθε event εμφανίζεται μία φορά, σε κοινό άξονα χρόνου.
+   */
+  const mergedTechnology = useMemo(() => {
+    type MergedTechRow = TechnologyTimelineRow & { phase: string };
+    const keyOf = (r: { MsgTime: string | null; PrevTechnology: string | null; CurrTechnology: string | null }) =>
+      `${r.MsgTime ?? ""}|${r.PrevTechnology ?? ""}|${r.CurrTechnology ?? ""}`;
+
+    const rows = new Map<string, MergedTechRow>();
+    for (const row of contextTechnology as MergedTechRow[]) {
+      rows.set(keyOf(row), { ...row, phase: row.phase ?? "during" });
+    }
+    // SRVCC κλήσεις καλύπτονται από το KPI-backed panel παραπάνω — εκεί το timeline δεν προστίθεται
+    if (call.callMode !== "SRVCC") {
+      for (const row of technologyTimeline) {
+        const key = keyOf(row);
+        const existing = rows.get(key);
+        if (existing) {
+          // Το context row υπερισχύει, αλλά κρατάμε ό,τι λείπει από αυτό (π.χ. Duration)
+          rows.set(key, { ...row, ...existing, Duration: existing.Duration ?? row.Duration });
+        } else {
+          rows.set(key, { ...row, phase: "during" });
+        }
+      }
+    }
+
+    return [...rows.values()].sort(
+      (a, b) => new Date(a.MsgTime ?? 0).getTime() - new Date(b.MsgTime ?? 0).getTime()
+    );
+  }, [contextTechnology, technologyTimeline, call.callMode]);
+
   return (
     <motion.div
       initial={{ opacity: 0, x: 20 }}
@@ -2661,53 +2709,108 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
           {isLoadingRadio ? (
             <p className="text-xs text-muted-foreground">Φόρτωση δεδομένων...</p>
           ) : kpiValues && kpiValues.length > 0 ? (
-            <div className="overflow-x-auto max-h-[260px] overflow-y-auto">
-              <table className="w-full text-xs text-center">
-                <thead className="sticky top-0 bg-muted border-b border-border z-10">
-                  <tr>
-                    <th className="px-2 py-1 font-semibold">MsgTime</th>
-                    <th className="px-2 py-1 font-semibold">KPI</th>
-                    <th className="px-2 py-1 font-semibold">ErrorCode</th>
-                    <th className="px-2 py-1 font-semibold">Value3</th>
-                    <th className="px-2 py-1 font-semibold">Value4</th>
-                    <th className="px-2 py-1 font-semibold">Value5</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/50">
-                  {/* Copy the array before sorting — kpiValues itself must stay in API order */}
-                  {[...kpiValues]
-                    .sort((a, b) => new Date(a.StartTime).getTime() - new Date(b.StartTime).getTime())
-                    .map((val, idx) => {
-                      const isActive = isHoveredIso(val.StartTime);
-                      return (
-                        <tr
-                          key={idx}
-                          style={isActive ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" } : undefined}
-                          className={`transition-all duration-100 cursor-pointer ${isActive
-                            ? "bg-cyan-500/10"
-                            : "hover:bg-muted/40"
-                            }`}
-                          onMouseEnter={() => hoverIso(val.StartTime)}
-                          onMouseLeave={() => setHoveredTime(null)}
-                        >
-                          <td className="px-1 py-0.5 whitespace-nowrap">{formatDateTime(val.StartTime)}</td>
-                          <td className="px-1 py-0.5 font-mono">
-                            <div>{val.KPIShortName ?? KPI_LABELS[Number(val.KPIId)] ?? `KPI ${val.KPIId}`}</div>
-                            <div className="text-[9px] text-muted-foreground">ID {val.KPIId}</div>
-                          </td>
-                          <td className="px-1 py-0.5 font-mono">
-                            <div>{val.KPIStatus ?? (Number(val.ErrorCode) === 0 ? "Successful" : "Failed")}</div>
-                            <div className="text-[9px] text-muted-foreground">{val.ErrorCode}</div>
-                          </td>
-                          <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value3}</td>
-                          <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value4}</td>
-                          <td className="px-1 py-0.5 font-mono max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value5}</td>
-                        </tr>
-                      );
-                    })}
-                </tbody>
-              </table>
-            </div>
+            <>
+              <div className="overflow-x-auto max-h-[260px] overflow-y-auto">
+                <table className="w-full text-xs text-center">
+                  <thead className="sticky top-0 bg-muted border-b border-border z-10">
+                    <tr>
+                      <th className="px-2 py-1 font-semibold">MsgTime</th>
+                      <th className="px-2 py-1 font-semibold text-[10px]">KPI</th>
+                      <th className="px-2 py-1 font-semibold text-[10px]">Status / Code</th>
+                      <th className="px-2 py-1 font-semibold text-[10px]">Value3</th>
+                      <th className="px-2 py-1 font-semibold text-[10px]">Value4</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-border/50">
+                    {/* Copy the array before sorting — kpiValues itself must stay in API order */}
+                    {[...kpiValues]
+                      .sort((a, b) => new Date(a.StartTime).getTime() - new Date(b.StartTime).getTime())
+                      .map((val, idx) => {
+                        const isActive = isHoveredIso(val.StartTime);
+                        const rowKey = `${val.MsgId ?? "row"}-${idx}`;
+                        const isOpen = expandedKpiRow === rowKey;
+                        const failed = Number(val.ErrorCode) !== 0;
+                        const duration = kpiDurationLabel(val.StartTime, val.EndTime);
+                        // Τα πεδία που δεν χωράνε στις 6 στήλες — φαίνονται στο detail της γραμμής
+                        const extras: [string, React.ReactNode][] = [
+                          ["KPI Name", val.KPIName ?? KPI_LABELS[Number(val.KPIId)] ?? "—"],
+                          ["KPI Id", val.KPIId ?? "—"],
+                          ["Status", val.KPIStatus ?? (failed ? "Failed" : "Successful")],
+                          ["ErrorCode", val.ErrorCode ?? "—"],
+                          ["StartTime", val.StartTime ? formatDateTime(val.StartTime) : "—"],
+                          ["EndTime", val.EndTime ? formatDateTime(val.EndTime) : "—"],
+                          ["Duration", duration ?? "—"],
+                          ["Counter", val.Counter ?? "—"],
+                          ["Value1", val.Value1 ?? "—"],
+                          ["Value2", val.Value2 ?? "—"],
+                          ["Value3", val.Value3 ?? "—"],
+                          ["Value4", val.Value4 ?? "—"],
+                          ["Value5", val.Value5 ?? "—"],
+                          ["MsgId", val.MsgId ?? "—"],
+                          ["TestId", val.TestId ?? "—"],
+                          ["SessionId", val.SessionId ?? "—"],
+                        ];
+                        return (
+                          <Fragment key={rowKey}>
+                            <tr
+                              style={isActive ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" } : undefined}
+                              className={`transition-all duration-100 cursor-pointer ${isActive
+                                ? "bg-cyan-500/10"
+                                : isOpen
+                                  ? "bg-muted/60"
+                                  : "hover:bg-muted/40"
+                                }`}
+                              onMouseEnter={() => hoverIso(val.StartTime)}
+                              onMouseLeave={() => setHoveredTime(null)}
+                              onClick={() => setExpandedKpiRow(isOpen ? null : rowKey)}
+                              title="Κλικ για όλα τα πεδία του KPI"
+                            >
+                              <td className="px-1 py-0.5 whitespace-nowrap w-px">
+                                <div className="flex items-center gap-1">
+                                  <ChevronRight className={`h-2.5 w-2.5 shrink-0 text-muted-foreground transition-transform ${isOpen ? "rotate-90" : ""}`} />
+                                  <span className="text-[10px]">{formatDateTime(val.StartTime)}</span>
+                                </div>
+                                {/* Η διάρκεια είναι το πιο χρήσιμο νούμερο ενός KPI (setup/handover time) */}
+                                {duration && <div className="text-[9px] text-muted-foreground font-mono pl-3.5">{duration}</div>}
+                              </td>
+                              <td className="px-1 py-0.5 font-mono text-[10px]">
+                                <div title={val.KPIName ?? undefined}>{val.KPIShortName ?? KPI_LABELS[Number(val.KPIId)] ?? `KPI ${val.KPIId}`}</div>
+                                <div className="text-[8px] text-muted-foreground">ID {val.KPIId}</div>
+                              </td>
+                              <td className="px-1 py-0.5 font-mono text-[10px]">
+                                <div className={failed ? "text-red-500" : "text-emerald-500"}>
+                                  {val.KPIStatus ?? (failed ? "Failed" : "Successful")}
+                                </div>
+                                <div className="text-[8px] text-muted-foreground">{val.ErrorCode}</div>
+                              </td>
+                              <td className="px-1 py-0.5 font-mono text-[10px] max-w-[80px] break-all whitespace-normal overflow-hidden">{val.Value3}</td>
+                              {/* Το Value4 κρατάει τη μεγαλύτερη συμβολοσειρά (π.χ. cause/description),
+                                  οπότε παίρνει τον χώρο που ελευθέρωσε η στήλη Value5 */}
+                              <td className="px-1 py-0.5 font-mono text-[10px] min-w-[160px] break-all whitespace-normal">{val.Value4}</td>
+                            </tr>
+
+                            {isOpen && (
+                              <tr className="bg-muted/30">
+                                <td colSpan={5} className="px-2 py-1.5 text-left">
+                                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-x-3 gap-y-1">
+                                    {extras.map(([label, value]) => (
+                                      <div key={label} className="min-w-0">
+                                        <div className="text-[9px] uppercase tracking-wide text-muted-foreground">{label}</div>
+                                        <div className="text-[11px] font-mono text-foreground break-all">{value}</div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </td>
+                              </tr>
+                            )}
+                          </Fragment>
+                        );
+                      })}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-[9px] text-muted-foreground mt-1">Κλικ σε γραμμή για όλα τα πεδία (Value1/2/5, Counter, EndTime, IDs).</p>
+            </>
           ) : (
             <p className="text-xs text-muted-foreground">Δεν υπάρχουν KPI δεδομένα.</p>
           )}
@@ -2929,61 +3032,13 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
           )}
         </div>
 
-        {/* Technology Timeline panel: SRVCC calls use the KPI-backed transition panel above;
-            other call modes retain the legacy technology table. */}
-        {call.callMode !== "SRVCC" && <div className="bg-card border border-border rounded-lg p-2">
-          <h3 className="text-xs font-semibold text-foreground mb-1 flex items-center gap-1.5">
-            <Signal className="h-3 w-3 text-primary" />
-            Technology Timeline
-          </h3>
-
-          {isLoadingRadio ? (
-            <p className="text-xs text-muted-foreground">Φόρτωση δεδομένων...</p>
-          ) : technologyTimeline.length > 0 ? (
-            <div className="overflow-x-auto max-h-[260px] overflow-y-auto">
-              <table className="w-full text-xs text-left">
-                <thead className="sticky top-0 bg-muted border-b border-border z-10">
-                  <tr>
-                    <th className="px-2 py-1 font-semibold">MsgTime</th>
-                    <th className="px-2 py-1 font-semibold">Prev → Curr</th>
-                    <th className="px-2 py-1 font-semibold">Band</th>
-                    <th className="px-2 py-1 font-semibold">CA (LTE/NR)</th>
-                    <th className="px-2 py-1 font-semibold">Duration</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-border/50">
-                  {technologyTimeline.map((t, idx) => (
-                    <tr key={idx} className="hover:bg-muted/40">
-                      <td className="px-1 py-0.5 whitespace-nowrap">{t.MsgTime ? formatDateTime(t.MsgTime) : "N/A"}</td>
-                      <td className="px-1 py-0.5 font-mono">
-                        <span className="text-muted-foreground">{t.PrevTechnology ?? "—"}</span>
-                        {" → "}
-                        <span className="text-foreground font-bold">{t.CurrTechnology ?? "—"}</span>
-                      </td>
-                      <td className="px-1 py-0.5 font-mono">{t.Band ?? "—"}</td>
-                      <td className="px-1 py-0.5 font-mono">
-                        {t.LTEDLCarriers != null || t.NR5GDLCarriers != null
-                          ? `${t.LTEDLCarriers ?? 0}/${t.NR5GDLCarriers ?? 0}`
-                          : "—"}
-                      </td>
-                      <td className="px-1 py-0.5 font-mono">{t.Duration != null ? `${t.Duration} ms` : "—"}</td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="text-xs text-muted-foreground">Δεν υπάρχουν δεδομένα τεχνολογίας.</p>
-          )}
-        </div>}
-
       </div>
 
       {/* ── Αλλαγές τεχνολογίας ──
           Το διάγραμμα σήματος και το Session Overview που βρίσκονταν εδώ έχουν ενωθεί με το
           κύριο διάγραμμα της κάρτας (CallSignalChart) πάνω σε έναν κοινό άξονα χρόνου· εδώ
           μένει ο πίνακας των αλλαγών, που δεν έχει νόημα ως καμπύλη. */}
-      {contextTechnology.length > 0 && (
+      {mergedTechnology.length > 0 && (
         <div className="bg-card border border-border rounded-lg p-3 space-y-3">
           <h3 className="text-sm font-semibold text-foreground">
             Συμπεριφορά δικτύου ±{contextWindowSec}δευτ. πριν / μετά κλήση
@@ -2996,10 +3051,13 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
           )}
 
 
-          {/* Technology changes table */}
+          {/* Technology changes table — ενιαίος πίνακας: events της κλήσης (πρώην
+              "Technology Timeline") μαζί με όσα συμβαίνουν πριν/μετά μέσα στο παράθυρο */}
           <div>
-              <p className="text-xs text-muted-foreground mb-1">Αλλαγές τεχνολογίας</p>
-              <div className="overflow-x-auto max-h-[140px] overflow-y-auto rounded border border-border/50">
+              <p className="text-xs text-muted-foreground mb-1">
+                Αλλαγές τεχνολογίας <span className="text-[10px]">({mergedTechnology.length} events — κλήση + παράθυρο ±{contextWindowSec}δευτ.)</span>
+              </p>
+              <div className="overflow-x-auto max-h-[240px] overflow-y-auto rounded border border-border/50">
                 <table className="w-full text-xs text-center">
                   <thead className="sticky top-0 bg-muted border-b border-border z-10">
                     <tr>
@@ -3009,11 +3067,12 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                       <th className="px-2 py-1 font-semibold">Band</th>
                       <th className="px-2 py-1 font-semibold">LTE CA</th>
                       <th className="px-2 py-1 font-semibold">5G CA</th>
+                      <th className="px-2 py-1 font-semibold">Duration</th>
                       <th className="px-2 py-1 font-semibold">Φάση</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/50">
-                    {contextTechnology.map((row, i) => {
+                    {mergedTechnology.map((row, i) => {
                       // Same before/during/after color convention as the charts above (amber/primary/orange)
                       const phaseColor =
                         row.phase === "before" ? "bg-amber-500/10 text-amber-400" :
@@ -3028,12 +3087,13 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                           style={isActive ? { boxShadow: "inset 3px 0 0 hsl(180, 90%, 55%)" } : undefined}
                           className={`transition-colors cursor-pointer ${isActive ? "bg-cyan-500/10" : "hover:bg-muted/40"}`}
                         >
-                          <td className="px-2 py-0.5 font-mono">{new Date(row.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}</td>
+                          <td className="px-2 py-0.5 font-mono">{row.MsgTime ? new Date(row.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}</td>
                           <td className="px-2 py-0.5 text-muted-foreground">{row.PrevTechnology ?? "—"}</td>
                           <td className="px-2 py-0.5 font-semibold">{row.CurrTechnology ?? "—"}</td>
                           <td className="px-2 py-0.5">{row.Band ?? "—"}</td>
                           <td className="px-2 py-0.5">{row.LTEDLCarriers != null ? `${row.LTEDLCarriers}DL/${row.LTEULCarriers}UL` : "—"}</td>
                           <td className="px-2 py-0.5">{row.NR5GDLCarriers != null ? `${row.NR5GDLCarriers}DL/${row.NR5GULCarriers}UL` : "—"}</td>
+                          <td className="px-2 py-0.5 font-mono">{row.Duration != null ? `${row.Duration} ms` : "—"}</td>
                           <td className={`px-2 py-0.5 font-semibold rounded ${phaseColor}`}>{row.phase}</td>
                         </tr>
                       );

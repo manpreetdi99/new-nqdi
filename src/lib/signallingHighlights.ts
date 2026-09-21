@@ -72,10 +72,15 @@ const LTE_RULES: Array<{ sev: Severity; re: RegExp; reason: string }> = [
     reason: "Forced inter-RAT / cancel / bearer deactivation mid-call",
   },
   // yellow — context
+  //
+  // Τα measurement reports ΔΕΝ μπαίνουν εδώ: είναι το πιο πυκνό μήνυμα του log
+  // (ένα ανά ~0.5s) και το να βάφονται όλα «signal struggle» έκρυβε τα πραγματικά
+  // ευρήματα μέσα σε χιλιάδες κίτρινες γραμμές. Οι στάθμες σήματος διαβάζονται
+  // στα διαγράμματα radio, όχι με κίτρινη ταμπέλα ανά μέτρηση στο L3 log.
   {
     sev: "yellow",
-    re: /MeasurementReport|Modify EPS bearer/i,
-    reason: "Signal struggle / codec-QoS churn",
+    re: /Modify EPS bearer/i,
+    reason: "Codec / QoS churn mid-call",
   },
 ];
 
@@ -101,12 +106,8 @@ const GSM_RULES: Array<{ sev: Severity; re: RegExp; reason: string }> = [
     re: /Immediate Assignment Reject|Channel Mode Modify|Classmark (Change|Enquiry)/i,
     reason: "Congestion / codec instability / classmark churn",
   },
-  // yellow — context
-  {
-    sev: "yellow",
-    re: /Measurement Report/i,
-    reason: "Signal struggle (precursor to HO/drop)",
-  },
+  // Χωρίς yellow κανόνα: ο μόνος που υπήρχε ήταν το Measurement Report, που για τους
+  // ίδιους λόγους με το LTE παραπάνω δεν χρωματίζεται στον L3 πίνακα.
 ];
 
 /** CC causes considered normal — a Disconnect/Release with these is green. */

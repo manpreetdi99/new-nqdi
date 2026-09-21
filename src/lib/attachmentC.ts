@@ -840,6 +840,12 @@ export interface DataTestSection {
   group: string;
   byOperator: Map<string, DataTestStats>;
   total: DataTestStats;
+  /**
+   * Μόνο στα merged compact sections — "HTTPS sites (all sites combined)" (βλ.
+   * buildHttpsSitesTotal) ή "Ping (all sizes combined)" (βλ. buildPingTotal) — τι μπήκε
+   * μέσα στο merge, για tooltip στο section title (βλ. SummaryTab's DataSectionBlock).
+   */
+  combinedFrom?: string[];
 }
 
 const DIRECTION_LABELS: Record<string, string> = { dl: "DL", ul: "UL", downlink: "DL", uplink: "UL" };
@@ -874,6 +880,11 @@ const NO_DL_SUFFIX_TESTS = /https?\s*browser|^youtube service/i;
 const SECTION_LABEL_RENAMES: Record<string, string> = {
   "HTTP Transfer (DL)": "HTTP Transfer (DL) 10MB",
   "HTTP UL": "HTTP Transfer (UL) 5MB",
+  // "walk" DBs: ίδιο test, ένα κοινό TestName "HTTP TRANSFER" και για τις δύο κατευθύνσεις
+  // (χωρίς παρένθεση όπως στο drive) — 2026-09-21, βγαίνε ξεχωριστό ασύνδετο section στο
+  // compact αντί να μπει στο Ε1 merge/COMPACT_EXCLUDED_SECTION_LABELS σαν το drive.
+  "HTTP TRANSFER DL": "HTTP Transfer (DL) 10MB",
+  "HTTP TRANSFER UL": "HTTP Transfer (UL) 5MB",
   // Capacity ανά Link (grx/akamai) — βλ. mapCapacityLinkRowsToDataCallRows. ΕΠΙΠΛΕΟΝ
   // sections δίπλα στα κύρια "Capacity DL 10GB"/"Capacity UL 1GB" (CDRCombined), μόνο
   // στο Full mode (βλ. COMPACT_EXCLUDED_SECTION_LABELS στο SummaryTab.tsx).
@@ -1152,6 +1163,19 @@ const parenOrWhole = (l: string): string => {
 const httpsSiteKeyword = (l: string): string | null =>
   HTTPS_SITE_ORDER.find((keyword) => parenOrWhole(l).includes(keyword)) ?? null;
 
+/**
+ * Καθαρό, ανθρώπινο όνομα site από ένα section label — για το tooltip του "HTTPS sites
+ * (all sites combined)" (βλ. buildHttpsSitesTotal). Ξεφλουδίζει το "Browser (X)" wrapper,
+ * το "https://www." πρόθεμα, και το trailing " DL"/" UL" — ό,τι raw format κι αν έφτασε
+ * ("HTTPS Browser (alpha)" -> "alpha", "https://www.amazon.com" -> "amazon.com",
+ * "Sport24 DL" -> "Sport24").
+ */
+const siteDisplayName = (label: string): string =>
+  parenOrWhole(label)
+    .replace(/^https?:\/\/(www\.)?/i, "")
+    .replace(/\s+(dl|ul)$/i, "")
+    .trim();
+
 /** Σειρά μεταξύ των "YouTube Service*" sections: plain, μετά _4K, μετά _Live. */
 /**
  * Space, όχι underscore — ίδια μορφή με το SECTION_LABEL_RENAMES's "YouTube Service
@@ -1159,6 +1183,14 @@ const httpsSiteKeyword = (l: string): string | null =>
  * μετονομασμένο label, όχι στο raw testType).
  */
 const YOUTUBE_SERVICE_ORDER = ["youtube service", "youtube service 4k", "youtube service live"];
+
+/**
+ * Ένα TestName που ξεκινάει από "youtube" ΚΑΙ δεν είναι το γυμνό site-load domain
+ * "youtube.com" (βλ. HTTPS_SITE_ORDER/httpsSiteKeyword — Ε4, όχι εδώ) — δηλαδή το ίδιο το
+ * video-streaming test, drive "YouTube Service*" ή walk bare "YouTube"/"YouTube Live"/
+ * "YouTube 4K" (2026-09-21, χωρίς "Service"). Το (?!\.) αποκλείει ρητά το "youtube.com".
+ */
+const YOUTUBE_VIDEO_TEST_RE = /^youtube\b(?!\.)/;
 
 /**
  * Ε2 · Latency / Responsiveness — A-LEVEL "PING RAW.sql" reference query (ίδιο με το
@@ -1231,7 +1263,8 @@ export const pingPacketSizeBytes = (label: string): number | null => {
 const KEPLER_PAUSE_RE = /^kepler\b.*(pause|\b2\b)/i;
 
 interface SectionGroup {
-  match: (l: string) => boolean;
+  /** `l` = lowercased label. `original` = πριν το lowercase (βλ. γενικό DL/UL site κανόνα, που χρειάζεται το casing). */
+  match: (l: string, original: string) => boolean;
   /** Σειρά ΜΕΣΑ στο group· χωρίς αυτό, ισοπαλία -> count-sort σαν πριν. */
   subRank?: (l: string) => number;
   group: string;
@@ -1260,29 +1293,51 @@ const SECTION_ORDER: SectionGroup[] = [
   { match: (l) => KEPLER_PAUSE_RE.test(parenOrWhole(l)), group: SECTION_GROUP_LABELS.browserEngines },
   { match: (l) => /^newton\b/.test(parenOrWhole(l)), group: SECTION_GROUP_LABELS.browserEngines },
   {
-    // "YouTube Service*" tests περιέχουν κι αυτά "youtube" σαν substring — αποκλείονται
-    // ρητά εδώ ώστε να μην τα αρπάξει το Ε4 group αντί για το σωστό τους Ε5.
-    match: (l) => !l.includes("service") && httpsSiteKeyword(l) !== null,
+    // Ε4 · HTTPS sites — εκτός "youtube" ΒΙΝΤΕΟ tests (βλ. YOUTUBE_VIDEO_TEST_RE): το site-load
+    // test του youtube μπορεί να φτάσει σαν γυμνό domain "youtube.com" (βλ. test fixture
+    // "groups every HTTPS site test into Ε4...") — αυτό ΞΕΚΙΝΑΕΙ κι αυτό από "youtube" αλλά
+    // ΔΕΝ είναι το ίδιο με το video-streaming test, γι' αυτό το lookahead (?!\.) στο regex.
+    match: (l) => !YOUTUBE_VIDEO_TEST_RE.test(l) && httpsSiteKeyword(l) !== null,
     subRank: (l) => HTTPS_SITE_ORDER.indexOf(httpsSiteKeyword(l)!),
     group: SECTION_GROUP_LABELS.httpsSites,
   },
   {
-    match: (l) => YOUTUBE_SERVICE_ORDER.includes(l),
-    subRank: (l) => YOUTUBE_SERVICE_ORDER.indexOf(l),
+    // Ε5 · Video streaming: "youtube service*" (drive, exact) ΚΑΙ οποιοδήποτε άλλο bare
+    // "youtube ..." TestName (2026-09-21, walk DBs: "YouTube"/"YouTube Live"/"YouTube 4K",
+    // χωρίς το "Service" που έχει το drive) — ίδιο group, όποιο κι αν είναι το raw naming.
+    match: (l) => YOUTUBE_VIDEO_TEST_RE.test(l),
+    subRank: (l) => (YOUTUBE_SERVICE_ORDER.includes(l) ? YOUTUBE_SERVICE_ORDER.indexOf(l) : YOUTUBE_SERVICE_ORDER.length),
     group: SECTION_GROUP_LABELS.videoStreaming,
+  },
+  // Γενικός κανόνας (2026-09-21, "walk" DBs): ένα TestName με DL/UL κατάληξη που δεν
+  // αναγνωρίστηκε από κανέναν παραπάνω κανόνα (π.χ. "Sport24 DL", άγνωστο site εκτός
+  // HTTPS_SITE_ORDER) θεωρείται HTTPS site test — μπαίνει στο ίδιο Ε4/"HTTPS sites (all
+  // sites combined)" merge (βλ. buildHttpsSitesTotal) αντί να μείνει ορφανό ξεχωριστό
+  // section στο compact. Τελευταίο στη λίστα ώστε να μην αρπάζει tests που ήδη
+  // αναγνωρίζονται σωστά αλλού (Capacity/HTTP Transfer/Ookla/Ping/DNS/Interactivity/
+  // Kepler/Newton/YouTube Service).
+  //
+  // ΜΟΝΟ για site-λεξιλόγιο, ΟΧΙ για πρωτόκολλα/ακρωνύμια: ένα ολόκληρο-κεφαλαίο test
+  // name (π.χ. "FTP DL", "SMTP DL") ΔΕΝ μπαίνει εδώ — μένει unmatched σαν πριν (βλ.
+  // UNMATCHED_RANK, ρητό test case attachmentC.test.ts). Το testType ενός site έχει
+  // πάντα τουλάχιστον ένα πεζό γράμμα (site/domain name, π.χ. "Sport24", όχι ακρωνύμιο).
+  {
+    match: (l, original) => /\s(dl|ul)$/.test(l) && /[a-z]/.test(original.replace(/\s(dl|ul)$/i, "")),
+    group: SECTION_GROUP_LABELS.httpsSites,
   },
 ];
 
 /**
- * Ό,τι δεν ταιριάζει σε κανένα SECTION_ORDER group (π.χ. ένα απλό "Ping" χωρίς
- * μέγεθος, ή ένα ad-hoc "FTP DL") — ακριβώς πριν το Ping 40/800/1000 group, ίδια
- * σχετική θέση με το παλιό "rank 3" catch-all.
+ * Ό,τι δεν ταιριάζει σε κανένα SECTION_ORDER group (π.χ. ένα απλό "Ping" χωρίς μέγεθος,
+ * ή "FTP" χωρίς DL/UL κατάληξη — βλ. και τον γενικό DL/UL→HTTPS site κανόνα παραπάνω,
+ * που πιάνει τα υπόλοιπα) — ακριβώς πριν το Ping 40/800/1000 group, ίδια σχετική θέση
+ * με το παλιό "rank 3" catch-all.
  */
-const UNMATCHED_RANK = SECTION_ORDER.findIndex((group) => group.match("ping 40 b")) - 0.5;
+const UNMATCHED_RANK = SECTION_ORDER.findIndex((group) => group.match("ping 40 b", "ping 40 b")) - 0.5;
 
 const sectionRank = (label: string): [number, number] => {
   const l = label.toLowerCase();
-  const index = SECTION_ORDER.findIndex((group) => group.match(l));
+  const index = SECTION_ORDER.findIndex((group) => group.match(l, label));
   if (index === -1) return [UNMATCHED_RANK, 0];
   const group = SECTION_ORDER[index];
   return [index, group.subRank ? group.subRank(l) : 0];
@@ -1291,7 +1346,7 @@ const sectionRank = (label: string): [number, number] => {
 /** Το "Εν · ..." group label ενός section, για group headers στο SummaryTab. "" όταν unmatched. */
 export const sectionGroupOf = (label: string): string => {
   const l = label.toLowerCase();
-  return SECTION_ORDER.find((group) => group.match(l))?.group ?? "";
+  return SECTION_ORDER.find((group) => group.match(l, label))?.group ?? "";
 };
 
 /**
@@ -1528,6 +1583,7 @@ export const buildHttpsSitesTotal = (sections: DataTestSection[]): DataTestSecti
     group: SECTION_GROUP_LABELS.httpsSites,
     byOperator,
     total: mergeWeightedTestStats(siteSections.map((section) => section.total)),
+    combinedFrom: [...new Set(siteSections.map((section) => siteDisplayName(section.label)))].sort((a, b) => a.localeCompare(b)),
   };
 
   const result: DataTestSection[] = [];
@@ -1583,6 +1639,10 @@ export const buildPingTotal = (sections: DataTestSection[]): DataTestSection[] =
     group: SECTION_GROUP_LABELS.latency,
     byOperator,
     total: mergeWeightedTestStats(pingSections.map((section) => section.total)),
+    // Αριθμητική ταξινόμηση (40 B -> 800 B -> 1000 B), όχι αλφαβητική ("1000 B" < "40 B" as string).
+    combinedFrom: [...pingSections]
+      .sort((a, b) => (pingPacketSizeBytes(a.label) ?? 0) - (pingPacketSizeBytes(b.label) ?? 0))
+      .map((section) => section.label.replace(/^ping\s+/i, "")),
   };
 
   const result: DataTestSection[] = [];
