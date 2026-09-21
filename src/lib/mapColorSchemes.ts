@@ -134,6 +134,16 @@ export const COLOR_SCHEMES: Record<string, ColorScheme> = {
     ],
     defaultColor: "#808080",
   },
+  call_fail_drop: {
+    type: "category",
+    label: "Problem Calls – Drop / Fail",
+    suggestCol: "status",
+    categories: [
+      { value: "Dropped", color: "#ff0000" },
+      { value: "Failed",  color: "#ff8000" },
+    ],
+    defaultColor: "#808080",
+  },
   http_transfer: {
     type: "range",
     label: "HTTP Transfer / 10MB (kbps)",

@@ -507,30 +507,6 @@ ORDER BY GR.FullDate`,
   },
 
   {
-    label: "GSM Radio – RxQual",
-    category: "GSM",
-    mode: "points",
-    valueCol: "RxQual",
-    colorScheme: "rxqualsub_gsm",
-    labelCol: "Location",
-    sql: `SELECT
-  gr.RxQual,
-  gr.RxLev,
-  gr.BCCH,
-  gr.BSIC,
-  fl.ASideLocation    AS Location,
-  fl.CollectionName,
-  CAST(pos.Latitude  AS FLOAT) AS latitude,
-  CAST(pos.Longitude AS FLOAT) AS longitude
-FROM [dbo].[FactGSMRadio] gr
-LEFT JOIN [dbo].[FileList] fl  ON fl.[FileId]  = gr.[FileId]
-LEFT JOIN [dbo].[Position] pos ON pos.[PosId]  = gr.[PosId]
-WHERE gr.RxQual IS NOT NULL
-  AND fl.CollectionName = '{collection}'
-  AND fl.ASideLocation  = '{location}'
-ORDER BY gr.FullDate`,
-  },
-  {
     label: "MOS FREE/GSM",
     category: "MOS",
     mode: "points",
@@ -585,6 +561,44 @@ LEFT JOIN Position P  ON P.PosId = CA.PosId
 WHERE S.Valid IN (0, 1)
   AND FL.CollectionName = '{collection}'
   AND FL.ASideLocation  = '{location}'
+ORDER BY CA.SessionId DESC`,
+  },
+  {
+    label: "Problem Calls (Drop / Fail)",
+    category: "Calls",
+    mode: "points",
+    valueCol: "status",
+    colorScheme: "call_fail_drop",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  CASE
+    WHEN CA.callStatus LIKE '%drop%' THEN 'Dropped'
+    WHEN CA.callStatus LIKE '%fail%' THEN 'Failed'
+    ELSE CA.callStatus
+  END                          AS status,
+  CA.callStatus                AS callStatus_raw,
+  CA.SessionId,
+  CA.technology,
+  CA.callMode,
+  CA.callType,
+  CA.callDir,
+  ROUND(CA.setupTime, 2)       AS setupTime,
+  (CA.callDuration / 1000)     AS callDuration_s,
+  DF.CollectionName,
+  DF.ASideLocation             AS Location,
+  CAST(POS.Latitude  AS FLOAT) AS latitude,
+  CAST(POS.Longitude AS FLOAT) AS longitude
+FROM CallAnalysis CA
+LEFT JOIN FileList DF ON CA.FileId    = DF.FileId
+LEFT JOIN Position POS ON CA.PosId    = POS.PosId
+LEFT JOIN Sessions S   ON S.SessionId = CA.SessionId
+WHERE S.Valid = 1
+  AND CA.callStatus NOT IN ('completed', 'System Release')
+  AND POS.Latitude  IS NOT NULL
+  AND POS.Longitude IS NOT NULL
+  AND DF.CollectionName = '{collection}'
+  AND DF.ASideLocation  = '{location}'
 ORDER BY CA.SessionId DESC`,
   },
   {
