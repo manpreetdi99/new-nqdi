@@ -935,18 +935,29 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   const fmtMetric = (v: number | null | undefined, decimals: number, suffix: string) =>
     v != null ? `${v.toFixed(decimals)}${suffix}` : "—";
 
+  // Τα δύο άκρα του throughput ζουν στο ίδιο tile: μια κλήση κουβαλάει ~24 kbps RTP, ένα
+  // capacity test 400+ Mbps. Με σταθερό " Mbps" και ένα δεκαδικό, ό,τι είναι κάτω από
+  // 50 kbps εμφανιζόταν ως "0.0 Mbps" — γι' αυτό κάτω από 1 Mbps γυρνάμε σε kbps.
+  const fmtThroughput = (v: number | null | undefined) => {
+    if (v == null) return "—";
+    return v >= 1 ? `${v.toFixed(1)} Mbps` : `${Math.round(v * 1000)} kbps`;
+  };
+
   // KPI tile values fall back to per-call fields when the dedicated KPI tile endpoint has no data
   const avgMos = callKpiTile?.AvgMOS ?? (call.avgMos || null);
-  const downloadMbps = callKpiTile?.Download_Mbps ?? null;
-  const uploadMbps = callKpiTile?.Upload_Mbps ?? null;
+  // Throughput: το 0 σημαίνει "καμία μέτρηση", όχι "μηδενική ταχύτητα" — το backend
+  // κόβει ήδη τα idle 0-samples, οπότε ό,τι φτάνει εδώ ως 0 δεν είναι πραγματική μέτρηση.
+  // Με `||` γλιστράει στο per-call field και, αν κι αυτό είναι 0, το tile δείχνει "—".
+  const downloadMbps = callKpiTile?.Download_Mbps || (call.downloadSpeed || null);
+  const uploadMbps = callKpiTile?.Upload_Mbps || (call.uploadSpeed || null);
   const latencyMs = callKpiTile?.Latency_ms ?? null;
   const jitterMs = callKpiTile?.Jitter_ms ?? null;
   const packetLossPct = callKpiTile?.PacketLoss_pct ?? null;
 
   // Definitions for the inline metrics strip shown in the top controls bar
   const metrics = [
-    { label: "Download", value: fmtMetric(downloadMbps, 1, " Mbps"), icon: ArrowDown, color: "text-primary" },
-    { label: "Upload", value: fmtMetric(uploadMbps, 1, " Mbps"), icon: ArrowUp, color: "text-accent" },
+    { label: "Download", value: fmtThroughput(downloadMbps), icon: ArrowDown, color: "text-primary" },
+    { label: "Upload", value: fmtThroughput(uploadMbps), icon: ArrowUp, color: "text-accent" },
     { label: "Latency", value: fmtMetric(latencyMs, 0, " ms"), icon: Gauge, color: "text-warning" },
     { label: "AVG Mos", value: fmtMetric(avgMos, 2, ""), icon: Gauge, color: "text-warning" },
     { label: "Jitter", value: fmtMetric(jitterMs, 1, " ms"), icon: Activity, color: "text-chart-4" },

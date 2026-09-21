@@ -16,7 +16,11 @@ def get_call_kpi_tile(
 ):
     """Dashboard tile metrics for one call: download/upload, latency, avg MOS,
     jitter, packet loss, setup time. Each metric lives in a different table,
-    so scalar subqueries are used instead of JOINs to avoid row fan-out."""
+    so scalar subqueries are used instead of JOINs to avoid row fan-out.
+
+    Download/Upload: IP layer (FactIPThroughput) πρώτα, με τα 0-samples εκτός
+    μέσου όρου, και fallback στο application layer (FactDataApplications) για
+    sessions που δεν έχουν IP rows — αλλιώς το tile έδειχνε 0.0 Mbps."""
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
@@ -41,13 +45,56 @@ def get_call_kpi_tile(
                    FROM FactVoLTE v
                   WHERE v.SessionId = @sid)                     AS PacketLoss_pct,
 
-                (SELECT ROUND(AVG(ipt.ThroughputKbps_DL) / 1000.0, 2)
-                   FROM FactIPThroughput ipt
-                  WHERE ipt.SessionId = @sid)                   AS Download_Mbps,
+                /* Download/Upload — ΜΟΝΟ από data tests (FactDataApplications). Αν το
+                   session δεν έχει τρέξει data test, τα tiles μένουν NULL και το UI δείχνει
+                   "—". Το FactIPThroughput ΔΕΝ χρησιμοποιείται ως fallback: έχει per-second
+                   samples για κάθε session, οπότε έδινε "μετρήσεις" και σε σκέτες κλήσεις —
+                   π.χ. η CS GSM κλήση 846108557318 (EAE_26H2, μηδέν data test rows) έβγαζε
+                   148 kbps DL / 2 kbps UL από background IP κίνηση. Τα GSM κινητά δεν
+                   τρέχουν data tests· ό,τι περνάει από εκεί είναι θόρυβος, όχι throughput.
 
-                (SELECT ROUND(AVG(ipt.ThroughputKbps_UL) / 1000.0, 2)
-                   FROM FactIPThroughput ipt
-                  WHERE ipt.SessionId = @sid)                   AS Upload_Mbps,
+                   Οι στήλες είναι kbps — επιβεβαιωμένο πάνω στα δεδομένα: Capacity row με
+                   BytesTransferredDL=35.034.607 σε Duration=7,434s -> 37.702 kbps computed
+                   vs Throughput=44.196, ίδια τάξη μεγέθους. Άρα /1000 για Mbps, ΟΧΙ *8/1e6
+                   όπως τα bytes/sec columns του ResultsCapacityTest.
+
+                   Δύο επίπεδα:
+                   1) application layer (Throughput/ThroughputUL) — το νούμερο που δίνει το
+                      ίδιο το test (HTTPTransfer/Capacity/Ookla/HTTPBrowser).
+                   2) IP layer της ΙΔΙΑΣ γραμμής (IPThroughputDL/UL) — για services που δεν
+                      γράφουν app-layer throughput (YouTube, Ping). Υπάρχει μόνο όταν όντως
+                      έτρεξε test, γι' αυτό είναι ασφαλές σε αντίθεση με το FactIPThroughput.
+
+                   Direction: 'Downlink' | 'Uplink' | 'Mixed' (Ookla/Interactivity/Ping). Στο
+                   HTTPTransfer uplink το νούμερο κάθεται στο Throughput, στο Capacity uplink
+                   στο ThroughputUL — γι' αυτό η UL παίρνει και τα δύο. */
+                COALESCE(
+                    (SELECT ROUND(AVG(CAST(NULLIF(da.Throughput, 0) AS FLOAT)) / 1000.0, 3)
+                       FROM FactDataApplications da
+                      WHERE da.SessionId = @sid
+                        AND ISNULL(da.ErrorCode, 0) = 0
+                        AND ISNULL(da.Direction, '') <> 'Uplink'),
+                    (SELECT ROUND(AVG(CAST(NULLIF(da.IPThroughputDL, 0) AS FLOAT)) / 1000.0, 3)
+                       FROM FactDataApplications da
+                      WHERE da.SessionId = @sid
+                        AND ISNULL(da.ErrorCode, 0) = 0
+                        AND ISNULL(da.Direction, '') <> 'Uplink')
+                )                                                AS Download_Mbps,
+
+                COALESCE(
+                    (SELECT ROUND(AVG(CAST(COALESCE(
+                                    NULLIF(da.ThroughputUL, 0),
+                                    CASE WHEN da.Direction = 'Uplink'
+                                         THEN NULLIF(da.Throughput, 0) END) AS FLOAT)) / 1000.0, 3)
+                       FROM FactDataApplications da
+                      WHERE da.SessionId = @sid
+                        AND ISNULL(da.ErrorCode, 0) = 0),
+                    (SELECT ROUND(AVG(CAST(NULLIF(da.IPThroughputUL, 0) AS FLOAT)) / 1000.0, 3)
+                       FROM FactDataApplications da
+                      WHERE da.SessionId = @sid
+                        AND ISNULL(da.ErrorCode, 0) = 0
+                        AND ISNULL(da.Direction, '') <> 'Downlink')
+                )                                                AS Upload_Mbps,
 
                 (SELECT ROUND(AVG(p.RTTAverage), 0)
                    FROM FactPingSummary p
