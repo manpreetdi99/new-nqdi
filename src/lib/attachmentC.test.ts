@@ -893,15 +893,15 @@ describe("PS data KPIs", () => {
     const sections = buildDataSections(rows);
 
     // Ε1 · Bulk throughput -> Ε2 · Latency/Responsiveness -> Ε3 · Browser engines ->
-    // Ε4 · HTTPS sites (αλφαβητικά) -> Ε5 · Video streaming. Το Ookla μπαίνει ΜΕΤΑ το
-    // HTTP Transfer μέσα στο Ε1 (όχι πριν, όπως στην παλιά επίπεδη λίστα).
+    // Ε4 · HTTPS sites (αλφαβητικά) -> Ε5 · Video streaming. Το Ookla μπαίνει ΠΡΙΝ από το
+    // HTTP Transfer μέσα στο Ε1.
     expect(sections.map((s) => s.key)).toEqual([
       "Capacity DL 10GB",
       "Capacity UL 1GB",
-      "HTTP Transfer (DL) 10MB",
-      "HTTP Transfer (UL) 5MB",
       "Ookla DL",
       "Ookla UL",
+      "HTTP Transfer (DL) 10MB",
+      "HTTP Transfer (UL) 5MB",
       "FTP DL",
       "Ping",
       "Ping 40 B",

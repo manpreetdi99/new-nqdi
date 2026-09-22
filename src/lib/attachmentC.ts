@@ -1107,14 +1107,14 @@ const buildDataTestStats = (rows: DataCallRow[]): DataTestStats => {
  * Σταθερή, ρητή σειρά εμφάνισης των PS Data Stats sections στο Attachment C — η
  * "5 group, QoS → QoE" πρόταση του πελάτη (2026-08-26), 5 ενότητες:
  *
- *   Ε1 · Bulk throughput            Capacity DL/UL, HTTP Transfer DL/UL, Ookla DL/UL
+ *   Ε1 · Bulk throughput            Capacity DL/UL, Ookla DL/UL, HTTP Transfer DL/UL
  *   Ε2 · Latency / Responsiveness   Ping 40/800/1000 B, DNS Resolution, Interactivity
  *   Ε3 · Browser engines            Kepler, Kepler +30s Pause, Newton
  *   Ε4 · HTTPS sites                website tests, αλφαβητικά (alpha, amazon, car.gr, …)
  *   Ε5 · Video streaming            YouTube Service / 4K / Live
  *
- * (αντικατέστησε την προηγούμενη επίπεδη 26-θέσεων λίστα — το Ookla μετακινήθηκε
- * ΜΕΤΑ το HTTP Transfer μέσα στο Ε1, και το Ping/DNS/Interactivity ανέβηκε πολύ πιο
+ * (αντικατέστησε την προηγούμενη επίπεδη 26-θέσεων λίστα — το Ookla μπήκε
+ * ΠΡΙΝ από το HTTP Transfer μέσα στο Ε1, και το Ping/DNS/Interactivity ανέβηκε πολύ πιο
  * πάνω, στο Ε2, αντί να είναι τελευταίο). Ό,τι test type δεν ταιριάζει σε κανένα από
  * αυτά (π.χ. ένα απλό "Ping" χωρίς μέγεθος, ή ένα ad-hoc "FTP DL") πέφτει στο
  * UNMATCHED_RANK, ακριβώς πριν το Ping 40/800/1000 group — ίδια σχετική θέση με το
@@ -1275,12 +1275,12 @@ const SECTION_ORDER: SectionGroup[] = [
   // "Capacity DL 10GB (grx)"/"(akamai)" — βλ. mapCapacityLinkRowsToDataCallRows.
   { match: (l) => /^capacity dl\b/.test(l), subRank: (l) => (l.includes("(") ? 1 : 0), group: SECTION_GROUP_LABELS.bulkThroughput },
   { match: (l) => /^capacity ul\b/.test(l), subRank: (l) => (l.includes("(") ? 1 : 0), group: SECTION_GROUP_LABELS.bulkThroughput },
-  { match: (l) => l.includes("http transfer (dl)"), group: SECTION_GROUP_LABELS.bulkThroughput },
-  { match: (l) => l.includes("http transfer (ul)"), group: SECTION_GROUP_LABELS.bulkThroughput },
   { match: (l) => l.includes("ookla") && /\bdl\b/.test(l), subRank: () => 0, group: SECTION_GROUP_LABELS.bulkThroughput },
   { match: (l) => l.includes("ookla") && /\bul\b/.test(l), subRank: () => 1, group: SECTION_GROUP_LABELS.bulkThroughput },
   // Ookla χωρίς DL/UL στο label (π.χ. "Ookla Speedtest").
   { match: (l) => l.includes("ookla"), subRank: () => 0.5, group: SECTION_GROUP_LABELS.bulkThroughput },
+  { match: (l) => l.includes("http transfer (dl)"), group: SECTION_GROUP_LABELS.bulkThroughput },
+  { match: (l) => l.includes("http transfer (ul)"), group: SECTION_GROUP_LABELS.bulkThroughput },
   { match: (l) => PING_B_ORDER.includes(l), subRank: (l) => PING_B_ORDER.indexOf(l), group: SECTION_GROUP_LABELS.latency },
   { match: (l) => l.includes("dns"), group: SECTION_GROUP_LABELS.latency },
   // Substring, όχι exact-equality — το label φτάνει εδώ ήδη μετονομασμένο σε
