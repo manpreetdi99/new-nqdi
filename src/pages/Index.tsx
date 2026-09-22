@@ -120,6 +120,12 @@ type StatusFilterKey = "completed" | "dropped" | "failed" | "system release";
 /** Οι τιμές που δέχεται το `?sub=` — ό,τι άλλο (χειρόγραφο URL) πέφτει πίσω στο "list". */
 const CALLS_SUB_TABS = ["list", "detail", "data-detail"] as const;
 
+/** Το status έρχεται και ως "system realase" (τυπογραφικό του εξαγωγέα), οπότε δεχόμαστε και τις δύο γραφές. */
+const isSystemReleaseStatus = (status: string | null | undefined): boolean => {
+  const normalized = (status || "").toLowerCase();
+  return normalized.includes("system release") || normalized.includes("system realase");
+};
+
 const matchesStatusFilter = (status: string | null | undefined, filter: StatusFilterKey): boolean => {
   const normalized = (status || "").toLowerCase();
 
@@ -132,16 +138,16 @@ const matchesStatusFilter = (status: string | null | undefined, filter: StatusFi
   if (filter === "failed") {
     return normalized.includes("fail");
   }
-  return normalized.includes("system release") || normalized.includes("system realase");
+  return isSystemReleaseStatus(status);
 };
 
 const getAllCallsRowClass = (row: AllCallsRow): string => {
+  const normalized = (row.status || "").toLowerCase();
+  if (isSystemReleaseStatus(row.status)) {
+    return "bg-violet-500/25 hover:bg-violet-500/35 border-violet-500/40";
+  }
   if (row.isValid === 0) {
     return "bg-red-500/25 hover:bg-red-500/35 border-red-500/40";
-  }
-  const normalized = (row.status || "").toLowerCase();
-  if (normalized.includes("system release") || normalized.includes("system realase")) {
-    return "bg-violet-500/25 hover:bg-violet-500/35 border-violet-500/40";
   }
   if (normalized.includes("drop") || normalized.includes("fail")) {
     return "bg-orange-500/25 hover:bg-orange-500/35 border-orange-500/40";
@@ -150,19 +156,20 @@ const getAllCallsRowClass = (row: AllCallsRow): string => {
 };
 
 const getAllCallsStatusStyle = (row: AllCallsRow): { label: string; className: string } => {
+  // Ίδια σειρά προτεραιότητας με το getAllCallsRowClass, ώστε το badge να μη διαφωνεί με το χρώμα της γραμμής.
+  if (isSystemReleaseStatus(row.status)) {
+    return { label: row.status || "System release", className: "border-violet-500/40 bg-violet-500/15 text-violet-300" };
+  }
   if (row.isValid === 0) {
     return { label: "Invalid", className: "border-red-500/40 bg-red-500/15 text-red-300" };
   }
 
   const normalized = (row.status || "").toLowerCase();
-  if (normalized.includes("system release") || normalized.includes("system realase")) {
-    return { label: row.status || "System release", className: "border-violet-500/40 bg-violet-500/15 text-violet-300" };
-  }
   if (normalized.includes("drop")) {
     return { label: row.status || "Dropped", className: "border-orange-500/40 bg-orange-500/15 text-orange-300" };
   }
   if (normalized.includes("fail")) {
-    return { label: row.status || "Failed", className: "border-red-500/40 bg-red-500/15 text-red-300" };
+    return { label: row.status || "Failed", className: "border-orange-500/40 bg-orange-500/15 text-orange-300" };
   }
 
   return { label: row.status || "Completed", className: "border-emerald-500/40 bg-emerald-500/15 text-emerald-300" };
