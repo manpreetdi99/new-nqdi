@@ -21,6 +21,7 @@ import { L3SignalingPanel } from "@/components/L3SignalingPanel";
 import { CsfbTransitionPanel } from "@/components/CsfbTransitionPanel";
 import { type OverviewLane, type OverviewSegment } from "@/components/SessionOverview";
 import { CallSignalChart, type SignalEvent } from "@/components/CallSignalChart";
+import { resolveCallDetailMode } from "@/lib/callDetailMode";
 import { attachNearest, mergeSignalSamples, mergeTransitionSeries, nearestIndex, sampleDomain, toNumber, toTimestamp, transitionLegStats, type SignalSample } from "@/lib/signalSeries";
 //ReferenceLine για γραμμες στο διαγραμμα, πχ για thresholds. 
 /**
@@ -50,8 +51,12 @@ interface CallDetailProps {
  */
 const HOVER_TOLERANCE_MS = 1500;
 
+// Το context φέρνεται ΜΙΑ φορά ανά κλήση στο μέγιστο παράθυρο· το ±Ns που βλέπει ο χρήστης
+// (viewWindowSec) είναι καθαρό φίλτρο εμφάνισης πάνω σε αυτά τα δεδομένα, χωρίς refetch.
+const CONTEXT_FETCH_WINDOW_SEC = 120;
+const VIEW_WINDOW_OPTIONS = [10, 30, 60, 120] as const;
 // ±60s για CS (GSM-only) κλήσεις, ±30s για όλες τις υπόλοιπες.
-const defaultContextWindowSec = (callMode?: string | null) => (callMode === "CS" ? 60 : 30);
+const defaultViewWindowSec = (callMode?: string | null) => (callMode === "CS" ? 60 : 30);
 
 // Χρωματισμός LTE RSRP: πράσινο καλό, πορτοκαλί οριακό, κόκκινο κακό (χρησιμοποιείται στο χάρτη)
 function rsrpColor(val: number | null | undefined): string {
@@ -181,6 +186,10 @@ function kpiDurationLabel(start: string | null | undefined, end: string | null |
 }
 
 const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProps) => {
+  // Το callMode που οδηγεί ΟΛΕΣ τις αποφάσεις φόρτωσης. Πολλές κλήσεις έρχονται με «-» (ή κενό →
+  // «N/A»): επιλύονται από το technology με τον κανόνα του A-LEVEL (βλ. resolveCallDetailMode),
+  // αλλιώς μια «-» κλήση σε GSM θα φόρτωνε μόνο LTE και θα έβγαινε άδεια. Η εμφάνιση κρατάει το raw.
+  const callMode = resolveCallDetailMode(call.callMode, call.technology);
   // LTE/GSM radio measurement rows (A-side and B-side, for the "Radio Measurements" table + chart)
   // For VoNR/N26-HO calls, radioValues holds LTE + NR5G rows merged chronologically (see loadRadio below).
   const [radioValues, setRadioValues] = useState<any[]>([]);
@@ -198,7 +207,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // Σε CS κλήση η φωνή ζει στο 2G, οπότε ξεκινάμε από εκεί· οπουδήποτε αλλού το LTE είναι
   // το σκέλος που κρατάει την κλήση. Και στις δύο περιπτώσεις η επιλογή υποχωρεί αν η
   // πλευρά που βλέπεις δεν έχει τέτοιες μετρήσεις (βλ. activeLeg).
-  const [srvccNetwork, setSrvccNetwork] = useState<"LTE" | "GSM">(call.callMode === "CS" ? "GSM" : "LTE");
+  const [srvccNetwork, setSrvccNetwork] = useState<"LTE" | "GSM">(callMode === "CS" ? "GSM" : "LTE");
 
   // Serving cell (eNB/EARFCN/PCI) for A-side and B-side, plus the nearest physical antenna
   // matched by PCI + shortest distance to the call's average GPS position (Cosmote Free only)
@@ -217,14 +226,18 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   const [nr5gContextSignalBSide, setNr5gContextSignalBSide] = useState<any[]>([]);
   // Default παράθυρο context: οι CS κλήσεις ανοίγουν στα ±60s (το GSM σκέλος δίνει πιο αραιά
   // δείγματα, οπότε τα ±30s των packet κλήσεων αφήνουν την καμπύλη σχεδόν άδεια).
-  const [contextWindowSec, setContextWindowSec] = useState(() => defaultContextWindowSec(call.callMode));
+  // Φίλτρο εμφάνισης, όχι fetch parameter: αλλαγή του απλώς ξανακόβει τα ήδη φορτωμένα δεδομένα.
+  const [viewWindowSec, setViewWindowSec] = useState(() => defaultViewWindowSec(callMode));
   // Το CallDetail δεν ξαναγίνεται mount όταν αλλάζει κλήση, οπότε επαναφέρουμε το default
-  // κατά το render (πριν τρέξουν τα effects) ώστε να μη γίνει διπλό fetch του context.
-  const [contextWindowCallId, setContextWindowCallId] = useState(call.callId);
-  if (contextWindowCallId !== call.callId) {
-    setContextWindowCallId(call.callId);
-    setContextWindowSec(defaultContextWindowSec(call.callMode));
+  // κατά το render, ώστε η νέα κλήση να μην εμφανιστεί ούτε ένα frame με το παλιό παράθυρο.
+  const [viewWindowCallId, setViewWindowCallId] = useState(call.callId);
+  if (viewWindowCallId !== call.callId) {
+    setViewWindowCallId(call.callId);
+    setViewWindowSec(defaultViewWindowSec(callMode));
   }
+  // Αποτυχίες του context effect — ξεχωριστά από το loadErrors του μεγάλου fetch, γιατί τα δύο
+  // effects γράφουν ανεξάρτητα και δεν πρέπει το ένα να σβήνει τα λάθη του άλλου.
+  const [contextLoadErrors, setContextLoadErrors] = useState<string[]>([]);
   const [contextTechnology, setContextTechnology] = useState<any[]>([]);
   // Περίοδοι τεχνολογίας (FactRadioTechnology) — η πηγή του Session Overview, ανά πλευρά
   const [techPeriods, setTechPeriods] = useState<TechnologyPeriodRow[]>([]);
@@ -268,8 +281,9 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // αλλά η σελίδα ζητούσε μόνο LTE, οπότε τα διαγράμματα ήταν σχεδόν άδεια.
   // Το isDualTechCall κρίνεται ΜΟΝΟ από το callMode: οδηγεί το αρχικό fetch, οπότε πρέπει
   // να είναι σταθερό. Το «βρήκαμε CSFB εκ των υστέρων» ζει χωριστά, στο showsGsmLeg.
-  const isDualTechCall = call.callMode === "SRVCC" || call.callMode === "CSFB";
-  const wantsGsmLeg = call.callMode === "CS" || isDualTechCall;
+  const isDualTechCall = callMode === "SRVCC" || callMode === "CSFB";
+  // UNKNOWN: ούτε το callMode ούτε το technology λένε τι είναι — ζητάμε και τα δύο σκέλη
+  const wantsGsmLeg = callMode === "CS" || isDualTechCall || callMode === "UNKNOWN";
   // Ένα CSFB σκέλος μπορεί να κρύβεται σε κλήση περασμένη VoLTE/CS (μόνο το ένα κινητό
   // έπεσε σε 2G). Μόλις το μάθουμε, το GSM σκέλος πρέπει να φαίνεται κι εκεί — αλλά χωρίς
   // να ξαναγυρίσει πίσω στο αρχικό fetch, γι' αυτό είναι ξεχωριστή μεταβλητή.
@@ -277,9 +291,10 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // στο 2G μόνο για τη φωνή, οπότε το technology έρχεται "GSM/LTE" και το ένα από τα δύο
   // κινητά μπορεί να μην πάτησε ποτέ 2G. Χωρίς τα LTE δεδομένα η πλευρά εκείνη έβγαινε
   // εντελώς άδεια, ενώ η άλλη έδειχνε μόνο τα λίγα δευτερόλεπτα του GSM σκέλους.
-  const csTouchesLte = call.callMode === "CS" && /LTE|4G|NR|5G/i.test(call.technology ?? "");
-  const wantsLteLeg = call.callMode !== "CS" || csTouchesLte;
-  const showsGsmLeg = isDualTechCall || call.callMode === "CS" || (csfbDetail?.events.length ?? 0) > 0;
+  const csTouchesLte = callMode === "CS" && /LTE|4G|NR|5G/i.test(call.technology ?? "");
+  const wantsLteLeg = callMode !== "CS" || csTouchesLte;
+  const showsGsmLeg = isDualTechCall || callMode === "CS" || (csfbDetail?.events.length ?? 0) > 0
+    || (callMode === "UNKNOWN" && gsmValues.length + bSideGsmValues.length > 0);
   // Ποιο σκέλος δείχνουν πίνακες/διάγραμμα. Ο χρήστης διαλέγει (srvccNetwork), αλλά η
   // επιλογή του ΔΕΝ μπορεί να σταθεί σε πλευρά που δεν έχει τέτοιες μετρήσεις: σε CSFB
   // συχνά μόνο το ένα κινητό κατεβαίνει σε 2G, οπότε εκεί πέφτουμε στο άλλο σκέλος αντί
@@ -301,7 +316,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // True for calls that touch the 5G NR core (VoNR, VoNR/VoLTE, VoNR/VoLTE N26 HO): these need
   // FactNR5GRadio on top of (or instead of) the LTE anchor, since the LTE-only query can come back
   // empty/partial once the UE is camped on NR. Rows from both are merged chronologically below.
-  const isVoNRMode = /VoNR/i.test(call.callMode ?? "");
+  const isVoNRMode = /VoNR/i.test(callMode ?? "");
   const [isLoadingRadio, setIsLoadingRadio] = useState(false);
   // SRVCC Transition chart: ίδια λογική σειρών/κατωφλίων με το κύριο RSRP/RxLev διάγραμμα,
   // αλλά με δικά του toggles ώστε να μη «μολύνεται» η κύρια προβολή της κλήσης.
@@ -400,7 +415,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // Main data-load effect: fires whenever the selected call changes. Fetches every panel's data
   // in parallel with Promise.allSettled so that one failing endpoint doesn't block the rest of
   // the page from rendering. Several fetches are skipped (replaced with an already-resolved empty
-  // value) based on call.callMode, since GSM-only calls have no LTE data and vice versa:
+  // value) based on callMode, since GSM-only calls have no LTE data and vice versa:
   //   - callMode === "CS"            → circuit-switched (GSM only)
   //   - callMode === "SRVCC"         → starts LTE, handed over to GSM (both fetched)
   //   - anything else                → LTE only
@@ -408,7 +423,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
-        const [lteRes, gsmRes, nr5gRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, ctxSignalRes, ctxTechRes, pagingRes, pagingBSideRes, deviceRes, lteMeasCompRes, lteScannerCompRes, gsmCtxSignalRes, ctxSignalBSideRes, gsmCtxSignalBSideRes, callKpiTileRes, handoverInfoRes, technologyTimelineRes, voiceCodecRes, markersRes, srvccDetailRes, csfbDetailRes] = await Promise.allSettled([
+        const [lteRes, gsmRes, nr5gRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, pagingRes, pagingBSideRes, deviceRes, lteMeasCompRes, lteScannerCompRes, callKpiTileRes, handoverInfoRes, technologyTimelineRes, voiceCodecRes, markersRes, srvccDetailRes, csfbDetailRes] = await Promise.allSettled([
           wantsLteLeg ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           wantsGsmLeg ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
           isVoNRMode ? fetchNr5gValues(database, call.callId) : Promise.resolve({ nr5gValues: [] }),
@@ -420,22 +435,17 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
           wantsGsmLeg ? fetchGsmValuesBSide(database, call.callId) : Promise.resolve({ gsmValuesBSide: [] }),
           wantsLteLeg ? fetchCellInfo(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
           wantsLteLeg ? fetchCellInfoBSide(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
-          fetchCallContextSignal(database, call.callId, contextWindowSec),
-          fetchCallContextTechnology(database, call.callId, contextWindowSec),
           fetchL3Messages(database, call.callId, { side: "A" }),
           fetchL3Messages(database, call.callId, { side: "B" }),
           fetchCallDeviceInfo(database, call.callId),
           wantsLteLeg ? fetchLteMeasurementComparison(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
           wantsLteLeg ? fetchLteScannerMeasurement(database, call.callId) : Promise.resolve({ aSide: [], bSide: [] }),
-          wantsGsmLeg ? fetchGsmContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
-          wantsLteLeg ? fetchCallContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
-          wantsGsmLeg ? fetchGsmContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
           fetchCallKpiTile(database, call.callId),
           fetchHandoverInfo(database, call.callId),
           fetchTechnologyTimeline(database, call.callId),
           fetchVoiceCodec(database, call.callId),
           fetchMarkers(database, call.callId),
-          call.callMode === "SRVCC"
+          callMode === "SRVCC"
             ? fetchCallSrvccDetail(database, call.callId)
             : Promise.resolve({ events: [], technology: [] } as SrvccDetailResponse),
           // Πάντα: το callMode της κλήσης δεν προδίδει ένα CSFB σκέλος στην άλλη πλευρά.
@@ -445,7 +455,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
         const namedResults: Array<[string, PromiseSettledResult<unknown>]> = [
           ["LTE radio", lteRes], ["GSM radio", gsmRes], ["NR5G radio", nr5gRes], ["MOS", mosRes], ["KPI", kpiRes],
           ["A/B outcome", comparisonRes], ["B-side LTE", bSideLteRes], ["TraceLog", tracelogRes],
-          ["B-side GSM", bSideGsmRes], ["LTE context", ctxSignalRes], ["Technology context", ctxTechRes],
+          ["B-side GSM", bSideGsmRes],
           ["L3 A-side", pagingRes], ["L3 B-side", pagingBSideRes], ["Device", deviceRes],
           ["UE comparison", lteMeasCompRes], ["Scanner comparison", lteScannerCompRes],
           ["KPI tiles", callKpiTileRes], ["Handover", handoverInfoRes], ["Technology timeline", technologyTimelineRes],
@@ -515,18 +525,6 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
           setBSideCellInfo(bSideCellInfoRes.value as any);
         }
 
-        if (ctxSignalRes.status === "fulfilled") {
-          setContextSignal((ctxSignalRes.value as any).signal || []);
-        } else {
-          setContextSignal([]);
-        }
-
-        if (ctxTechRes.status === "fulfilled") {
-          setContextTechnology((ctxTechRes.value as any).technology || []);
-        } else {
-          setContextTechnology([]);
-        }
-
         if (pagingRes.status === "fulfilled") {
           setL3Data(pagingRes.value as CallL3MessagesResponse);
         } else {
@@ -555,24 +553,6 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
           setLteScannerComp(lteScannerCompRes.value as any);
         } else {
           setLteScannerComp(null);
-        }
-
-        if (gsmCtxSignalRes.status === "fulfilled") {
-          setGsmContextSignal((gsmCtxSignalRes.value as any).signal || []);
-        } else {
-          setGsmContextSignal([]);
-        }
-
-        if (ctxSignalBSideRes.status === "fulfilled") {
-          setContextSignalBSide((ctxSignalBSideRes.value as any).signal || []);
-        } else {
-          setContextSignalBSide([]);
-        }
-
-        if (gsmCtxSignalBSideRes.status === "fulfilled") {
-          setGsmContextSignalBSide((gsmCtxSignalBSideRes.value as any).signal || []);
-        } else {
-          setGsmContextSignalBSide([]);
         }
 
         if (callKpiTileRes.status === "fulfilled") {
@@ -615,7 +595,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
           setSrvccError(null);
         } else {
           setSrvccDetail(null);
-          setSrvccError(call.callMode === "SRVCC" ? "Αποτυχία φόρτωσης των SRVCC diagnostics." : null);
+          setSrvccError(callMode === "SRVCC" ? "Αποτυχία φόρτωσης των SRVCC diagnostics." : null);
         }
 
         if (csfbDetailRes.status === "fulfilled") {
@@ -625,7 +605,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
         } else {
           setCsfbDetail(null);
           // Μήνυμα λάθους μόνο όταν η κλήση ΕΙΝΑΙ CSFB· αλλιώς το panel απλώς δεν εμφανίζεται.
-          setCsfbError(call.callMode === "CSFB" ? "Αποτυχία φόρτωσης των CSFB diagnostics." : null);
+          setCsfbError(callMode === "CSFB" ? "Αποτυχία φόρτωσης των CSFB diagnostics." : null);
         }
       } catch (err) {
         console.error("Failed to load metrics", err);
@@ -638,7 +618,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       setCommentText(call.comment || "");
       setIsEditingComment(false);
       setSelectedLteSide("A");
-      setSrvccNetwork(call.callMode === "CS" ? "GSM" : "LTE");
+      setSrvccNetwork(callMode === "CS" ? "GSM" : "LTE");
       setLteMeasComp(null);
       setLteScannerComp(null);
       setScannerRawA([]);
@@ -647,9 +627,6 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       setGsmScannerRawB([]);
       setGsmScannerBestRaw([]);
       setLteScannerBestRaw([]);
-      setGsmContextSignal([]);
-      setContextSignalBSide([]);
-      setGsmContextSignalBSide([]);
       setCallKpiTile(null);
       setSrvccDetail(null);
       setSrvccError(null);
@@ -659,7 +636,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       setSelectedLteSide("A");
       loadRadio();
     }
-  }, [database, call.callId, call.callMode, wantsGsmLeg, wantsLteLeg]);
+  }, [database, call.callId, callMode, wantsGsmLeg, wantsLteLeg]);
 
   // Ένα CSFB σκέλος μπορεί να κρέμεται από κλήση περασμένη VoLTE/CS: το ένα κινητό μιλάει
   // VoLTE και το άλλο πέφτει σε 2G για να απαντήσει. Σε αυτές τις κλήσεις το GSM σκέλος δεν
@@ -784,7 +761,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       if (!cancelled) setGsmScannerRaw(results.flat());
     });
     return () => { cancelled = true; };
-  }, [database, call.callMode, wantsGsmLeg, gsmValues]);
+  }, [database, callMode, wantsGsmLeg, gsmValues]);
 
   // B-side GSM scanner data is fetched independently; it never falls back to A-side samples.
   useEffect(() => {
@@ -806,7 +783,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     Promise.all(segments.map((segment) => fetchGsmScannerRaw(database, segment.cgi, segment.start, segment.end).catch(() => [])))
       .then((results) => { if (!cancelled) setGsmScannerRawB(results.flat()); });
     return () => { cancelled = true; };
-  }, [database, call.callMode, wantsGsmLeg, bSideGsmValues]);
+  }, [database, callMode, wantsGsmLeg, bSideGsmValues]);
 
   // "Best RxLev Scanner" — the strongest cell the scanner saw for the call's own operator at
   // each scan cycle (DmnIdTopN_RxLev_Operator = 1), independent of the UE's serving CGI. Fetched
@@ -823,7 +800,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       .then(rows => { if (!cancelled) setGsmScannerBestRaw(rows); })
       .catch(() => { if (!cancelled) setGsmScannerBestRaw([]); });
     return () => { cancelled = true; };
-  }, [database, call.callMode, wantsGsmLeg, call.callId]);
+  }, [database, callMode, wantsGsmLeg, call.callId]);
 
   // "Best LTE Scanner" — same idea as the GSM one above, but for FactLTEScanner
   // (DmnIdTopN_RSRP_Operator = 1), independent of the UE's serving EARFCN/PCI.
@@ -839,37 +816,63 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     return () => { cancelled = true; };
   }, [database, wantsLteLeg, call.callId]);
 
-  // Re-fetches only the "before/during/after" context-signal data when the user changes the
-  // time window (10/30/60/120s) — cheaper than re-running the full loadRadio() load above.
+  // Το context «πριν/κατά/μετά» (9 endpoints) φέρνεται ΜΙΑ φορά ανά κλήση, στο μέγιστο παράθυρο
+  // CONTEXT_FETCH_WINDOW_SEC. Το ±Ns του χρήστη (viewWindowSec) ΔΕΝ είναι στα deps: κόβεται
+  // client-side στο viewRange παρακάτω. Ο μόνος ιδιοκτήτης αυτού του state είναι αυτό το effect.
   useEffect(() => {
     if (!call.callId || !database) return;
-    async function reloadContext() {
+    let cancelled = false;
+    // Καθαρισμός πριν το fetch, ώστε να μη φαίνεται για λίγο το context της προηγούμενης κλήσης
+    setContextSignal([]);
+    setContextSignalBSide([]);
+    setGsmContextSignal([]);
+    setGsmContextSignalBSide([]);
+    setNr5gContextSignal([]);
+    setNr5gContextSignalBSide([]);
+    setContextTechnology([]);
+    setTechPeriods([]);
+    setTechPeriodsBSide([]);
+    setContextLoadErrors([]);
+    async function loadContext() {
+      const windowSec = CONTEXT_FETCH_WINDOW_SEC;
       const [ctxRes, ctxTechRes, gsmCtxRes, ctxBRes, gsmCtxBRes, nrCtxRes, nrCtxBRes, techPerRes, techPerBRes] = await Promise.allSettled([
-        wantsLteLeg ? fetchCallContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
-        fetchCallContextTechnology(database, call.callId, contextWindowSec),
-        wantsGsmLeg ? fetchGsmContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
-        wantsLteLeg ? fetchCallContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
-        wantsGsmLeg ? fetchGsmContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
+        wantsLteLeg ? fetchCallContextSignal(database, call.callId, windowSec) : Promise.resolve({ signal: [] }),
+        fetchCallContextTechnology(database, call.callId, windowSec),
+        wantsGsmLeg ? fetchGsmContextSignal(database, call.callId, windowSec) : Promise.resolve({ signal: [] }),
+        wantsLteLeg ? fetchCallContextSignalBSide(database, call.callId, windowSec) : Promise.resolve({ signal: [] }),
+        wantsGsmLeg ? fetchGsmContextSignalBSide(database, call.callId, windowSec) : Promise.resolve({ signal: [] }),
         // Όχι μόνο σε VoNR: μια VoLTE κλήση με EN-DC (5G NSA πάνω σε LTE anchor) έχει κι αυτή
         // γραμμές στο FactNR5GRadio, και το NR σκέλος της αξίζει να φαίνεται στην καμπύλη.
         // Σε CS δεν υπάρχει τίποτα να ρωτήσουμε.
-        call.callMode !== "CS" ? fetchNr5gContextSignal(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
-        call.callMode !== "CS" ? fetchNr5gContextSignalBSide(database, call.callId, contextWindowSec) : Promise.resolve({ signal: [] }),
-        fetchTechnologyPeriods(database, call.callId, contextWindowSec, "A"),
-        fetchTechnologyPeriods(database, call.callId, contextWindowSec, "B"),
+        callMode !== "CS" ? fetchNr5gContextSignal(database, call.callId, windowSec) : Promise.resolve({ signal: [] }),
+        callMode !== "CS" ? fetchNr5gContextSignalBSide(database, call.callId, windowSec) : Promise.resolve({ signal: [] }),
+        fetchTechnologyPeriods(database, call.callId, windowSec, "A"),
+        fetchTechnologyPeriods(database, call.callId, windowSec, "B"),
       ]);
-      if (ctxRes.status === "fulfilled") setContextSignal((ctxRes.value as any).signal || []);
-      if (ctxTechRes.status === "fulfilled") setContextTechnology((ctxTechRes.value as any).technology || []);
-      if (gsmCtxRes.status === "fulfilled") setGsmContextSignal((gsmCtxRes.value as any).signal || []);
-      if (ctxBRes.status === "fulfilled") setContextSignalBSide((ctxBRes.value as any).signal || []);
-      if (gsmCtxBRes.status === "fulfilled") setGsmContextSignalBSide((gsmCtxBRes.value as any).signal || []);
-      setNr5gContextSignal(nrCtxRes.status === "fulfilled" ? ((nrCtxRes.value as any).signal || []) : []);
-      setNr5gContextSignalBSide(nrCtxBRes.status === "fulfilled" ? ((nrCtxBRes.value as any).signal || []) : []);
-      if (techPerRes.status === "fulfilled") setTechPeriods((techPerRes.value as { periods?: TechnologyPeriodRow[] }).periods || []);
-      if (techPerBRes.status === "fulfilled") setTechPeriodsBSide((techPerBRes.value as { periods?: TechnologyPeriodRow[] }).periods || []);
+      // Άλλαξε κλήση όσο περιμέναμε — αυτές οι απαντήσεις αφορούν την προηγούμενη
+      if (cancelled) return;
+      const signalOf = (res: PromiseSettledResult<unknown>) =>
+        res.status === "fulfilled" ? ((res.value as any).signal || []) : [];
+      setContextSignal(signalOf(ctxRes));
+      setContextTechnology(ctxTechRes.status === "fulfilled" ? ((ctxTechRes.value as any).technology || []) : []);
+      setGsmContextSignal(signalOf(gsmCtxRes));
+      setContextSignalBSide(signalOf(ctxBRes));
+      setGsmContextSignalBSide(signalOf(gsmCtxBRes));
+      setNr5gContextSignal(signalOf(nrCtxRes));
+      setNr5gContextSignalBSide(signalOf(nrCtxBRes));
+      setTechPeriods(techPerRes.status === "fulfilled" ? ((techPerRes.value as { periods?: TechnologyPeriodRow[] }).periods || []) : []);
+      setTechPeriodsBSide(techPerBRes.status === "fulfilled" ? ((techPerBRes.value as { periods?: TechnologyPeriodRow[] }).periods || []) : []);
+      const named: Array<[string, PromiseSettledResult<unknown>]> = [
+        ["LTE context", ctxRes], ["Technology context", ctxTechRes], ["GSM context", gsmCtxRes],
+        ["B-side LTE context", ctxBRes], ["B-side GSM context", gsmCtxBRes],
+        ["NR context", nrCtxRes], ["B-side NR context", nrCtxBRes],
+        ["Technology periods", techPerRes], ["B-side technology periods", techPerBRes],
+      ];
+      setContextLoadErrors(named.flatMap(([name, result]) => result.status === "rejected" ? [name] : []));
     }
-    reloadContext();
-  }, [contextWindowSec, call.callId, database, call.callMode, wantsGsmLeg, wantsLteLeg]);
+    loadContext();
+    return () => { cancelled = true; };
+  }, [call.callId, database, callMode, wantsGsmLeg, wantsLteLeg]);
 
   // Cosmote Free only: match the A-side serving cell (by PCI) to the physical antenna closest
   // to the call's average GPS position, since PCI alone can be reused by several sites.
@@ -1078,6 +1081,30 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     return matchNearestByTime(lteScannerBestRaw, activeRadioValues);
   }, [lteScannerBestRaw, selectedLteSide, activeRadioValues, isGSMMode]);
 
+  // Όρια κλήσης σε epoch ms — σκιάζουν το «κατά» και χωρίζουν πριν/μετά, κοινά με το overview.
+  const callBounds = useMemo(() => {
+    const start = new Date(call.startTime).getTime();
+    const end = new Date(call.endTime).getTime();
+    if (Number.isFinite(start) && Number.isFinite(end) && end > start) return { start, end };
+    // Fallback: η φάση "during" όπως την έδωσε το backend στα context rows
+    const during = [...contextSignal, ...gsmContextSignal]
+      .filter((v: any) => v.phase === "during")
+      .map((v: any) => toTimestamp(v.MsgTime))
+      .filter(Number.isFinite)
+      .sort((a, b) => a - b);
+    return during.length > 1 ? { start: during[0], end: during[during.length - 1] } : null;
+  }, [call.startTime, call.endTime, contextSignal, gsmContextSignal]);
+
+  // Το ορατό παράθυρο: [αρχή − N, τέλος + N] πάνω στα context δεδομένα των ±CONTEXT_FETCH_WINDOW_SEC.
+  // Χωρίς όρια κλήσης δεν ξέρουμε πού να κόψουμε, οπότε δείχνουμε ό,τι ήρθε.
+  const viewRange = useMemo(() => (
+    callBounds ? { from: callBounds.start - viewWindowSec * 1000, to: callBounds.end + viewWindowSec * 1000 } : null
+  ), [callBounds, viewWindowSec]);
+  const inView = useCallback(
+    (t: number) => !viewRange || (Number.isFinite(t) && t >= viewRange.from && t <= viewRange.to),
+    [viewRange],
+  );
+
   // ── Ενιαία σειρά σήματος ────────────────────────────────────────────────────
   // Ένα και μόνο dataset για ΟΛΟ το διάγραμμα: τα δείγματα του context (±Ns γύρω από την
   // κλήση) και τα δείγματα της ίδιας της κλήσης πέφτουν στον ίδιο πίνακα με κλειδί το
@@ -1086,13 +1113,13 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   const unifiedSamples = useMemo<SignalSample[]>(() => {
     const lteContext = (selectedLteSide === "B" ? contextSignalBSide : contextSignal).map((v: any) => ({
       t: toTimestamp(v.MsgTime), RSRP: toNumber(v.RSRP), RSRQ: toNumber(v.RSRQ),
-    }));
+    })).filter((sample) => inView(sample.t));
     const gsmContext = (selectedLteSide === "B" ? gsmContextSignalBSide : gsmContextSignal).map((v: any) => ({
       t: toTimestamp(v.MsgTime), RxLev: toNumber(v.RxLevSub), RxQual: toNumber(v.RxQualSub),
-    }));
+    })).filter((sample) => inView(sample.t));
     const nrContext = (selectedLteSide === "B" ? nr5gContextSignalBSide : nr5gContextSignal).map((v: any) => ({
       t: toTimestamp(v.MsgTime), NrRSRP: toNumber(v.RSRP), NrRSRQ: toNumber(v.RSRQ),
-    }));
+    })).filter((sample) => inView(sample.t));
 
     // Τα δείγματα της κλήσης: καλύπτουν ό,τι δεν επιστρέφει το context (π.χ. CS κλήση χωρίς
     // LTE context) και είναι αυτά που κουμπώνουν με τον πίνακα Radio Measurements.
@@ -1134,7 +1161,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     })));
   }, [activeRadioValues, isGSMMode, showsGsmLeg, selectedLteSide, gsmValues, bSideGsmValues, radioValues, bSideLteValues,
       contextSignal, contextSignalBSide, gsmContextSignal, gsmContextSignalBSide, nr5gContextSignal, nr5gContextSignalBSide,
-      gsmScannerMatched, gsmScannerBestMatched, lteScannerMatched, lteScannerBestMatched]);
+      gsmScannerMatched, gsmScannerBestMatched, lteScannerMatched, lteScannerBestMatched, inView]);
 
   const unifiedDomain = useMemo(() => sampleDomain(unifiedSamples), [unifiedSamples]);
 
@@ -1145,20 +1172,6 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
 
   /** Ποιο δίκτυο ορίζει τον άξονα ποιότητας και τα κατώφλια του διαγράμματος. */
   const chartNetwork = isGSMMode ? "GSM" : isVoNRMode ? "NR" : "LTE";
-
-  // Όρια κλήσης σε epoch ms — σκιάζουν το «κατά» και χωρίζουν πριν/μετά, κοινά με το overview.
-  const callBounds = useMemo(() => {
-    const start = new Date(call.startTime).getTime();
-    const end = new Date(call.endTime).getTime();
-    if (Number.isFinite(start) && Number.isFinite(end) && end > start) return { start, end };
-    // Fallback: η φάση "during" όπως την έδωσε το backend στα context rows
-    const during = [...contextSignal, ...gsmContextSignal]
-      .filter((v: any) => v.phase === "during")
-      .map((v: any) => toTimestamp(v.MsgTime))
-      .filter(Number.isFinite)
-      .sort((a, b) => a - b);
-    return during.length > 1 ? { start: during[0], end: during[during.length - 1] } : null;
-  }, [call.startTime, call.endTime, contextSignal, gsmContextSignal]);
 
   // Important L3/SIP/NAS events are projected onto the nearest radio sample, producing the
   // vertical event lines and stacked labels seen in drive-test tools. Repeated low-value
@@ -1246,7 +1259,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       });
     }
 
-    for (const handover of call.callMode === "SRVCC" ? [] : handoverInfo) {
+    for (const handover of callMode === "SRVCC" ? [] : handoverInfo) {
       if (!handover.MsgTime) continue;
       const timestamp = new Date(handover.MsgTime).getTime();
       if (timestamp < firstTimestamp || timestamp > lastTimestamp) continue;
@@ -1337,7 +1350,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     })();
 
     return limited.map(({ dedupeKey, priority, ...event }) => event);
-  }, [call.callMode, unifiedDomain, handoverInfo, isGSMMode, l3Data, l3DataBSide, selectedLteSide, srvccDetail, csfbDetail]);
+  }, [callMode, unifiedDomain, handoverInfo, isGSMMode, l3Data, l3DataBSide, selectedLteSide, srvccDetail, csfbDetail]);
 
   const srvccEvents = useMemo(() => srvccDetail?.events ?? [], [srvccDetail]);
   const activeSrvccEvents = useMemo(
@@ -1366,13 +1379,13 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // axis and one row per timestamp, so a single tooltip can show στοιχεία και των δύο τεχνολογιών
   // (ισχύς, ποιότητα, SINR, cell identity) γύρω από το handover.
   const srvccTransitionData = useMemo(() => {
-    if (call.callMode !== "SRVCC") return [];
+    if (callMode !== "SRVCC") return [];
     return mergeTransitionSeries(
       selectedLteSide === "B" ? bSideLteValues : radioValues,
       selectedLteSide === "B" ? bSideGsmValues : gsmValues,
       srvccWindow,
     );
-  }, [call.callMode, selectedLteSide, radioValues, bSideLteValues, gsmValues, bSideGsmValues, srvccWindow]);
+  }, [callMode, selectedLteSide, radioValues, bSideLteValues, gsmValues, bSideGsmValues, srvccWindow]);
 
   // Στατιστικά ανά σκέλος + το πραγματικό ραδιο-κενό: τελευταίο LTE sample πριν το event και
   // πρώτο GSM sample μετά. Το κενό αυτό είναι το μετρήσιμο αντίστοιχο του KPI interruption time.
@@ -1383,7 +1396,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
 
   // Generic handovers remain useful for non-SRVCC calls. For SRVCC, only the KPI-backed events
   // are shown, avoiding the previous implication that every HandoverInfo row was an SRVCC event.
-  const headerHandoverInfo = call.callMode === "SRVCC" ? [] : handoverInfo;
+  const headerHandoverInfo = callMode === "SRVCC" ? [] : handoverInfo;
   const activeCellInfo = selectedLteSide === "B" ? bSideCellInfo : cellInfo;
 
   // Ποιά γραμμή του πίνακα Radio Measurements αντιστοιχεί στον κοινό cursor: η πλησιέστερη
@@ -1593,7 +1606,12 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     const stateSegments: OverviewSegment[] = [];
     const callLabel = `CALL${call.callType ? ` · ${call.callType}` : ""}`;
     const callDetail = [
-      call.callMode ? `Mode: ${call.callMode}` : null,
+      // Εμφάνιση: το raw mode της βάσης, με το resolved όταν διαφέρει (π.χ. «-» → CS από technology)
+      call.callMode
+        ? `Mode: ${call.callMode}${
+            callMode === "UNKNOWN" ? " (άγνωστο — φορτώθηκαν όλα τα σκέλη)"
+            : callMode !== call.callMode ? ` (→ ${callMode} από technology)` : ""}`
+        : null,
       call.status ? `Status: ${call.status}` : null,
     ].filter(Boolean).join(" · ") || undefined;
 
@@ -1762,7 +1780,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
 
     // CS κλήση: το GSM σκέλος δεν καταγράφεται ούτε εδώ, οπότε αν τίποτα δεν
     // καλύπτει τη διάρκεια της κλήσης τη συμπληρώνουμε ρητά ως GSM.
-    if (call.callMode === "CS" && callStart != null && callEnd != null && callEnd > callStart
+    if (callMode === "CS" && callStart != null && callEnd != null && callEnd > callStart
         && !segments.some((seg) => seg.from < callEnd && seg.to > callStart)) {
       const csSeg = clip({ from: callStart, to: callEnd, label: "GSM", color: technologyColor("GSM"), detail: "CS κλήση — δεν υπάρχει εγγραφή στον πίνακα Technology" });
       if (csSeg) segments.push(csSeg);
@@ -1788,12 +1806,12 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     if (techSegments.length > 0) lanes.push({ name: "Τεχνολογία", segments: techSegments });
 
     return { times, lanes, callStart, callEnd };
-  }, [unifiedDomain, callBounds, contextTechnology, techPeriods, techPeriodsBSide, selectedLteSide, srvccDetail, csfbDetail, call.callType, call.callMode, call.status]);
+  }, [unifiedDomain, callBounds, contextTechnology, techPeriods, techPeriodsBSide, selectedLteSide, srvccDetail, csfbDetail, call.callType, call.callMode, callMode, call.status]);
 
   /**
    * Ο πίνακας "Technology Timeline" και ο πίνακας "Αλλαγές τεχνολογίας" έδειχναν τα ίδια
    * events από δύο διαφορετικά endpoints: το πρώτο μόνο μέσα στην κλήση, το δεύτερο σε
-   * παράθυρο ±contextWindowSec γύρω της (με phase). Τα ενώνουμε σε έναν πίνακα: βάση είναι
+   * παράθυρο ±viewWindowSec γύρω της (με phase). Τα ενώνουμε σε έναν πίνακα: βάση είναι
    * τα context rows (έχουν phase), και όποιο timeline row δεν καλύπτεται από αυτά μπαίνει ως
    * "during" — κάθε event εμφανίζεται μία φορά, σε κοινό άξονα χρόνου.
    */
@@ -1804,10 +1822,12 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
 
     const rows = new Map<string, MergedTechRow>();
     for (const row of contextTechnology as MergedTechRow[]) {
+      // Το context ήρθε για ±CONTEXT_FETCH_WINDOW_SEC — κρατάμε μόνο όσα πέφτουν στο ορατό ±Ns
+      if (!inView(new Date(row.MsgTime ?? NaN).getTime())) continue;
       rows.set(keyOf(row), { ...row, phase: row.phase ?? "during" });
     }
     // SRVCC κλήσεις καλύπτονται από το KPI-backed panel παραπάνω — εκεί το timeline δεν προστίθεται
-    if (call.callMode !== "SRVCC") {
+    if (callMode !== "SRVCC") {
       for (const row of technologyTimeline) {
         const key = keyOf(row);
         const existing = rows.get(key);
@@ -1823,7 +1843,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     return [...rows.values()].sort(
       (a, b) => new Date(a.MsgTime ?? 0).getTime() - new Date(b.MsgTime ?? 0).getTime()
     );
-  }, [contextTechnology, technologyTimeline, call.callMode]);
+  }, [contextTechnology, technologyTimeline, callMode, inView]);
 
   return (
     <motion.div
@@ -1897,13 +1917,13 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
         </span>
       </div>
 
-      {loadErrors.length > 0 && (
+      {(loadErrors.length > 0 || contextLoadErrors.length > 0) && (
         <div className="rounded border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-300">
-          Μερικά API panels απέτυχαν: {loadErrors.join(", ")}. Τα κενά τους δεν θεωρούνται «χωρίς δεδομένα».
+          Μερικά API panels απέτυχαν: {[...loadErrors, ...contextLoadErrors].join(", ")}. Τα κενά τους δεν θεωρούνται «χωρίς δεδομένα».
         </div>
       )}
 
-      {call.callMode === "SRVCC" && (
+      {callMode === "SRVCC" && (
         <div className="bg-card border border-border rounded-lg p-3 space-y-3">
           <div className="flex items-center justify-between gap-2 flex-wrap">
             {/* Κλειστό εξ ορισμού — η γραμμή από μόνη της λέει την έκβαση του handover,
@@ -2580,7 +2600,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
           onPinnedChange={setChartPinned}
           subtitle={
             <>
-              ±{contextWindowSec}s γύρω από την κλήση · {unifiedSamples.length} δείγματα · {selectedLteSide}-side
+              ±{viewWindowSec}s γύρω από την κλήση · {unifiedSamples.length} δείγματα · {selectedLteSide}-side
               {activeCallDir && (
                 <span
                   className={`ml-1.5 px-1.5 py-0.5 rounded text-[12px] font-bold tracking-wide ${
@@ -2597,14 +2617,14 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
           }
           controls={
             <>
-              {/* Μέγεθος παραθύρου — αλλάζοντάς το ξαναφορτώνει το context (reloadContext effect) */}
+              {/* Ορατό παράθυρο — καθαρό φίλτρο εμφάνισης, δεν ξαναρωτάει τη βάση */}
               <div className="inline-flex rounded-md border border-border overflow-hidden">
-                {[10, 30, 60, 120].map((seconds) => (
+                {VIEW_WINDOW_OPTIONS.map((seconds) => (
                   <button
                     key={seconds}
                     type="button"
-                    onClick={() => setContextWindowSec(seconds)}
-                    className={`px-2 py-1 text-[10px] border-r last:border-r-0 border-border ${contextWindowSec === seconds ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
+                    onClick={() => setViewWindowSec(seconds)}
+                    className={`px-2 py-1 text-[10px] border-r last:border-r-0 border-border ${viewWindowSec === seconds ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
                   >
                     ±{seconds}s
                   </button>
@@ -3052,7 +3072,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       {mergedTechnology.length > 0 && (
         <div className="bg-card border border-border rounded-lg p-3 space-y-3">
           <h3 className="text-sm font-semibold text-foreground">
-            Συμπεριφορά δικτύου ±{contextWindowSec}δευτ. πριν / μετά κλήση
+            Συμπεριφορά δικτύου ±{viewWindowSec}δευτ. πριν / μετά κλήση
           </h3>
 
           {selectedLteSide === "B" && activeContextSignal.length === 0 && (!showGsmContext || activeGsmContextSignal.length === 0) && (
@@ -3066,7 +3086,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
               "Technology Timeline") μαζί με όσα συμβαίνουν πριν/μετά μέσα στο παράθυρο */}
           <div>
               <p className="text-xs text-muted-foreground mb-1">
-                Αλλαγές τεχνολογίας <span className="text-[10px]">({mergedTechnology.length} events — κλήση + παράθυρο ±{contextWindowSec}δευτ.)</span>
+                Αλλαγές τεχνολογίας <span className="text-[10px]">({mergedTechnology.length} events — κλήση + παράθυρο ±{viewWindowSec}δευτ.)</span>
               </p>
               <div className="overflow-x-auto max-h-[240px] overflow-y-auto rounded border border-border/50">
                 <table className="w-full text-xs text-center">
