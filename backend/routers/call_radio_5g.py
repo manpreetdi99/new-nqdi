@@ -31,8 +31,21 @@ def get_nr5g_values(
                   ,ROUND(fr.[SINR], 2)  AS [SINR]
                   ,dp.Latitude
                   ,dp.Longitude
+                  -- Serving cell: το FactNR5GRadio δεν έχει CID, οπότε έρχεται από το
+                  -- DmnCellInformation μέσω του mapping. Χρειάζεται για το «κοινό» 5G scanner
+                  -- (/api/nr5g_scanner_raw ανά CID). TOP 1: μία γραμμή ανά μέτρηση.
+                  ,fr.[PCI]
+                  ,cell.CId
+                  ,cell.NCI
+                  ,cell.AbsFreqSSB
               FROM [FactNR5GRadio] fr
               LEFT JOIN DmnPosition dp ON dp.DmnId = fr.DmnIdPosition
+              OUTER APPLY (
+                  SELECT TOP 1 ci.CId, ci.NCI, ci.AbsFreqSSB
+                    FROM DwFactNR5GRadioToDmnCellInformationMapping m
+                    JOIN DmnCellInformation ci ON ci.DmnId = m.DmnIdCellInformation
+                   WHERE m.FactId = fr.FactId
+              ) cell
              WHERE fr.[SessionId] = TRY_CONVERT(BIGINT, ?)
               ORDER BY fr.FullDate
         """

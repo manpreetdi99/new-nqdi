@@ -303,6 +303,115 @@ def get_lte_scanner_best(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/nr5g_scanner_raw")
+def get_nr5g_scanner_raw(
+    database: str = Query(..., min_length=1),
+    cid: str = Query(..., min_length=1),
+    start: str = Query(..., min_length=1),
+    end: str = Query(..., min_length=1)
+):
+    """FactNR5GScannerBeam rows for the UE's serving 5G cell (by CID) within [start, end] — the
+    5G counterpart of /api/lte_scanner_raw, fetched per contiguous serving-CID segment.
+    The table holds one row PER BEAM, so only the strongest beam (max SS-RSRP) is kept for each
+    scan timestamp; otherwise the client could match a weak side beam. SS_RSRP/SS_RSRQ/SS_SINR
+    are returned as RSRP/RSRQ/SINR and AbsFreqSSB as NRARFCN, like the LTE rows."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            ;WITH beams AS (
+                SELECT
+                    fs.FullDate,
+                    fs.AbsFreqSSB                  AS NRARFCN,
+                    fs.PCI,
+                    fs.CID,
+                    fs.TAC,
+                    fs.MCC,
+                    fs.MNC,
+                    fs.RFBand,
+                    ROUND(fs.SS_RSRP, 2)           AS RSRP,
+                    ROUND(fs.SS_RSRQ, 2)           AS RSRQ,
+                    ROUND(fs.SS_SINR, 2)           AS SINR,
+                    ROUND(fs.RSSI, 2)              AS RSSI,
+                    fs.DmnIdTopN_SS_RSRP           AS RankByRSRP,
+                    fs.DistanceToBTS,
+                    ROW_NUMBER() OVER (PARTITION BY fs.FullDate ORDER BY fs.SS_RSRP DESC) AS beam_rank
+                FROM FactNR5GScannerBeam fs
+                WHERE fs.CID = TRY_CONVERT(BIGINT, ?)
+                  AND fs.FullDate >= ?
+                  AND fs.FullDate <= ?
+            )
+            SELECT FullDate, NRARFCN, PCI, CID, TAC, MCC, MNC, RFBand,
+                   RSRP, RSRQ, SINR, RSSI, RankByRSRP, DistanceToBTS
+            FROM beams
+            WHERE beam_rank = 1
+            ORDER BY FullDate
+        """, (cid, start, end))
+        cols = [c[0] for c in cursor.description] if cursor.description else []
+        rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
+
+        conn.close()
+        return rows
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.get("/api/nr5g_scanner_best")
+def get_nr5g_scanner_best(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """Best (DmnIdTopN_SS_RSRP_Operator = 1) FactNR5GScannerBeam reading per scan cycle for the
+    call's own operator — the 5G counterpart of /api/lte_scanner_best (same time window and
+    operator derivation). Feeds the 'Best 5G scanner' chart line. SS_RSRP/SS_RSRQ are returned
+    as RSRP/RSRQ and AbsFreqSSB as NRARFCN, so the client reads them like the LTE rows."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+
+        cursor.execute("""
+            ;WITH call_ctx AS (
+                SELECT TOP 1
+                    COALESCE(S.startTime, SB.startTime) AS start_time,
+                    COALESCE(
+                        CA.callEndTimeStamp,
+                        DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(S.startTime, SB.startTime))
+                    ) AS end_time,
+                    CASE
+                        WHEN DF.ASideLocation LIKE '%Cosmote%' OR DF.CollectionName LIKE '%Cosmote%' THEN 1
+                        WHEN DF.ASideLocation LIKE '%Vodafone%' OR DF.CollectionName LIKE '%Vodafone%' THEN 5
+                        WHEN DF.ASideLocation LIKE '%Nova%' OR DF.ASideLocation LIKE '%Wind%'
+                             OR DF.CollectionName LIKE '%Nova%' OR DF.CollectionName LIKE '%Wind%' THEN 10
+                        ELSE NULL
+                    END AS call_mnc
+                FROM CallAnalysis CA
+                LEFT JOIN FileList DF ON CA.FileId = DF.FileId
+                LEFT JOIN Sessions S ON S.SessionId = CA.SessionId
+                LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
+                WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
+            )
+            SELECT fs.FullDate, fs.AbsFreqSSB AS NRARFCN, fs.PCI, fs.CId, fs.TAC, fs.MCC, fs.MNC,
+                   ROUND(fs.SS_RSRP, 2) AS RSRP, ROUND(fs.SS_RSRQ, 2) AS RSRQ
+            FROM FactNR5GScannerBeam fs
+            CROSS JOIN call_ctx cc
+            WHERE fs.DmnIdTopN_SS_RSRP_Operator = 1
+              AND fs.FullDate >= cc.start_time
+              AND fs.FullDate <= cc.end_time
+              AND cc.call_mnc IS NOT NULL
+              AND fs.MCC = 202
+              AND fs.MNC = cc.call_mnc
+            ORDER BY fs.FullDate
+        """, (session_id,))
+        cols = [c[0] for c in cursor.description] if cursor.description else []
+        rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
+
+        conn.close()
+        return rows
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/lte_scanner_measurement")
 def get_lte_scanner_measurement(
     database: str = Query(..., min_length=1),

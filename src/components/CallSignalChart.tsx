@@ -98,6 +98,8 @@ const QUALITY_SERIES = [
 const SCANNER_SERIES = [
   { key: "ScannerStrength", name: "Scanner", dash: "4 3" },
   { key: "BestScannerStrength", name: "Best scanner", dash: "2 2" },
+  { key: "NrBestScannerStrength", name: "Best 5G scanner", dash: "6 2 1 2" },
+  { key: "NrScannerStrength", name: "5G scanner", dash: "4 3" },
 ] as const;
 
 /** Κατώφλια ανά δίκτυο — ίδιες τιμές με τις χρωματικές κλίμακες του χάρτη. */
@@ -124,6 +126,8 @@ export function CallSignalChart({
   const [seriesOverride, setSeriesOverride] = useState<Record<string, boolean>>({});
   const [showScanner, setShowScanner] = useState(false);
   const [showBScanner, setShowBScanner] = useState(false);
+  const [showNrBScanner, setShowNrBScanner] = useState(false);
+  const [showNrScanner, setShowNrScanner] = useState(false);
   const [showEvents, setShowEvents] = useState(true);
 
   /**
@@ -170,6 +174,8 @@ export function CallSignalChart({
   ).map((series) => ({ ...series, missing: !present.has(series.key) }));
   const hasScanner = present.has("ScannerStrength");
   const hasBestScanner = present.has("BestScannerStrength");
+  const hasNrBestScanner = present.has("NrBestScannerStrength");
+  const hasNrScanner = present.has("NrScannerStrength");
 
   const laidOutEvents = useMemo(
     () => (domain ? layoutEventLanes(events, domain, EVENT_LANES) : []),
@@ -182,8 +188,9 @@ export function CallSignalChart({
   const activeSeriesCount =
     visibleStrength.length +
     visibleQuality.length +
-    [showScanner && hasScanner, showBScanner && hasBestScanner].filter(Boolean).length;
-  const showStrengthAxis = visibleStrength.length > 0 || (showScanner && hasScanner) || (showBScanner && hasBestScanner);
+    [showScanner && hasScanner, showBScanner && hasBestScanner, showNrBScanner && hasNrBestScanner, showNrScanner && hasNrScanner].filter(Boolean).length;
+  const showStrengthAxis = visibleStrength.length > 0 || (showScanner && hasScanner) || (showBScanner && hasBestScanner)
+    || (showNrBScanner && hasNrBestScanner) || (showNrScanner && hasNrScanner);
   const showQualityAxis = visibleQuality.length > 0;
   const showStrengthThresholds = activeSeriesCount === 1 && showStrengthAxis;
   const showQualityThresholds = activeSeriesCount === 1 && showQualityAxis;
@@ -282,6 +289,24 @@ export function CallSignalChart({
           >
             <input type="checkbox" checked={showBScanner} onChange={(e) => setShowBScanner(e.target.checked)} className="h-3 w-3" />
             Best scanner
+          </label>
+        )}
+        {hasNrScanner && (
+          <label
+            className="inline-flex items-center gap-1 cursor-pointer"
+            title="Ο 5G scanner στο ίδιο serving CID με το κινητό (ισχυρότερο beam) — σύγκριση SS-RSRP κινητού vs scanner."
+          >
+            <input type="checkbox" checked={showNrScanner} onChange={(e) => setShowNrScanner(e.target.checked)} className="h-3 w-3" />
+            5G scanner
+          </label>
+        )}
+        {hasNrBestScanner && (
+          <label
+            className="inline-flex items-center gap-1 cursor-pointer"
+            title="Top 1 SS-RSRP του 5G scanner (FactNR5GScannerBeam) για τον operator της κλήσης, ανεξαρτήτως serving cell του κινητού."
+          >
+            <input type="checkbox" checked={showNrBScanner} onChange={(e) => setShowNrBScanner(e.target.checked)} className="h-3 w-3" />
+            Best 5G scanner
           </label>
         )}
         {laidOutEvents.length > 0 && (
@@ -402,6 +427,12 @@ export function CallSignalChart({
             )}
             {showBScanner && hasBestScanner && (
               <Line yAxisId="strength" type="monotone" dataKey="BestScannerStrength" stroke="hsl(280, 65%, 60%)" strokeDasharray={SCANNER_SERIES[1].dash} dot={false} activeDot={false} strokeWidth={2} connectNulls name="Best scanner" />
+            )}
+            {showNrScanner && hasNrScanner && (
+              <Line yAxisId="strength" type="monotone" dataKey="NrScannerStrength" stroke="hsl(195, 85%, 60%)" strokeDasharray={SCANNER_SERIES[3].dash} dot={false} activeDot={false} strokeWidth={2} connectNulls name="5G scanner" />
+            )}
+            {showNrBScanner && hasNrBestScanner && (
+              <Line yAxisId="strength" type="monotone" dataKey="NrBestScannerStrength" stroke="hsl(330, 80%, 62%)" strokeDasharray={SCANNER_SERIES[2].dash} dot={false} activeDot={false} strokeWidth={2} connectNulls name="Best 5G scanner" />
             )}
             {visibleQuality.map((series) => (
               <Line

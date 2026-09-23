@@ -20,6 +20,10 @@ export interface SignalSample {
   NrRSRQ?: number;
   ScannerStrength?: number;
   BestScannerStrength?: number;
+  /** Best 5G scanner SS-RSRP — δική του σειρά, ώστε να μην ανακατεύεται με το LTE/GSM scanner */
+  NrBestScannerStrength?: number;
+  /** Κοινό 5G scanner (ίδιο serving CID με το κινητό) SS-RSRP */
+  NrScannerStrength?: number;
 }
 
 /** Οι σειρές που μπορεί να σχεδιάσει το διάγραμμα, ανά άξονα. */
