@@ -815,6 +815,14 @@ export async function fetchCallSideComparison(
   return requestJson(`/api/call_side_comparison?${params.toString()}`);
 }
 
+/**
+ * Το Sessions.Valid που γράφει το /api/calls/comment μαζί με το σχόλιο — ίδιος κανόνας με το
+ * backend (routers/calls.py): σχόλιο που αρχίζει από "fake" (χωρίς trim, case-insensitive) → 0,
+ * οτιδήποτε άλλο → 1. Χρησιμοποιείται για να ενημερωθεί η λίστα κλήσεων χωρίς refetch.
+ */
+export const sessionValidAfterComment = (comment: string): 0 | 1 =>
+  comment.toLowerCase().startsWith("fake") ? 0 : 1;
+
 export async function updateCallComment(
   database: string,
   session_id: string,

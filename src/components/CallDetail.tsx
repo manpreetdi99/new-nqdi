@@ -36,6 +36,11 @@ interface CallDetailProps {
   onBack: () => void;
   /** Πλοήγηση σε άλλη κλήση (Prev/Next Call) — δίνει το SessionId της κλήσης-στόχου */
   onNavigateToCall?: (sessionId: string) => void;
+  /**
+   * Το σχόλιο αποθηκεύτηκε (και μαζί του άλλαξε το Sessions.Valid) — ο γονέας ενημερώνει τη
+   * λίστα κλήσεων, ώστε στο «Πίσω» να φαίνονται το νέο σχόλιο και το Valid/Invalid.
+   */
+  onCommentSaved?: (sessionId: string, comment: string) => void;
 }
 
 
@@ -252,7 +257,7 @@ function kpiDurationLabel(start: string | null | undefined, end: string | null |
   return ms < 1000 ? `${ms} ms` : `${(ms / 1000).toFixed(2)} s`;
 }
 
-const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProps) => {
+const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }: CallDetailProps) => {
   // Το callMode που οδηγεί ΟΛΕΣ τις αποφάσεις φόρτωσης. Πολλές κλήσεις έρχονται με «-» (ή κενό →
   // «N/A»): επιλύονται από το technology με τον κανόνα του A-LEVEL (βλ. resolveCallDetailMode),
   // αλλιώς μια «-» κλήση σε GSM θα φόρτωνε μόνο LTE και θα έβγαινε άδεια. Η εμφάνιση κρατάει το raw.
@@ -462,13 +467,15 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
 
 
 
-  // Persists the comment textarea to the backend and updates the in-memory call record so the
-  // header reflects the new text immediately without a refetch.
+  // Persists the comment textarea to the backend and reports it to the parent, which updates the
+  // call list (comment + Valid/Invalid) — the header then gets the new text through the `call`
+  // prop, and «Πίσω» shows the updated list without a refetch.
   const handleSaveComment = async () => {
     setIsSavingComment(true);
     try {
       await updateCallComment(database, call.callId, commentText);
-      call.comment = commentText; // Mutate local state inline to keep consistent
+      if (onCommentSaved) onCommentSaved(call.callId, commentText);
+      else call.comment = commentText; // χωρίς γονέα που να ακούει: τουλάχιστον ο header να δείξει το νέο κείμενο
       setIsEditingComment(false);
       toast({
         title: "Επιτυχία",

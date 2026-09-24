@@ -34,6 +34,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   ApiClientError,
   fetchAllCalls,
+  sessionValidAfterComment,
   fetchCapacityLink,
   fetchCellBandCount,
   fetchDataCalls,
@@ -352,6 +353,19 @@ const Index = () => {
   }, []);
   // "Call Detail" and "Data Detail" live as a sub-navbar inside the "All Calls" tab
   const [callsSubTab, setCallsSubTab] = useUrlStringState<"list" | "detail" | "data-detail">("sub", "list", { allowed: CALLS_SUB_TABS });
+
+  // Σχόλιο αποθηκεύτηκε στο Call Detail: το backend έγραψε μαζί και το Sessions.Valid, οπότε
+  // ενημερώνουμε τη γραμμή στη λίστα (σχόλιο + Valid/Invalid χρώμα/badge/φίλτρο) και το
+  // CallRecord του Call Detail — στο «Πίσω» η λίστα είναι ήδη σωστή, χωρίς refetch.
+  const handleCommentSaved = useCallback((sessionId: string, comment: string) => {
+    const isValid = sessionValidAfterComment(comment);
+    setAllCallsRows((rows) => rows.map((row) =>
+      String(row.SessionId) === String(sessionId) ? { ...row, comment, isValid } : row
+    ));
+    setCallRecords((records) => records.map((record) =>
+      String(record.callId) === String(sessionId) ? { ...record, comment } : record
+    ));
+  }, []);
 
   const openCallDetail = (record: CallRecord) => {
     setSelectedCallId(String(record.callId));
@@ -2307,6 +2321,7 @@ const Index = () => {
                   call={selectedCall}
                   database={selectedDatabase}
                   onBack={() => setCallsSubTab("list")}
+                  onCommentSaved={handleCommentSaved}
                   onNavigateToCall={(sessionId) => {
                     const record = callRecords.find((c) => String(c.callId) === String(sessionId));
                     if (record) {
