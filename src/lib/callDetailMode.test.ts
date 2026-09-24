@@ -19,10 +19,19 @@ describe("resolveCallDetailMode", () => {
     expect(resolveCallDetailMode("Unknown", "LTE")).toBe("VoLTE");
   });
 
+  it("resolves anything mentioning 5G / NR to VoNR, unless GSM/UMTS is also there", () => {
+    expect(resolveCallDetailMode("-", "5G NR")).toBe("VoNR");
+    expect(resolveCallDetailMode("-", "NR")).toBe("VoNR");
+    expect(resolveCallDetailMode("N/A", "LTE/5G")).toBe("VoNR");
+    expect(resolveCallDetailMode("-", "GSM/5G")).toBe("CS");
+    // "nr" only as a token — not inside other words
+    expect(resolveCallDetailMode("-", "Unrelated")).toBe("UNKNOWN");
+  });
+
   it("falls back to UNKNOWN (load everything) when technology gives nothing to go on", () => {
-    expect(resolveCallDetailMode("-", "5G NR")).toBe("UNKNOWN");
     expect(resolveCallDetailMode("-", null)).toBe("UNKNOWN");
     expect(resolveCallDetailMode("", "N/A")).toBe("UNKNOWN");
+    expect(resolveCallDetailMode("-", "")).toBe("UNKNOWN");
   });
 
   it("recognises the unknown markers", () => {

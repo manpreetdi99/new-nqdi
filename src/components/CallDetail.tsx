@@ -1,8 +1,8 @@
 import { useState, useEffect, useMemo, useRef, useCallback, Fragment } from "react";
 import { motion } from "framer-motion";
 import {
-  ArrowLeft, Signal, Activity, Gauge, ArrowDown, ArrowUp,
-  Wifi, Timer, Save, Edit2, Flag, ChevronLeft, ChevronRight, Maximize2, MapPin
+  ArrowLeft, Signal, Activity, Gauge, ArrowDown,
+  Timer, Save, Edit2, Flag, ChevronLeft, ChevronRight, Maximize2, MapPin
 } from "lucide-react";
 import L from "leaflet";
 import { MapContainer, TileLayer, CircleMarker, Marker, Polyline, useMap, Tooltip as LeafletTooltip } from "react-leaflet";
@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { useToast } from "@/components/ui/use-toast";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchNr5gValues, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchNr5gScannerBest, fetchNr5gScannerRaw, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchNr5gContextSignal, fetchNr5gContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchCallSrvccDetail, fetchCallCsfbDetail, fetchTechnologyTimeline, fetchTechnologyPeriods, fetchVoiceCodec, fetchMarkers, fetchCallNeighbors, type TechnologyPeriodRow, type CallNeighbors, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type SrvccDetailResponse, type SrvccEventRow, type CsfbDetailResponse, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchNr5gValues, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchNr5gScannerBest, fetchNr5gScannerRaw, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchNr5gContextSignal, fetchNr5gContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchCallSrvccDetail, fetchCallCsfbDetail, fetchTechnologyTimeline, fetchTechnologyPeriods, fetchVoiceCodec, fetchMarkers, fetchCallNeighbors, type TechnologyPeriodRow, type CallNeighbors, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type SrvccDetailResponse, type SrvccEventRow, type CsfbDetailResponse, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow, type Nr5gCell } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { technologyColor } from "@/lib/chartStyles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -58,8 +58,10 @@ const VIEW_WINDOW_OPTIONS = [10, 30, 60, 120] as const;
 // ±60s για CS (GSM-only) κλήσεις, ±30s για όλες τις υπόλοιπες.
 const defaultViewWindowSec = (callMode?: string | null) => (callMode === "CS" ? 60 : 30);
 
-// Κοινό 5G scanner: πάνω από τόσο μακριά στον χρόνο το scanner sample δεν συγκρίνεται με το κινητό.
-const NR_SCANNER_MAX_DT_MS = 10_000;
+// Κοινό scanner (LTE/GSM/5G) μέσα στην κλήση: πάνω από τόσο μακριά στον χρόνο το scanner sample
+// δεν συγκρίνεται με τη μέτρηση του κινητού. Χωρίς όριο, με το ±CONTEXT_FETCH_WINDOW_SEC padding οι
+// τελευταίες γραμμές της κλήσης ταίριαζαν με scanner έως 2 λεπτά ΜΕΤΑ το τέλος της.
+const SCANNER_MATCH_MAX_DT_MS = 10_000;
 // Scanner στο context (πριν/μετά την κλήση): μέγιστη απόσταση scanner sample ↔ δείγμα κινητού,
 // και ανοχή όταν ένα scanner sample (best) κολλάει με τη δική του ώρα στην καμπύλη.
 const CONTEXT_SCANNER_MAX_DT_MS = 5_000;
@@ -85,15 +87,43 @@ const toTimedRows = (raw: any[]): TimedRows => {
     .sort((a, b) => a._ts - b._ts);
   return { rows, times: rows.map((row) => row._ts) };
 };
+/** Ομαδοποίηση scanner rows ανά κλειδί (CGI, EARFCN+PCI, CID…), το καθένα ταξινομημένο κατά χρόνο. */
+const groupTimedRows = (raw: any[], keyOf: (row: any) => string | null): Map<string, TimedRows> => {
+  const groups = new Map<string, any[]>();
+  for (const row of raw) {
+    const key = keyOf(row);
+    if (key == null) continue;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key)!.push(row);
+  }
+  const timed = new Map<string, TimedRows>();
+  groups.forEach((rows, key) => timed.set(key, toTimedRows(rows)));
+  return timed;
+};
 /** Το πλησιέστερο scanner row στο `ts`, μόνο αν απέχει ≤ maxMs. */
 const nearestWithin = (timed: TimedRows | undefined, ts: number, maxMs: number): any | null => {
   if (!timed || timed.rows.length === 0 || !Number.isFinite(ts)) return null;
   const index = nearestIndex(timed.times, ts);
   return index >= 0 && Math.abs(timed.times[index] - ts) <= maxMs ? timed.rows[index] : null;
 };
-/** Serving CID μιας NR γραμμής του κινητού (από DmnCellInformation) — CId, αλλιώς NCI. */
-const nrServingCid = (row: { CId?: unknown; NCI?: unknown }): string | null =>
-  row.CId != null ? String(row.CId) : row.NCI != null ? String(row.NCI) : null;
+/**
+ * Serving 5G κυψέλη μιας NR γραμμής του κινητού: CId / NCI (από DmnCellInformation) όταν υπάρχει,
+ * αλλιώς NR-ARFCN + PCI. Στα δεδομένα το mapping είναι συχνά άδειο (CId = NULL), ενώ το NRARFCN
+ * του κινητού ταιριάζει με το AbsFreqSSB του scanner. `key` ταιριάζει με το nrScannerRowKeys.
+ */
+const nrServingCell = (row: any): { key: string; cell: Nr5gCell } | null => {
+  const cid = row.CId ?? row.NCI;
+  if (cid != null) return { key: `cid:${cid}`, cell: { cid: String(cid) } };
+  if (row.NRARFCN != null && row.PCI != null) {
+    return { key: `arfcn:${row.NRARFCN}_${row.PCI}`, cell: { arfcn: Number(row.NRARFCN), pci: Number(row.PCI) } };
+  }
+  return null;
+};
+/** Τα κλειδιά με τα οποία μπορεί να βρεθεί ένα 5G scanner row (CID και NR-ARFCN + PCI). */
+const nrScannerRowKeys = (row: any): string[] => [
+  ...(row.CID != null ? [`cid:${row.CID}`] : []),
+  ...(row.NRARFCN != null && row.PCI != null ? [`arfcn:${row.NRARFCN}_${row.PCI}`] : []),
+];
 
 // Χρωματισμός LTE RSRP: πράσινο καλό, πορτοκαλί οριακό, κόκκινο κακό (χρησιμοποιείται στο χάρτη)
 function rsrpColor(val: number | null | undefined): string {
@@ -295,6 +325,10 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   const [nr5gScannerBestRaw, setNr5gScannerBestRaw] = useState<any[]>([]);
   // Κοινό 5G scanner (ίδιο serving CID με το κινητό) — μόνο A-side: NR rows υπάρχουν μόνο σε VoNR, A-side
   const [nr5gScannerRawA, setNr5gScannerRawA] = useState<any[]>([]);
+  // NR γραμμές του κινητού (A-side) για ΚΑΘΕ κλήση που αγγίζει LTE/5G — όχι μόνο VoNR. Στον
+  // πίνακα/καμπύλη μπαίνουν μόνο σε VoNR (radioValues)· εδώ χρειάζονται για το serving CID
+  // του κοινού 5G scanner (π.χ. VoLTE με EN-DC, κλήσεις «-» σε 5G).
+  const [nr5gUeRows, setNr5gUeRows] = useState<any[]>([]);
   const [callKpiTile, setCallKpiTile] = useState<CallKpiTile | null>(null);
   // SRVCC handover events (4G->3G/2G, success/fail + interruption time), technology
   // changes over the call (incl. CA carrier counts), and voice codec used per direction
@@ -460,13 +494,16 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   //   - callMode === "SRVCC"         → starts LTE, handed over to GSM (both fetched)
   //   - anything else                → LTE only
   useEffect(() => {
+    // Γρήγορο Prev/Next: οι απαντήσεις της προηγούμενης κλήσης δεν πρέπει να γράψουν πάνω στη νέα
+    let cancelled = false;
     async function loadRadio() {
       setIsLoadingRadio(true);
       try {
         const [lteRes, gsmRes, nr5gRes, mosRes, kpiRes, comparisonRes, bSideLteRes, tracelogRes, bSideGsmRes, cellInfoRes, bSideCellInfoRes, pagingRes, pagingBSideRes, deviceRes, lteMeasCompRes, lteScannerCompRes, callKpiTileRes, handoverInfoRes, technologyTimelineRes, voiceCodecRes, markersRes, srvccDetailRes, csfbDetailRes] = await Promise.allSettled([
           wantsLteLeg ? fetchLteValues(database, call.callId) : Promise.resolve({ lteValues: [] }),
           wantsGsmLeg ? fetchGsmValues(database, call.callId) : Promise.resolve({ gsmValues: [] }),
-          isVoNRMode ? fetchNr5gValues(database, call.callId) : Promise.resolve({ nr5gValues: [] }),
+          // Κάθε κλήση που αγγίζει LTE/5G (VoNR ⇒ wantsLteLeg): οι NR γραμμές δίνουν το serving CID του 5G scanner
+          wantsLteLeg ? fetchNr5gValues(database, call.callId) : Promise.resolve({ nr5gValues: [] }),
           fetchMosValues(database, call.callId),
           fetchKpiValues(database, call.callId),
           fetchCallSideComparison(database, call.callId),
@@ -491,6 +528,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
           // Πάντα: το callMode της κλήσης δεν προδίδει ένα CSFB σκέλος στην άλλη πλευρά.
           fetchCallCsfbDetail(database, call.callId),
         ]);
+        if (cancelled) return;
 
         const namedResults: Array<[string, PromiseSettledResult<unknown>]> = [
           ["LTE radio", lteRes], ["GSM radio", gsmRes], ["NR5G radio", nr5gRes], ["MOS", mosRes], ["KPI", kpiRes],
@@ -504,7 +542,11 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
         ];
         setLoadErrors(namedResults.flatMap(([name, result]) => result.status === "rejected" ? [name] : []));
 
-        if (isVoNRMode) {
+        setNr5gUeRows(nr5gRes.status === "fulfilled" ? ((nr5gRes.value as any).nr5gValues || []) : []);
+
+        // UNKNOWN («-» χωρίς technology): φορτώνονται όλα, οπότε και οι NR γραμμές μπαίνουν στον
+        // πίνακα/καμπύλη δίπλα στις LTE — αλλιώς ένα 5G σκέλος θα έμενε αόρατο.
+        if (isVoNRMode || callMode === "UNKNOWN") {
           // VoNR / VoNR-VoLTE N26 HO: the UE hops between the LTE anchor and standalone NR
           // mid-call, so neither query alone tells the full story — merge both row sets (whichever
           // succeeded) into one chronological series (tagged by Technology) for the radio chart/table.
@@ -515,23 +557,16 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
             ...nr5gRows.map((row: any) => ({ ...row, Technology: "NR5G" })),
           ].sort((a, b) => new Date(a.MsgTime).getTime() - new Date(b.MsgTime).getTime());
           setRadioValues(merged);
-        } else if (lteRes.status === "fulfilled") {
-          setRadioValues((lteRes.value as any).lteValues || []);
+        } else {
+          // Σε αποτυχία άδειο (το banner loadErrors το δείχνει) — όχι τα δεδομένα της προηγούμενης κλήσης
+          setRadioValues(lteRes.status === "fulfilled" ? ((lteRes.value as any).lteValues || []) : []);
         }
 
-        if (gsmRes.status === "fulfilled") {
-          setGsmValues((gsmRes.value as any).gsmValues || []);
-        }
-
-        if (mosRes.status === "fulfilled") {
-          setMosValues(mosRes.value.mosValues || []);
-        }
-
-        if (kpiRes.status === "fulfilled") {
-          setKpiValues(kpiRes.value.kpiValues || []);
-          // Νέα κλήση → το ανοιχτό detail της προηγούμενης δεν αφορά αυτά τα δεδομένα
-          setExpandedKpiRow(null);
-        }
+        setGsmValues(gsmRes.status === "fulfilled" ? ((gsmRes.value as any).gsmValues || []) : []);
+        setMosValues(mosRes.status === "fulfilled" ? (mosRes.value.mosValues || []) : []);
+        setKpiValues(kpiRes.status === "fulfilled" ? (kpiRes.value.kpiValues || []) : []);
+        // Νέα κλήση → το ανοιχτό detail της προηγούμενης δεν αφορά αυτά τα δεδομένα
+        setExpandedKpiRow(null);
 
         if (comparisonRes.status === "fulfilled") {
           setSideComparison(comparisonRes.value.comparison || []);
@@ -557,13 +592,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
           setTracelogValues([]);
         }
 
-        if (cellInfoRes.status === "fulfilled") {
-          setCellInfo(cellInfoRes.value as any);
-        }
-
-        if (bSideCellInfoRes.status === "fulfilled") {
-          setBSideCellInfo(bSideCellInfoRes.value as any);
-        }
+        setCellInfo(cellInfoRes.status === "fulfilled" ? (cellInfoRes.value as any) : null);
+        setBSideCellInfo(bSideCellInfoRes.status === "fulfilled" ? (bSideCellInfoRes.value as any) : null);
 
         if (pagingRes.status === "fulfilled") {
           setL3Data(pagingRes.value as CallL3MessagesResponse);
@@ -650,7 +680,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       } catch (err) {
         console.error("Failed to load metrics", err);
       } finally {
-        setIsLoadingRadio(false);
+        // Μια ακυρωμένη φόρτωση δεν σβήνει το «loading» της νέας που τρέχει ήδη
+        if (!cancelled) setIsLoadingRadio(false);
       }
     }
     // Reset all UI selections and stale data back to defaults before loading the newly selected call
@@ -669,6 +700,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       setLteScannerBestRaw([]);
       setNr5gScannerBestRaw([]);
       setNr5gScannerRawA([]);
+      setNr5gUeRows([]);
       setCallKpiTile(null);
       setSrvccDetail(null);
       setSrvccError(null);
@@ -678,6 +710,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       setSelectedLteSide("A");
       loadRadio();
     }
+    return () => { cancelled = true; };
   }, [database, call.callId, callMode, wantsGsmLeg, wantsLteLeg]);
 
   // Ένα CSFB σκέλος μπορεί να κρέμεται από κλήση περασμένη VoLTE/CS: το ένα κινητό μιλάει
@@ -775,8 +808,9 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // For GSM-capable calls, fetch A-side scanner samples per contiguous serving-cell segment so the
   // "RxLev Scanner" column can cross-check the UE's own measurements against the scanner.
   useEffect(() => {
-    const canBeGsm = wantsGsmLeg;
-    if (!canBeGsm || gsmValues.length === 0 || !database) {
+    // Όχι wantsGsmLeg: σε CSFB που ανακαλύπτεται εκ των υστέρων (VoLTE / «-» σε LTE) τα gsmValues
+    // έρχονται αργότερα χωρίς να αλλάξει το wantsGsmLeg — αρκεί να υπάρχουν GSM μετρήσεις.
+    if (gsmValues.length === 0 || !database) {
       setGsmScannerRaw([]);
       return;
     }
@@ -804,12 +838,11 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       if (!cancelled) setGsmScannerRaw(results.flat());
     });
     return () => { cancelled = true; };
-  }, [database, callMode, wantsGsmLeg, gsmValues]);
+  }, [database, gsmValues]);
 
   // B-side GSM scanner data is fetched independently; it never falls back to A-side samples.
   useEffect(() => {
-    const canBeGsm = wantsGsmLeg;
-    if (!canBeGsm || bSideGsmValues.length === 0 || !database) {
+    if (bSideGsmValues.length === 0 || !database) {
       setGsmScannerRawB([]);
       return;
     }
@@ -826,15 +859,17 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     Promise.all(segments.map((segment, i) => fetchGsmScannerRaw(database, segment.cgi, segment.start, segment.end, edgeSegmentPad(i, segments.length)).catch(() => [])))
       .then((results) => { if (!cancelled) setGsmScannerRawB(results.flat()); });
     return () => { cancelled = true; };
-  }, [database, callMode, wantsGsmLeg, bSideGsmValues]);
+  }, [database, bSideGsmValues]);
 
   // "Best RxLev Scanner" — the strongest cell the scanner saw for the call's own operator at
   // each scan cycle (DmnIdTopN_RxLev_Operator = 1), independent of the UE's serving CGI. Fetched
   // once over the whole call window (resolved server-side from SessionId — call.operator is
   // hardcoded to "N/A" for real calls, and call.startTime/endTime are lossy JS Date round-trips).
+  // showsGsmLeg: και όταν το GSM σκέλος εμφανίστηκε εκ των υστέρων (CSFB σε VoLTE / «-»). Ένα
+  // boolean στα deps, ώστε όταν ήδη wantsGsmLeg το showsGsmLeg false→true να μην ξαναζητά.
+  const wantsGsmBest = wantsGsmLeg || showsGsmLeg;
   useEffect(() => {
-    const canBeGSM = wantsGsmLeg;
-    if (!canBeGSM || !database || !call.callId) {
+    if (!wantsGsmBest || !database || !call.callId) {
       setGsmScannerBestRaw([]);
       return;
     }
@@ -843,7 +878,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       .then(rows => { if (!cancelled) setGsmScannerBestRaw(rows); })
       .catch(() => { if (!cancelled) setGsmScannerBestRaw([]); });
     return () => { cancelled = true; };
-  }, [database, callMode, wantsGsmLeg, call.callId]);
+  }, [database, wantsGsmBest, call.callId]);
 
   // "Best LTE Scanner" — same idea as the GSM one above, but for FactLTEScanner
   // (DmnIdTopN_RSRP_Operator = 1), independent of the UE's serving EARFCN/PCI.
@@ -859,35 +894,38 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     return () => { cancelled = true; };
   }, [database, wantsLteLeg, call.callId]);
 
-  // Κοινό 5G scanner: οι NR γραμμές του κινητού (μόνο σε VoNR) χωρίζονται σε συνεχόμενα
-  // τμήματα ίδιου serving CID και ζητείται το FactNR5GScannerBeam ανά τμήμα — όπως το LTE
-  // ανά CGI. Το CID έρχεται από DmnCellInformation (βλ. /api/nr5g_values)· αν λείπει, NCI.
+  // Κοινό 5G scanner: οι NR γραμμές του κινητού (σε κάθε κλήση με 5G, όχι μόνο VoNR) χωρίζονται
+  // σε συνεχόμενα τμήματα ίδιας serving κυψέλης και ζητείται το FactNR5GScannerBeam ανά τμήμα — όπως
+  // το LTE ανά CGI. Κυψέλη = CID (DmnCellInformation) ή, όταν λείπει, NR-ARFCN + PCI (nrServingCell).
   useEffect(() => {
-    const nrRows = radioValues.filter((v) => v.Technology === "NR5G");
+    const nrRows = nr5gUeRows;
     if (nrRows.length === 0 || !database) {
       setNr5gScannerRawA([]);
       return;
     }
-    type Segment = { cid: string; start: string; end: string };
+    type Segment = { key: string; cell: Nr5gCell; start: string; end: string };
     const segments: Segment[] = [];
     for (const v of nrRows) {
-      const cid = nrServingCid(v);
-      if (!cid || !v.MsgTime) continue;
+      const serving = nrServingCell(v);
+      if (!serving || !v.MsgTime) continue;
       const last = segments[segments.length - 1];
-      if (last && last.cid === cid) last.end = v.MsgTime;
-      else segments.push({ cid, start: v.MsgTime, end: v.MsgTime });
+      if (last && last.key === serving.key) last.end = v.MsgTime;
+      else segments.push({ ...serving, start: v.MsgTime, end: v.MsgTime });
     }
     if (segments.length === 0) { setNr5gScannerRawA([]); return; }
     let cancelled = false;
-    Promise.all(segments.map((seg, i) => fetchNr5gScannerRaw(database, seg.cid, seg.start, seg.end, edgeSegmentPad(i, segments.length)).catch(() => [])))
+    Promise.all(segments.map((seg, i) => fetchNr5gScannerRaw(database, seg.cell, seg.start, seg.end, edgeSegmentPad(i, segments.length)).catch(() => [])))
       .then((results) => { if (!cancelled) setNr5gScannerRawA(results.flat()); });
     return () => { cancelled = true; };
-  }, [database, radioValues]);
+  }, [database, nr5gUeRows]);
 
   // "Best 5G scanner" — FactNR5GScannerBeam, Top 1 SS-RSRP του operator, όπως το LTE best.
-  // Ίδιο κριτήριο με το NR context: όχι σε CS· και σε VoLTE, γιατί με EN-DC η κλήση βλέπει κι αυτή NR.
+  // Μόνο όταν η κλήση άγγιξε ΟΝΤΩΣ 5G (NR γραμμές κινητού ή NR context): αλλιώς μια καθαρή LTE
+  // κλήση έδειχνε «Best 5G scanner» επειδή ο operator έχει 5G στην περιοχή. Boolean στα deps →
+  // ένα fetch όταν γίνει true.
+  const callTouchesNr = nr5gUeRows.length > 0 || nr5gContextSignal.length > 0 || nr5gContextSignalBSide.length > 0;
   useEffect(() => {
-    if (callMode === "CS" || !database || !call.callId) {
+    if (!wantsLteLeg || !callTouchesNr || !database || !call.callId) {
       setNr5gScannerBestRaw([]);
       return;
     }
@@ -896,7 +934,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       .then(rows => { if (!cancelled) setNr5gScannerBestRaw(rows); })
       .catch(() => { if (!cancelled) setNr5gScannerBestRaw([]); });
     return () => { cancelled = true; };
-  }, [database, callMode, call.callId]);
+  }, [database, wantsLteLeg, callTouchesNr, call.callId]);
 
   // Το context «πριν/κατά/μετά» (9 endpoints) φέρνεται ΜΙΑ φορά ανά κλήση, στο μέγιστο παράθυρο
   // CONTEXT_FETCH_WINDOW_SEC. Το ±Ns του χρήστη (viewWindowSec) ΔΕΝ είναι στα deps: κόβεται
@@ -925,9 +963,9 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
         wantsGsmLeg ? fetchGsmContextSignalBSide(database, call.callId, windowSec) : Promise.resolve({ signal: [] }),
         // Όχι μόνο σε VoNR: μια VoLTE κλήση με EN-DC (5G NSA πάνω σε LTE anchor) έχει κι αυτή
         // γραμμές στο FactNR5GRadio, και το NR σκέλος της αξίζει να φαίνεται στην καμπύλη.
-        // Σε CS δεν υπάρχει τίποτα να ρωτήσουμε.
-        callMode !== "CS" ? fetchNr5gContextSignal(database, call.callId, windowSec) : Promise.resolve({ signal: [] }),
-        callMode !== "CS" ? fetchNr5gContextSignalBSide(database, call.callId, windowSec) : Promise.resolve({ signal: [] }),
+        // Ίδιο κριτήριο με NR values / 5G scanner: σε CS μόνο αν η κλήση αγγίζει LTE/5G.
+        wantsLteLeg ? fetchNr5gContextSignal(database, call.callId, windowSec) : Promise.resolve({ signal: [] }),
+        wantsLteLeg ? fetchNr5gContextSignalBSide(database, call.callId, windowSec) : Promise.resolve({ signal: [] }),
         fetchTechnologyPeriods(database, call.callId, windowSec, "A"),
         fetchTechnologyPeriods(database, call.callId, windowSec, "B"),
       ]);
@@ -1034,48 +1072,26 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
   // κόβει ήδη τα idle 0-samples, οπότε ό,τι φτάνει εδώ ως 0 δεν είναι πραγματική μέτρηση.
   // Με `||` γλιστράει στο per-call field και, αν κι αυτό είναι 0, το tile δείχνει "—".
   const downloadMbps = callKpiTile?.Download_Mbps || (call.downloadSpeed || null);
-  const uploadMbps = callKpiTile?.Upload_Mbps || (call.uploadSpeed || null);
-  const latencyMs = callKpiTile?.Latency_ms ?? null;
-  const jitterMs = callKpiTile?.Jitter_ms ?? null;
-  const packetLossPct = callKpiTile?.PacketLoss_pct ?? null;
 
   // Definitions for the inline metrics strip shown in the top controls bar
   const metrics = [
     { label: "Download", value: fmtThroughput(downloadMbps), icon: ArrowDown, color: "text-primary" },
-    { label: "Upload", value: fmtThroughput(uploadMbps), icon: ArrowUp, color: "text-accent" },
-    { label: "Latency", value: fmtMetric(latencyMs, 0, " ms"), icon: Gauge, color: "text-warning" },
     { label: "AVG Mos", value: fmtMetric(avgMos, 2, ""), icon: Gauge, color: "text-warning" },
-    { label: "Jitter", value: fmtMetric(jitterMs, 1, " ms"), icon: Activity, color: "text-chart-4" },
-    { label: "Packet Loss", value: fmtMetric(packetLossPct, 2, "%"), icon: Wifi, color: packetLossPct != null && packetLossPct > 2 ? "text-destructive" : "text-success" },
     { label: "Setup Time", value: `${call.setupTime_ms} ms`, icon: Timer, color: call.setupTime_ms > 500 ? "text-warning" : "text-success" },
   ];
 
-  // Matches each measurement row (by MsgTime) to the nearest sample in a time-sorted scanner
-  // array — O(n log m) once, O(1) per row in render. Shared by the raw and "best" GSM scanner series.
-  const matchNearestByTime = (raw: any[], byMsgTime: any[]): (any | null)[] => {
-    if (raw.length === 0) return [];
-    const sorted = raw
-      .map(r => ({ ...r, _ts: new Date(r.FullDate).getTime() }))
-      .sort((a, b) => a._ts - b._ts);
-    return byMsgTime.map(val => {
-      if (!val.MsgTime) return null;
-      const ts = new Date(val.MsgTime).getTime();
-      let lo = 0, hi = sorted.length - 1, best = 0;
-      while (lo <= hi) {
-        const mid = (lo + hi) >> 1;
-        if (sorted[mid]._ts <= ts) { best = mid; lo = mid + 1; }
-        else hi = mid - 1;
-      }
-      const a = sorted[best];
-      const b = sorted[best + 1];
-      return b && Math.abs(b._ts - ts) < Math.abs(a._ts - ts) ? b : a;
-    });
-  };
-
-  // Precompute GSM scanner match per measurement row (serving-CGI scanner + best-per-operator scanner)
+  // GSM scanner ανά γραμμή του κινητού: το πλησιέστερο δείγμα της ΙΔΙΑΣ serving CGI (όπως το LTE),
+  // έως SCANNER_MATCH_MAX_DT_MS. Γραμμή χωρίς CGI → πλησιέστερο οποιασδήποτε CGI, ίδιο όριο.
   const gsmScannerMatched = useMemo(() => {
     if (!isGSMMode) return [] as (any | null)[];
-    return matchNearestByTime(selectedLteSide === "B" ? gsmScannerRawB : gsmScannerRaw, activeRadioValues);
+    const raw = selectedLteSide === "B" ? gsmScannerRawB : gsmScannerRaw;
+    if (raw.length === 0) return [] as (any | null)[];
+    const byCgi = groupTimedRows(raw, (row) => (row.CGI ? String(row.CGI) : null));
+    const all = toTimedRows(raw);
+    return activeRadioValues.map((val: any) => {
+      const ts = toTimestamp(val.MsgTime);
+      return nearestWithin(val.CGI ? byCgi.get(String(val.CGI)) : all, ts, SCANNER_MATCH_MAX_DT_MS);
+    });
   }, [gsmScannerRaw, gsmScannerRawB, selectedLteSide, activeRadioValues, isGSMMode]);
 
   // Pre-index scanner rows by EARFCN for fast nearest-time lookup. A and B remain
@@ -1084,64 +1100,31 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     ? scannerRawB
     : scannerRawA;
 
-  // Build lookup maps over the scanner rows, sorted by timestamp so nearest-time lookups can use
-  // binary search: byCgi is keyed on the UE's own serving CGI (globally unique — same "common CGI"
-  // cross-check GSM uses), byKey falls back to EARFCN+PCI, byEarfcn falls back to EARFCN alone.
-  const { scannerByKey, scannerByEarfcnOnly, scannerByCgi } = useMemo(() => {
-    const byKey = new Map<string, any[]>();
-    const byEarfcn = new Map<number, any[]>();
-    const byCgi = new Map<string, any[]>();
-    for (const row of activeScannerRaw) {
-      const entry = { ...row, _ts: new Date(row.FullDate).getTime() };
-      const key = `${row.EARFCN}_${row.PCI}`;
-      if (!byKey.has(key)) byKey.set(key, []);
-      byKey.get(key)!.push(entry);
-      const e = row.EARFCN as number;
-      if (!byEarfcn.has(e)) byEarfcn.set(e, []);
-      byEarfcn.get(e)!.push(entry);
-      if (row.CGI) {
-        if (!byCgi.has(row.CGI)) byCgi.set(row.CGI, []);
-        byCgi.get(row.CGI)!.push(entry);
-      }
-    }
-    byKey.forEach(rows => rows.sort((a, b) => a._ts - b._ts));
-    byEarfcn.forEach(rows => rows.sort((a, b) => a._ts - b._ts));
-    byCgi.forEach(rows => rows.sort((a, b) => a._ts - b._ts));
-    return { scannerByKey: byKey, scannerByEarfcnOnly: byEarfcn, scannerByCgi: byCgi };
-  }, [activeScannerRaw]);
+  // Lookup maps over the scanner rows (TimedRows: sorted + timestamps for binary search): byCgi is
+  // keyed on the UE's own serving CGI (globally unique — same "common CGI" cross-check GSM uses),
+  // byKey falls back to EARFCN+PCI, byEarfcnOnly to EARFCN alone.
+  const { scannerByKey, scannerByEarfcnOnly, scannerByCgi } = useMemo(() => ({
+    scannerByKey: groupTimedRows(activeScannerRaw, (row) => `${row.EARFCN}_${row.PCI}`),
+    scannerByEarfcnOnly: groupTimedRows(activeScannerRaw, (row) => (row.EARFCN != null ? String(row.EARFCN) : null)),
+    scannerByCgi: groupTimedRows(activeScannerRaw, (row) => (row.CGI ? String(row.CGI) : null)),
+  }), [activeScannerRaw]);
 
   const scannerByEarfcn = scannerByKey;
-  // Στήλες scanner στον LTE/NR πίνακα: LTE scanner ή κοινό 5G scanner (NR rows σε VoNR)
-  const hasTableScanner = scannerByEarfcn.size > 0 || nr5gScannerRawA.length > 0;
 
-  // Binary search for the first row at/after `ts` in a list already sorted ascending by _ts —
-  // used to find the closest scanner sample taken on/after a given UE measurement's MsgTime.
-  const findNextInList = (rows: any[], ts: number): any | null => {
-    let lo = 0, hi = rows.length - 1, result = -1;
-    while (lo <= hi) {
-      const mid = (lo + hi) >> 1;
-      if (rows[mid]._ts >= ts) { result = mid; hi = mid - 1; }
-      else lo = mid + 1;
-    }
-    return result >= 0 ? rows[result] : null;
-  };
-
-  // Looks up the nearest scanner sample for a given UE measurement: prefer the common CGI match
-  // (PCI alone can be reused by multiple physical cells, CGI can't — same idea as GSM's "RxLev
-  // Scanner"), then fall back to EARFCN+PCI, then EARFCN-only if no CGI match exists.
+  // Nearest scanner sample for a UE measurement, within SCANNER_MATCH_MAX_DT_MS: prefer the common
+  // CGI match (PCI alone can be reused by multiple physical cells, CGI can't — same idea as GSM's
+  // "RxLev Scanner"), then EARFCN+PCI, then EARFCN-only if no CGI match exists.
   const findNearestScanner = (cgi: string | null, earfcn: number | null, pci: number | null, msgTime: string | null): any | null => {
     if (msgTime == null) return null;
-    const ts = new Date(msgTime).getTime();
-    if (cgi) {
-      const byCgiRows = scannerByCgi.get(cgi);
-      if (byCgiRows && byCgiRows.length > 0) return findNextInList(byCgiRows, ts);
-    }
+    const ts = toTimestamp(msgTime);
+    const pick = (timed: TimedRows | undefined) =>
+      timed && timed.rows.length > 0 ? { hit: nearestWithin(timed, ts, SCANNER_MATCH_MAX_DT_MS) } : null;
+    const byCgi = cgi ? pick(scannerByCgi.get(String(cgi))) : null;
+    if (byCgi) return byCgi.hit;
     if (earfcn == null) return null;
-    const byPci = scannerByKey.get(`${earfcn}_${pci}`);
-    if (byPci && byPci.length > 0) return findNextInList(byPci, ts);
-    const byEarfcn = scannerByEarfcnOnly.get(earfcn);
-    if (byEarfcn && byEarfcn.length > 0) return findNextInList(byEarfcn, ts);
-    return null;
+    const byPci = pick(scannerByKey.get(`${earfcn}_${pci}`));
+    if (byPci) return byPci.hit;
+    return pick(scannerByEarfcnOnly.get(String(earfcn)))?.hit ?? null;
   };
 
   // Precompute LTE scanner match per measurement row: "LTE Scanner" is the scanner reading for
@@ -1155,58 +1138,41 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
 
   // Scanner για το context πριν/μετά την κλήση, για την επιλεγμένη πλευρά:
   //  - LTE: επαληθεύεται κυψέλη — το context έχει EARFCN+PCI, οπότε ένα δείγμα παίρνει scanner
-  //    μόνο από την ΙΔΙΑ κυψέλη (αν το κινητό ήταν αλλού πριν την κλήση, μένει κενό).
-  //  - GSM / 5G: το context ΔΕΝ έχει κυψέλη, οπότε υποθέτουμε ότι το κινητό έμενε στην πρώτη
+  //    μόνο από την ΙΔΙΑ κυψέλη (scannerByKey· αν το κινητό ήταν αλλού πριν την κλήση, μένει κενό).
+  //  - GSM: το context ΔΕΝ έχει κυψέλη, οπότε υποθέτουμε ότι το κινητό έμενε στην πρώτη
   //    κυψέλη της κλήσης πριν από αυτή, και στην τελευταία μετά (idle camping).
+  //  - 5G: δεν χρειάζεται εδώ — κολλάει με τη δική του ώρα στο unifiedSamples.
   const contextScanner = useMemo(() => {
-    const lteByKey = new Map<string, TimedRows>();
-    const lteGroups = new Map<string, any[]>();
-    for (const row of activeScannerRaw) {
-      const key = `${row.EARFCN}_${row.PCI}`;
-      if (!lteGroups.has(key)) lteGroups.set(key, []);
-      lteGroups.get(key)!.push(row);
-    }
-    lteGroups.forEach((rows, key) => lteByKey.set(key, toTimedRows(rows)));
-
     const gsmUe = (selectedLteSide === "B" ? bSideGsmValues : gsmValues).filter((v: any) => v.CGI);
     const gsmRaw = selectedLteSide === "B" ? gsmScannerRawB : gsmScannerRaw;
     const gsmOfCell = (cgi: string | undefined) => (cgi ? toTimedRows(gsmRaw.filter((r: any) => r.CGI === cgi)) : EMPTY_TIMED);
 
-    // 5G: μόνο A-side (NR rows του κινητού υπάρχουν μόνο εκεί)
-    const nrUe = selectedLteSide === "A" ? radioValues.filter((v: any) => v.Technology === "NR5G" && nrServingCid(v)) : [];
-    const nrOfCell = (cid: string | null | undefined) => (cid ? toTimedRows(nr5gScannerRawA.filter((r: any) => String(r.CID) === cid)) : EMPTY_TIMED);
-
     return {
-      lteByKey,
       gsmBefore: gsmOfCell(gsmUe[0]?.CGI),
       gsmAfter: gsmOfCell(gsmUe[gsmUe.length - 1]?.CGI),
-      nrBefore: nrOfCell(nrServingCid(nrUe[0] ?? {})),
-      nrAfter: nrOfCell(nrServingCid(nrUe[nrUe.length - 1] ?? {})),
     };
-  }, [activeScannerRaw, selectedLteSide, gsmValues, bSideGsmValues, gsmScannerRaw, gsmScannerRawB, radioValues, nr5gScannerRawA]);
+  }, [selectedLteSide, gsmValues, bSideGsmValues, gsmScannerRaw, gsmScannerRawB]);
 
-  // Κοινό 5G scanner ανά γραμμή: για κάθε NR row, το πλησιέστερο scanner sample με το ΙΔΙΟ CID,
-  // έως NR_SCANNER_MAX_DT_MS μακριά (αλλιώς η σύγκριση δεν λέει τίποτα). null για LTE rows.
+  // Κοινό 5G scanner ανά γραμμή: για κάθε NR row, το πλησιέστερο scanner sample της ΙΔΙΑΣ κυψέλης,
+  // έως SCANNER_MATCH_MAX_DT_MS μακριά (αλλιώς η σύγκριση δεν λέει τίποτα). null για LTE rows.
   const nrScannerMatched = useMemo(() => {
     if (isGSMMode || selectedLteSide === "B" || nr5gScannerRawA.length === 0) return [] as (any | null)[];
-    const byCid = new Map<string, any[]>();
-    for (const row of nr5gScannerRawA) {
-      if (row.CID == null) continue;
-      const key = String(row.CID);
-      if (!byCid.has(key)) byCid.set(key, []);
-      byCid.get(key)!.push({ ...row, _ts: new Date(row.FullDate).getTime() });
+    // Κάθε scanner row μπαίνει και με τα δύο κλειδιά (CID, NR-ARFCN + PCI)· η γραμμή του κινητού
+    // ψάχνει με ό,τι έχει (nrServingCell).
+    const byCell = new Map<string, TimedRows>();
+    for (const key of new Set(nr5gScannerRawA.flatMap(nrScannerRowKeys))) {
+      byCell.set(key, toTimedRows(nr5gScannerRawA.filter((row: any) => nrScannerRowKeys(row).includes(key))));
     }
-    byCid.forEach((rows) => rows.sort((a, b) => a._ts - b._ts));
     return activeRadioValues.map((val: any) => {
-      if (val.Technology !== "NR5G" || !val.MsgTime) return null;
-      const rows = byCid.get(nrServingCid(val) ?? "");
-      if (!rows || rows.length === 0) return null;
-      const ts = new Date(val.MsgTime).getTime();
-      const index = nearestIndex(rows.map((r) => r._ts), ts);
-      const hit = index >= 0 ? rows[index] : null;
-      return hit && Math.abs(hit._ts - ts) <= NR_SCANNER_MAX_DT_MS ? hit : null;
+      if (val.Technology !== "NR5G") return null;
+      const serving = nrServingCell(val);
+      return serving ? nearestWithin(byCell.get(serving.key), toTimestamp(val.MsgTime), SCANNER_MATCH_MAX_DT_MS) : null;
     });
   }, [nr5gScannerRawA, activeRadioValues, isGSMMode, selectedLteSide]);
+
+  // Στήλες scanner στον LTE/NR πίνακα: LTE scanner, ή κοινό 5G scanner που ταίριαξε σε NR γραμμή του
+  // πίνακα (όχι απλώς «ήρθε 5G scanner»: σε VoLTE με EN-DC ο πίνακας δεν έχει NR γραμμές).
+  const hasTableScanner = scannerByEarfcn.size > 0 || nrScannerMatched.some(Boolean);
 
   // Όρια κλήσης σε epoch ms — σκιάζουν το «κατά» και χωρίζουν πριν/μετά, κοινά με το overview.
   const callBounds = useMemo(() => {
@@ -1244,7 +1210,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     const lteContext = (selectedLteSide === "B" ? contextSignalBSide : contextSignal).map((v: any) => {
       const t = toTimestamp(v.MsgTime);
       const scn = !isGSMMode && outside(v)
-        ? nearestWithin(contextScanner.lteByKey.get(`${v.EARFCN}_${v.PhyCellId}`), t, CONTEXT_SCANNER_MAX_DT_MS)
+        ? nearestWithin(scannerByKey.get(`${v.EARFCN}_${v.PhyCellId}`), t, CONTEXT_SCANNER_MAX_DT_MS)
         : null;
       return { t, RSRP: toNumber(v.RSRP), RSRQ: toNumber(v.RSRQ), ScannerStrength: toNumber(scn?.RSRP) };
     }).filter((sample) => inView(sample.t));
@@ -1255,13 +1221,9 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
         : null;
       return { t, RxLev: toNumber(v.RxLevSub), RxQual: toNumber(v.RxQualSub), ScannerStrength: toNumber(scn?.RxLev) };
     }).filter((sample) => inView(sample.t));
-    const nrContext = (selectedLteSide === "B" ? nr5gContextSignalBSide : nr5gContextSignal).map((v: any) => {
-      const t = toTimestamp(v.MsgTime);
-      const scn = !isGSMMode && outside(v)
-        ? nearestWithin(v.phase === "before" ? contextScanner.nrBefore : contextScanner.nrAfter, t, CONTEXT_SCANNER_MAX_DT_MS)
-        : null;
-      return { t, NrRSRP: toNumber(v.RSRP), NrRSRQ: toNumber(v.RSRQ), NrScannerStrength: toNumber(scn?.RSRP) };
-    }).filter((sample) => inView(sample.t));
+    const nrContext = (selectedLteSide === "B" ? nr5gContextSignalBSide : nr5gContextSignal).map((v: any) => ({
+      t: toTimestamp(v.MsgTime), NrRSRP: toNumber(v.RSRP), NrRSRQ: toNumber(v.RSRQ),
+    })).filter((sample) => inView(sample.t));
 
     // Τα δείγματα της κλήσης: καλύπτουν ό,τι δεν επιστρέφει το context (π.χ. CS κλήση χωρίς
     // LTE context) και είναι αυτά που κουμπώνουν με τον πίνακα Radio Measurements.
@@ -1305,6 +1267,10 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
         : bestPoints(lteScannerBestRaw, "BestScannerStrength", "RSRP"), SCANNER_ATTACH_TOLERANCE_MS);
       if (!isGSMMode) {
         attachNearest(merged, bestPoints(nr5gScannerBestRaw, "NrBestScannerStrength", "RSRP"), SCANNER_ATTACH_TOLERANCE_MS);
+        // Κοινό 5G scanner: τα rows είναι ήδη μόνο της serving CID του κινητού ανά τμήμα (με
+        // επέκταση στο πρώτο/τελευταίο για το context), οπότε κολλάνε κι αυτά με τη δική τους
+        // ώρα — δουλεύει και σε κλήσεις χωρίς NR rows στο radioValues (VoLTE με EN-DC, «-»).
+        attachNearest(merged, bestPoints(nr5gScannerRawA, "NrScannerStrength", "RSRP"), SCANNER_ATTACH_TOLERANCE_MS);
       }
     }
 
@@ -1315,13 +1281,13 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
       values: isGSMMode
         ? { ScannerStrength: toNumber(gsmScannerMatched[idx]?.RxLev) }
         : val.Technology === "NR5G"
-          ? { NrScannerStrength: toNumber(nrScannerMatched[idx]?.RSRP) }
+          ? {}
           : { ScannerStrength: toNumber(lteScannerMatched[idx]?.RSRP) },
     })));
   }, [activeRadioValues, isGSMMode, showsGsmLeg, selectedLteSide, gsmValues, bSideGsmValues, radioValues, bSideLteValues,
       contextSignal, contextSignalBSide, gsmContextSignal, gsmContextSignalBSide, nr5gContextSignal, nr5gContextSignalBSide,
-      gsmScannerMatched, lteScannerMatched, nrScannerMatched, contextScanner,
-      gsmScannerBestRaw, lteScannerBestRaw, nr5gScannerBestRaw, inView]);
+      gsmScannerMatched, lteScannerMatched, contextScanner, scannerByKey,
+      gsmScannerBestRaw, lteScannerBestRaw, nr5gScannerBestRaw, nr5gScannerRawA, inView]);
 
   const unifiedDomain = useMemo(() => sampleDomain(unifiedSamples), [unifiedSamples]);
 
@@ -1827,7 +1793,11 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
     // στην επόμενη αλλαγή (ή στο τέλος του παραθύρου). Οι εγγραφές με
     // CurrTechnology = NULL είναι δείκτες "τέλος/μεταβατικό" και ΔΕΝ ανοίγουν νέα
     // τεχνολογία — αν τις κρατούσαμε θα έσβηναν τη λωρίδα για όλη τη διάρκειά τους.
+    // Το context φέρνει και τις δύο πλευρές· η λωρίδα δείχνει μόνο αυτή που βλέπει η σελίδα
+    // (IsCallSide 1 = «A-side» της σελίδας, 0 = το ζευγάρι της).
+    const wantCallSide = selectedLteSide === "A" ? 1 : 0;
     const techRows = (contextTechnology as TechnologyTimelineRow[])
+      .filter((row) => (row.IsCallSide ?? 1) === wantCallSide)
       .filter((row) => row?.MsgTime && row.CurrTechnology != null)
       .map((row) => ({ ...row, t: new Date(row.MsgTime as string).getTime() }))
       .filter((row) => Number.isFinite(row.t))
@@ -1977,8 +1947,9 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
    */
   const mergedTechnology = useMemo(() => {
     type MergedTechRow = TechnologyTimelineRow & { phase: string };
-    const keyOf = (r: { MsgTime: string | null; PrevTechnology: string | null; CurrTechnology: string | null }) =>
-      `${r.MsgTime ?? ""}|${r.PrevTechnology ?? ""}|${r.CurrTechnology ?? ""}`;
+    // Η πλευρά μπαίνει στο κλειδί: A και B είναι διαφορετικές συσκευές, ακόμα κι αν αλλάξουν ταυτόχρονα
+    const keyOf = (r: TechnologyTimelineRow) =>
+      `${r.Side ?? ""}|${r.MsgTime ?? ""}|${r.PrevTechnology ?? ""}|${r.CurrTechnology ?? ""}`;
 
     const rows = new Map<string, MergedTechRow>();
     for (const row of contextTechnology as MergedTechRow[]) {
@@ -3256,6 +3227,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                   <thead className="sticky top-0 bg-muted border-b border-border z-10">
                     <tr>
                       <th className="px-2 py-1 font-semibold">Ώρα</th>
+                      <th className="px-2 py-1 font-semibold" title="Πλευρά συσκευής (CallAnalysis.Side)">Πλευρά</th>
                       <th className="px-2 py-1 font-semibold">Από</th>
                       <th className="px-2 py-1 font-semibold">→ Σε</th>
                       <th className="px-2 py-1 font-semibold">Band</th>
@@ -3282,6 +3254,16 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall }: CallDetailProp
                           className={`transition-colors cursor-pointer ${isActive ? "bg-cyan-500/10" : "hover:bg-muted/40"}`}
                         >
                           <td className="px-2 py-0.5 font-mono">{row.MsgTime ? new Date(row.MsgTime).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}</td>
+                          <td
+                            className="px-2 py-0.5"
+                            title={row.IsCallSide === 0 ? "Η απέναντι πλευρά της κλήσης" : "Η πλευρά της κλήσης που άνοιξες"}
+                          >
+                            {row.Side ? (
+                              <span className={`inline-block min-w-[1.5rem] rounded px-1 font-semibold ${row.Side === "B" ? "bg-violet-500/15 text-violet-400" : "bg-sky-500/15 text-sky-400"} ${row.IsCallSide === 0 ? "opacity-70" : ""}`}>
+                                {row.Side}
+                              </span>
+                            ) : "—"}
+                          </td>
                           <td className="px-2 py-0.5 text-muted-foreground">{row.PrevTechnology ?? "—"}</td>
                           <td className="px-2 py-0.5 font-semibold">{row.CurrTechnology ?? "—"}</td>
                           <td className="px-2 py-0.5">{row.Band ?? "—"}</td>

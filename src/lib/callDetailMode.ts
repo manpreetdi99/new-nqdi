@@ -16,8 +16,12 @@ export const isUnknownCallMode = (callMode: string | null | undefined): boolean 
 };
 
 /**
- * Γνωστό mode μένει ως έχει. Άγνωστο → "CS" (GSM/UMTS), "VoLTE" (μόνο LTE), ή "UNKNOWN" όταν
- * δεν υπάρχει ένδειξη (5G ή κενό technology) — τότε το Call Detail φορτώνει όλα τα σκέλη.
+ * Γνωστό mode μένει ως έχει. Άγνωστο, με σειρά:
+ *  - GSM/UMTS → "CS" (πρώτο: ως CS φορτώνονται ΚΑΙ LTE/5G μέσω csTouchesLte, ενώ ως VoNR θα
+ *    χανόταν το GSM σκέλος)
+ *  - 5G / NR → "VoNR" (και "LTE/5G": ό,τι αναφέρει 5G ανοίγει ως VoNR — NR rows στον πίνακα)
+ *  - LTE → "VoLTE"
+ *  - τίποτα (κενό / N/A technology) → "UNKNOWN": το Call Detail φορτώνει ΟΛΑ τα σκέλη.
  */
 export const resolveCallDetailMode = (
   callMode: string | null | undefined,
@@ -26,6 +30,7 @@ export const resolveCallDetailMode = (
   if (!isUnknownCallMode(callMode)) return (callMode ?? "").trim();
   const tech = (technology ?? "").toLowerCase();
   if (tech.includes("umts") || tech.includes("gsm")) return "CS";
+  if (/(^|[^a-z0-9])(5g|nr)([^a-z0-9]|$)/.test(tech)) return "VoNR";
   if (tech.includes("lte")) return "VoLTE";
   return "UNKNOWN";
 };

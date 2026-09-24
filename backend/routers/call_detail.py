@@ -1174,7 +1174,9 @@ def get_technology_timeline(
     database: str = Query(..., min_length=1),
     session_id: str = Query(..., min_length=1)
 ):
-    """Technology changes during the session (PrevTechnology → CurrTechnology events)."""
+    """Technology changes during the session (PrevTechnology → CurrTechnology events). The
+    session is the requested call itself, so every row is its side (`Side` from CallAnalysis,
+    `IsCallSide` = 1) — same fields as /api/call_context_technology, so the two merge per side."""
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
@@ -1191,9 +1193,12 @@ def get_technology_timeline(
                 t.NR5GDLCarriers,
                 t.NR5GULCarriers,
                 p.Latitude,
-                p.Longitude
+                p.Longitude,
+                COALESCE(ca.Side, 'A') AS Side,
+                1 AS IsCallSide
             FROM Technology t
             LEFT JOIN Position p ON p.PosId = t.PosId
+            OUTER APPLY (SELECT TOP 1 CA.Side FROM CallAnalysis CA WHERE CA.SessionId = t.SessionId) ca
             WHERE t.SessionId = ?
             ORDER BY t.MsgTime
         """, (session_id,))

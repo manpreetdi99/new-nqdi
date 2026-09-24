@@ -1111,12 +1111,15 @@ export interface ScannerSegmentPad {
 }
 
 const scannerSegmentParams = (
-  database: string, cellKey: "cgi" | "cid", cell: string, start: string, end: string, pad?: ScannerSegmentPad,
+  database: string, cell: Record<string, string>, start: string, end: string, pad?: ScannerSegmentPad,
 ) => new URLSearchParams({
-  database, [cellKey]: cell, start, end,
+  database, ...cell, start, end,
   pad_before_sec: String(pad?.padBeforeSec ?? 0),
   pad_after_sec: String(pad?.padAfterSec ?? 0),
 });
+
+/** Η serving 5G κυψέλη: CID όταν υπάρχει, αλλιώς NR-ARFCN + PCI (το PCI μόνο του δεν αρκεί). */
+export type Nr5gCell = { cid: string } | { arfcn: number; pci: number };
 
 export async function fetchLteScannerRaw(
   database: string,
@@ -1125,7 +1128,7 @@ export async function fetchLteScannerRaw(
   end: string,
   pad?: ScannerSegmentPad
 ): Promise<any[]> {
-  const params = scannerSegmentParams(database, "cgi", cgi, start, end, pad);
+  const params = scannerSegmentParams(database, { cgi }, start, end, pad);
   return requestJson(`/api/lte_scanner_raw?${params.toString()}`);
 }
 
@@ -1144,7 +1147,7 @@ export async function fetchGsmScannerRaw(
   end: string,
   pad?: ScannerSegmentPad
 ): Promise<any[]> {
-  const params = scannerSegmentParams(database, "cgi", cgi, start, end, pad);
+  const params = scannerSegmentParams(database, { cgi }, start, end, pad);
   return requestJson(`/api/gsm_scanner_raw?${params.toString()}`);
 }
 
@@ -1171,12 +1174,16 @@ export async function fetchLteScannerBest(
 /** Κοινό 5G scanner: FactNR5GScannerBeam για το serving CID του κινητού στο [start, end], ισχυρότερο beam ανά χρονική στιγμή. */
 export async function fetchNr5gScannerRaw(
   database: string,
-  cid: string,
+  cell: Nr5gCell,
   start: string,
   end: string,
   pad?: ScannerSegmentPad
 ): Promise<any[]> {
-  const params = scannerSegmentParams(database, "cid", cid, start, end, pad);
+  const params = scannerSegmentParams(
+    database,
+    "cid" in cell ? { cid: cell.cid } : { arfcn: String(cell.arfcn), pci: String(cell.pci) },
+    start, end, pad,
+  );
   return requestJson(`/api/nr5g_scanner_raw?${params.toString()}`);
 }
 
@@ -1463,6 +1470,10 @@ export interface TechnologyTimelineRow {
   NR5GULCarriers: number | null;
   Latitude: number | null;
   Longitude: number | null;
+  /** Πλευρά της συσκευής (CallAnalysis.Side) */
+  Side?: string | null;
+  /** 1 = το αρχείο της κλήσης που άνοιξε (το «A-side» της σελίδας), 0 = το A/B ζευγάρι της */
+  IsCallSide?: number | null;
 }
 
 export async function fetchTechnologyTimeline(

@@ -12,7 +12,11 @@ def get_lte_scanner_raw(
     database: str = Query(..., min_length=1),
     cgi: str = Query(..., min_length=1),
     start: str = Query(..., min_length=1),
-    end: str = Query(..., min_length=1)
+    end: str = Query(..., min_length=1),
+    # Επέκταση του τμήματος πριν/μετά — το client τη βάζει μόνο στο πρώτο/τελευταίο τμήμα
+    # της κλήσης, ώστε το scanner να καλύπτει και το ±Ns context του διαγράμματος.
+    pad_before_sec: int = Query(default=0, ge=0, le=300),
+    pad_after_sec: int = Query(default=0, ge=0, le=300)
 ):
     """FactLTEScanner rows for a given serving CGI within [start, end] — mirrors
     /api/gsm_scanner_raw's per-segment approach, since the serving CGI can change several
@@ -46,10 +50,10 @@ def get_lte_scanner_raw(
                 fs.CGI
             FROM FactLTEScanner fs
             WHERE fs.CGI = ?
-              AND fs.FullDate >= ?
-              AND fs.FullDate <= ?
+              AND fs.FullDate >= DATEADD(SECOND, -?, CONVERT(datetime2(3), ?))
+              AND fs.FullDate <= DATEADD(SECOND,  ?, CONVERT(datetime2(3), ?))
             ORDER BY fs.FullDate
-        """, (cgi, start, end))
+        """, (cgi, pad_before_sec, start, pad_after_sec, end))
         cols = [c[0] for c in cursor.description] if cursor.description else []
         rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
 
@@ -161,7 +165,11 @@ def get_gsm_scanner_raw(
     database: str = Query(..., min_length=1),
     cgi: str = Query(..., min_length=1),
     start: str = Query(..., min_length=1),
-    end: str = Query(..., min_length=1)
+    end: str = Query(..., min_length=1),
+    # Επέκταση του τμήματος πριν/μετά — το client τη βάζει μόνο στο πρώτο/τελευταίο τμήμα
+    # της κλήσης, ώστε το scanner να καλύπτει και το ±Ns context του διαγράμματος.
+    pad_before_sec: int = Query(default=0, ge=0, le=300),
+    pad_after_sec: int = Query(default=0, ge=0, le=300)
 ):
     """FactGSMScanner rows for a given CGI within [start, end]."""
     try:
@@ -172,10 +180,10 @@ def get_gsm_scanner_raw(
             SELECT FullDate, BCCH, RFBand, BSIC, RxLev, CoverI, CGI, CId, LAC
             FROM FactGSMScanner
             WHERE CGI = ?
-              AND FullDate >= ?
-              AND FullDate <= ?
+              AND FullDate >= DATEADD(SECOND, -?, CONVERT(datetime2(3), ?))
+              AND FullDate <= DATEADD(SECOND,  ?, CONVERT(datetime2(3), ?))
             ORDER BY FullDate
-        """, (cgi, start, end))
+        """, (cgi, pad_before_sec, start, pad_after_sec, end))
         cols = [c[0] for c in cursor.description] if cursor.description else []
         rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
 
@@ -188,7 +196,9 @@ def get_gsm_scanner_raw(
 @router.get("/api/gsm_scanner_best")
 def get_gsm_scanner_best(
     database: str = Query(..., min_length=1),
-    session_id: str = Query(..., min_length=1)
+    session_id: str = Query(..., min_length=1),
+    # ±N δευτερόλεπτα γύρω από την κλήση, για το context του διαγράμματος (0 = μόνο η κλήση)
+    window_sec: int = Query(default=0, ge=0, le=300)
 ):
     """Best (DmnIdTopN_RxLev_Operator = 1) FactGSMScanner reading per scan cycle for the
     call's own operator — independent of the serving CGI, so it doesn't need per-segment
@@ -228,8 +238,8 @@ def get_gsm_scanner_best(
             FROM FactGSMScanner fs
             CROSS JOIN call_ctx cc
             WHERE fs.DmnIdTopN_RxLev_Operator = 1
-              AND fs.FullDate >= cc.start_time
-              AND fs.FullDate <= cc.end_time
+              AND fs.FullDate >= DATEADD(SECOND, -?, cc.start_time)
+              AND fs.FullDate <= DATEADD(SECOND,  ?, cc.end_time)
               AND cc.call_operator IS NOT NULL
               AND (
                     (cc.call_operator = 'VODAFONE' AND fs.CGI LIKE '202-5-%') OR
@@ -237,7 +247,7 @@ def get_gsm_scanner_best(
                     (cc.call_operator = 'COSMOTE' AND fs.CGI LIKE '202-1-%' AND fs.CGI NOT LIKE '202-10%')
                   )
             ORDER BY fs.FullDate
-        """, (session_id,))
+        """, (session_id, window_sec, window_sec))
         cols = [c[0] for c in cursor.description] if cursor.description else []
         rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
 
@@ -250,7 +260,9 @@ def get_gsm_scanner_best(
 @router.get("/api/lte_scanner_best")
 def get_lte_scanner_best(
     database: str = Query(..., min_length=1),
-    session_id: str = Query(..., min_length=1)
+    session_id: str = Query(..., min_length=1),
+    # ±N δευτερόλεπτα γύρω από την κλήση, για το context του διαγράμματος (0 = μόνο η κλήση)
+    window_sec: int = Query(default=0, ge=0, le=300)
 ):
     """Best (DmnIdTopN_RSRP_Operator = 1) FactLTEScanner reading per scan cycle for the
     call's own operator — independent of the UE's serving EARFCN/PCI. Feeds the
@@ -287,13 +299,13 @@ def get_lte_scanner_best(
             FROM FactLTEScanner fs
             CROSS JOIN call_ctx cc
             WHERE fs.DmnIdTopN_RSRP_Operator = 1
-              AND fs.FullDate >= cc.start_time
-              AND fs.FullDate <= cc.end_time
+              AND fs.FullDate >= DATEADD(SECOND, -?, cc.start_time)
+              AND fs.FullDate <= DATEADD(SECOND,  ?, cc.end_time)
               AND cc.call_mnc IS NOT NULL
               AND fs.MCC = 202
               AND fs.MNC = cc.call_mnc
             ORDER BY fs.FullDate
-        """, (session_id,))
+        """, (session_id, window_sec, window_sec))
         cols = [c[0] for c in cursor.description] if cursor.description else []
         rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
 
@@ -306,20 +318,36 @@ def get_lte_scanner_best(
 @router.get("/api/nr5g_scanner_raw")
 def get_nr5g_scanner_raw(
     database: str = Query(..., min_length=1),
-    cid: str = Query(..., min_length=1),
     start: str = Query(..., min_length=1),
-    end: str = Query(..., min_length=1)
+    end: str = Query(..., min_length=1),
+    # Η serving κυψέλη: CID όταν το ξέρουμε, αλλιώς NR-ARFCN + PCI. Στα δεδομένα το mapping
+    # FactNR5GRadio → DmnCellInformation είναι συχνά άδειο (CId = NULL), ενώ το NRARFCN του
+    # κινητού ταιριάζει με το AbsFreqSSB του scanner. Το PCI μόνο του ΔΕΝ αρκεί (επαναχρησιμοποιείται
+    # σε άλλες συχνότητες).
+    cid: str | None = Query(default=None),
+    arfcn: int | None = Query(default=None),
+    pci: int | None = Query(default=None),
+    # Επέκταση του τμήματος πριν/μετά — το client τη βάζει μόνο στο πρώτο/τελευταίο τμήμα
+    # της κλήσης, ώστε το scanner να καλύπτει και το ±Ns context του διαγράμματος.
+    pad_before_sec: int = Query(default=0, ge=0, le=300),
+    pad_after_sec: int = Query(default=0, ge=0, le=300)
 ):
-    """FactNR5GScannerBeam rows for the UE's serving 5G cell (by CID) within [start, end] — the
-    5G counterpart of /api/lte_scanner_raw, fetched per contiguous serving-CID segment.
+    """FactNR5GScannerBeam rows for the UE's serving 5G cell (by CID, or NR-ARFCN + PCI) within
+    [start, end] — the 5G counterpart of /api/lte_scanner_raw, fetched per contiguous serving-cell segment.
     The table holds one row PER BEAM, so only the strongest beam (max SS-RSRP) is kept for each
     scan timestamp; otherwise the client could match a weak side beam. SS_RSRP/SS_RSRQ/SS_SINR
     are returned as RSRP/RSRQ/SINR and AbsFreqSSB as NRARFCN, like the LTE rows."""
+    if cid:
+        cell_filter, cell_params = "fs.CID = TRY_CONVERT(BIGINT, ?)", (cid,)
+    elif arfcn is not None and pci is not None:
+        cell_filter, cell_params = "fs.AbsFreqSSB = ? AND fs.PCI = ?", (arfcn, pci)
+    else:
+        raise HTTPException(status_code=400, detail="Δώσε cid, ή arfcn + pci.")
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
 
-        cursor.execute("""
+        cursor.execute(f"""
             ;WITH beams AS (
                 SELECT
                     fs.FullDate,
@@ -338,16 +366,16 @@ def get_nr5g_scanner_raw(
                     fs.DistanceToBTS,
                     ROW_NUMBER() OVER (PARTITION BY fs.FullDate ORDER BY fs.SS_RSRP DESC) AS beam_rank
                 FROM FactNR5GScannerBeam fs
-                WHERE fs.CID = TRY_CONVERT(BIGINT, ?)
-                  AND fs.FullDate >= ?
-                  AND fs.FullDate <= ?
+                WHERE {cell_filter}
+                  AND fs.FullDate >= DATEADD(SECOND, -?, CONVERT(datetime2(3), ?))
+                  AND fs.FullDate <= DATEADD(SECOND,  ?, CONVERT(datetime2(3), ?))
             )
             SELECT FullDate, NRARFCN, PCI, CID, TAC, MCC, MNC, RFBand,
                    RSRP, RSRQ, SINR, RSSI, RankByRSRP, DistanceToBTS
             FROM beams
             WHERE beam_rank = 1
             ORDER BY FullDate
-        """, (cid, start, end))
+        """, (*cell_params, pad_before_sec, start, pad_after_sec, end))
         cols = [c[0] for c in cursor.description] if cursor.description else []
         rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
 
@@ -360,7 +388,9 @@ def get_nr5g_scanner_raw(
 @router.get("/api/nr5g_scanner_best")
 def get_nr5g_scanner_best(
     database: str = Query(..., min_length=1),
-    session_id: str = Query(..., min_length=1)
+    session_id: str = Query(..., min_length=1),
+    # ±N δευτερόλεπτα γύρω από την κλήση, για το context του διαγράμματος (0 = μόνο η κλήση)
+    window_sec: int = Query(default=0, ge=0, le=300)
 ):
     """Best (DmnIdTopN_SS_RSRP_Operator = 1) FactNR5GScannerBeam reading per scan cycle for the
     call's own operator — the 5G counterpart of /api/lte_scanner_best (same time window and
@@ -396,13 +426,13 @@ def get_nr5g_scanner_best(
             FROM FactNR5GScannerBeam fs
             CROSS JOIN call_ctx cc
             WHERE fs.DmnIdTopN_SS_RSRP_Operator = 1
-              AND fs.FullDate >= cc.start_time
-              AND fs.FullDate <= cc.end_time
+              AND fs.FullDate >= DATEADD(SECOND, -?, cc.start_time)
+              AND fs.FullDate <= DATEADD(SECOND,  ?, cc.end_time)
               AND cc.call_mnc IS NOT NULL
               AND fs.MCC = 202
               AND fs.MNC = cc.call_mnc
             ORDER BY fs.FullDate
-        """, (session_id,))
+        """, (session_id, window_sec, window_sec))
         cols = [c[0] for c in cursor.description] if cursor.description else []
         rows = [{cols[i]: row[i] for i in range(len(cols))} for row in cursor.fetchall()]
 

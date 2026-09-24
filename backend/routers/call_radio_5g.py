@@ -45,6 +45,7 @@ def get_nr5g_values(
                     FROM DwFactNR5GRadioToDmnCellInformationMapping m
                     JOIN DmnCellInformation ci ON ci.DmnId = m.DmnIdCellInformation
                    WHERE m.FactId = fr.FactId
+                   ORDER BY m.DmnIdCellInformation DESC  -- ντετερμινιστικό αν υπάρχουν >1 mappings
               ) cell
              WHERE fr.[SessionId] = TRY_CONVERT(BIGINT, ?)
               ORDER BY fr.FullDate
