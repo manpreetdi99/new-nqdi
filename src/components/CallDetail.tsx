@@ -84,7 +84,6 @@ const edgeSegmentPad = (index: number, count: number) => ({
 
 /** Scanner rows ταξινομημένα κατά FullDate, με τα timestamps τους για binary search. */
 type TimedRows = { rows: any[]; times: number[] };
-const EMPTY_TIMED: TimedRows = { rows: [], times: [] };
 const toTimedRows = (raw: any[]): TimedRows => {
   const rows = raw
     .map((row) => ({ ...row, _ts: toTimestamp(row.FullDate) }))
@@ -1143,23 +1142,6 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
     return activeRadioValues.map(val => findNearestScanner(val.CGI, val.EARFCN, val.PhyCellId, val.MsgTime));
   }, [activeRadioValues, isGSMMode, scannerByKey, scannerByEarfcnOnly, scannerByCgi]);
 
-  // Scanner για το context πριν/μετά την κλήση, για την επιλεγμένη πλευρά:
-  //  - LTE: επαληθεύεται κυψέλη — το context έχει EARFCN+PCI, οπότε ένα δείγμα παίρνει scanner
-  //    μόνο από την ΙΔΙΑ κυψέλη (scannerByKey· αν το κινητό ήταν αλλού πριν την κλήση, μένει κενό).
-  //  - GSM: το context ΔΕΝ έχει κυψέλη, οπότε υποθέτουμε ότι το κινητό έμενε στην πρώτη
-  //    κυψέλη της κλήσης πριν από αυτή, και στην τελευταία μετά (idle camping).
-  //  - 5G: δεν χρειάζεται εδώ — κολλάει με τη δική του ώρα στο unifiedSamples.
-  const contextScanner = useMemo(() => {
-    const gsmUe = (selectedLteSide === "B" ? bSideGsmValues : gsmValues).filter((v: any) => v.CGI);
-    const gsmRaw = selectedLteSide === "B" ? gsmScannerRawB : gsmScannerRaw;
-    const gsmOfCell = (cgi: string | undefined) => (cgi ? toTimedRows(gsmRaw.filter((r: any) => r.CGI === cgi)) : EMPTY_TIMED);
-
-    return {
-      gsmBefore: gsmOfCell(gsmUe[0]?.CGI),
-      gsmAfter: gsmOfCell(gsmUe[gsmUe.length - 1]?.CGI),
-    };
-  }, [selectedLteSide, gsmValues, bSideGsmValues, gsmScannerRaw, gsmScannerRawB]);
-
   // Κοινό 5G scanner ανά γραμμή: για κάθε NR row, το πλησιέστερο scanner sample της ΙΔΙΑΣ κυψέλης,
   // έως SCANNER_MATCH_MAX_DT_MS μακριά (αλλιώς η σύγκριση δεν λέει τίποτα). null για LTE rows.
   const nrScannerMatched = useMemo(() => {
@@ -1211,23 +1193,20 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
   // absolute timestamp. Έτσι το «πριν/μετά» και η ίδια η κλήση διαβάζονται σε μία καμπύλη
   // αντί για δύο ξεχωριστά διαγράμματα με διαφορετικούς άξονες.
   const unifiedSamples = useMemo<SignalSample[]>(() => {
-    // Το scanner του context (βλ. contextScanner): μόνο πριν/μετά — μέσα στην κλήση το δίνουν
-    // τα radio rows με ακριβέστερη αντιστοίχιση (CGI / CID).
+    // LTE scanner πριν/μετά την κλήση: επαληθεύεται κυψέλη — το context έχει EARFCN+PCI, οπότε ένα
+    // δείγμα παίρνει scanner μόνο από την ΙΔΙΑ κυψέλη (αν το κινητό ήταν αλλού, μένει κενό).
+    // Μέσα στην κλήση το LTE scanner κολλάει παρακάτω με τη δική του ώρα.
     const outside = (v: any) => v.phase === "before" || v.phase === "after";
     const lteContext = (selectedLteSide === "B" ? contextSignalBSide : contextSignal).map((v: any) => {
       const t = toTimestamp(v.MsgTime);
-      const scn = !isGSMMode && outside(v)
+      const scn = outside(v)
         ? nearestWithin(scannerByKey.get(`${v.EARFCN}_${v.PhyCellId}`), t, CONTEXT_SCANNER_MAX_DT_MS)
         : null;
       return { t, RSRP: toNumber(v.RSRP), RSRQ: toNumber(v.RSRQ), ScannerStrength: toNumber(scn?.RSRP) };
     }).filter((sample) => inView(sample.t));
-    const gsmContext = (selectedLteSide === "B" ? gsmContextSignalBSide : gsmContextSignal).map((v: any) => {
-      const t = toTimestamp(v.MsgTime);
-      const scn = isGSMMode && outside(v)
-        ? nearestWithin(v.phase === "before" ? contextScanner.gsmBefore : contextScanner.gsmAfter, t, CONTEXT_SCANNER_MAX_DT_MS)
-        : null;
-      return { t, RxLev: toNumber(v.RxLevSub), RxQual: toNumber(v.RxQualSub), ScannerStrength: toNumber(scn?.RxLev) };
-    }).filter((sample) => inView(sample.t));
+    const gsmContext = (selectedLteSide === "B" ? gsmContextSignalBSide : gsmContextSignal).map((v: any) => ({
+      t: toTimestamp(v.MsgTime), RxLev: toNumber(v.RxLevSub), RxQual: toNumber(v.RxQualSub),
+    })).filter((sample) => inView(sample.t));
     const nrContext = (selectedLteSide === "B" ? nr5gContextSignalBSide : nr5gContextSignal).map((v: any) => ({
       t: toTimestamp(v.MsgTime), NrRSRP: toNumber(v.RSRP), NrRSRQ: toNumber(v.RSRQ),
     })).filter((sample) => inView(sample.t));
@@ -1260,43 +1239,72 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
       : []
     ).map((val: any) => ({ t: toTimestamp(val.MsgTime), RSRP: toNumber(val.RSRP), RSRQ: toNumber(val.RSRQ) }));
 
-    const merged = mergeSignalSamples([lteContext, gsmContext, nrContext, gsmLeg, lteLeg, callRows]);
+    // Best scanner (Top 1 του operator, ανεξάρτητο από το κινητό): μπαίνει με ΔΙΚΑ ΤΟΥ σημεία, όχι
+    // κολλημένο σε δείγματα του κινητού — έτσι φαίνεται και μέσα σε κενά «No measurements», όπου το
+    // scanner συνέχιζε να μετράει ενώ το κινητό όχι. Μόνο A-side, όπως πάντα· κομμένο στο ±Ns.
+    const bestSamples = (raw: any[], key: keyof SignalSample, field: string): SignalSample[] =>
+      selectedLteSide !== "A" ? [] : raw
+        .map((row: any) => ({ t: toTimestamp(row.FullDate), [key]: toNumber(row[field]) } as SignalSample))
+        .filter((sample) => inView(sample.t) && sample[key] != null);
 
-    // Best scanner (LTE/GSM/5G): ανεξάρτητο από το serving cell του κινητού, οπότε κολλάει με το
-    // δικό του FullDate στο πλησιέστερο δείγμα της καμπύλης — έτσι καλύπτει ΚΑΙ το context
-    // πριν/μετά, κομμένο στο ορατό ±Ns. Μόνο A-side (όπως πάντα)· το 5G όχι σε GSM προβολή.
-    if (selectedLteSide === "A") {
-      const bestPoints = (raw: any[], key: keyof SignalSample, field: string) => raw
-        .map((row: any) => ({ t: toTimestamp(row.FullDate), values: { [key]: toNumber(row[field]) } as Partial<SignalSample> }))
-        .filter((point) => inView(point.t));
-      attachNearest(merged, isGSMMode
-        ? bestPoints(gsmScannerBestRaw, "BestScannerStrength", "RxLev")
-        : bestPoints(lteScannerBestRaw, "BestScannerStrength", "RSRP"), SCANNER_ATTACH_TOLERANCE_MS);
-      if (!isGSMMode) {
-        attachNearest(merged, bestPoints(nr5gScannerBestRaw, "NrBestScannerStrength", "RSRP"), SCANNER_ATTACH_TOLERANCE_MS);
-        // Κοινό 5G scanner: τα rows είναι ήδη μόνο της serving CID του κινητού ανά τμήμα (με
-        // επέκταση στο πρώτο/τελευταίο για το context), οπότε κολλάνε κι αυτά με τη δική τους
-        // ώρα — δουλεύει και σε κλήσεις χωρίς NR rows στο radioValues (VoLTE με EN-DC, «-»).
-        attachNearest(merged, bestPoints(nr5gScannerRawA, "NrScannerStrength", "RSRP"), SCANNER_ATTACH_TOLERANCE_MS);
-      }
-    }
+    const merged = mergeSignalSamples([
+      lteContext, gsmContext, nrContext, gsmLeg, lteLeg, callRows,
+      bestSamples(lteScannerBestRaw, "BestScannerStrength", "RSRP"),
+      bestSamples(gsmScannerBestRaw, "GsmBestScannerStrength", "RxLev"),
+      bestSamples(nr5gScannerBestRaw, "NrBestScannerStrength", "RSRP"),
+    ]);
 
-    // Το scanner έρχεται από άλλο query και σπάνια πέφτει στο ίδιο ακριβώς ms, οπότε
-    // προσαρτάται στο πλησιέστερο δείγμα αντί για exact-match merge.
-    return attachNearest(merged, activeRadioValues.map((val: any, idx: number) => ({
-      t: toTimestamp(val.MsgTime),
-      values: isGSMMode
-        ? { ScannerStrength: toNumber(gsmScannerMatched[idx]?.RxLev) }
-        : val.Technology === "NR5G"
-          ? {}
-          : { ScannerStrength: toNumber(lteScannerMatched[idx]?.RSRP) },
-    })));
+    // Scanner: ΚΑΘΕ τεχνολογία στο δικό της πεδίο, ανεξάρτητα από το σκέλος που δείχνει η σελίδα —
+    // σε SRVCC/CSFB η καμπύλη έχει LTE και GSM κομμάτι μαζί, οπότε θέλει LTE scanner στο ένα και
+    // GSM scanner στο άλλο. Τα scanner rows έρχονται ήδη ανά serving κυψέλη του κινητού (τμήματα
+    // CGI / CID, με επέκταση στο πρώτο/τελευταίο), οπότε κολλάνε με τη δική τους ώρα στο
+    // πλησιέστερο δείγμα· κομμένα στο ορατό ±Ns.
+    const pointsOf = (raw: any[], key: keyof SignalSample, field: string, keep: (t: number) => boolean = inView) => raw
+      .map((row: any) => ({ t: toTimestamp(row.FullDate), values: { [key]: toNumber(row[field]) } as Partial<SignalSample> }))
+      .filter((point) => keep(point.t));
+    // Το κοινό scanner κάθε τεχνολογίας κολλάει ΜΟΝΟ σε δείγματα της ίδιας τεχνολογίας: π.χ. σε SRVCC
+    // το padding του πρώτου GSM τμήματος πέφτει πάνω στο LTE κομμάτι (πριν το handover), όπου το
+    // κινητό δεν ήταν ακόμα στη GSM κυψέλη. Τα best (Top 1 του operator) κολλάνε σε οποιοδήποτε δείγμα.
+    const attach = (points: { t: number; values: Partial<SignalSample> }[], onlyWhere?: (s: SignalSample) => boolean) =>
+      attachNearest(merged, points, SCANNER_ATTACH_TOLERANCE_MS, onlyWhere);
+    const isLteSample = (s: SignalSample) => s.RSRP != null;
+    const isGsmSample = (s: SignalSample) => s.RxLev != null;
+    const isNrSample = (s: SignalSample) => s.NrRSRP != null;
+
+    // LTE κοινό: μόνο μέσα στην κλήση (έξω το δίνει το lteContext, με έλεγχο EARFCN+PCI)
+    const insideCall = (t: number) => inView(t) && (!callBounds || (t >= callBounds.start && t <= callBounds.end));
+    attach(pointsOf(activeScannerRaw, "ScannerStrength", "RSRP", insideCall), isLteSample);
+    // GSM κοινό: και πριν/μετά, με την υπόθεση ότι το κινητό έμενε στην πρώτη/τελευταία κυψέλη της
+    // κλήσης (το GSM context δεν έχει κυψέλη για επαλήθευση) — πάντα πάνω σε GSM δείγματα
+    attach(pointsOf(selectedLteSide === "B" ? gsmScannerRawB : gsmScannerRaw, "GsmScannerStrength", "RxLev"), isGsmSample);
+    // 5G κοινό: μόνο A-side (NR γραμμές κινητού υπάρχουν μόνο εκεί)
+    if (selectedLteSide === "A") attach(pointsOf(nr5gScannerRawA, "NrScannerStrength", "RSRP"), isNrSample);
+    return merged;
   }, [activeRadioValues, isGSMMode, showsGsmLeg, selectedLteSide, gsmValues, bSideGsmValues, radioValues, bSideLteValues,
       contextSignal, contextSignalBSide, gsmContextSignal, gsmContextSignalBSide, nr5gContextSignal, nr5gContextSignalBSide,
-      gsmScannerMatched, lteScannerMatched, contextScanner, scannerByKey,
+      scannerByKey, activeScannerRaw, gsmScannerRaw, gsmScannerRawB, callBounds,
       gsmScannerBestRaw, lteScannerBestRaw, nr5gScannerBestRaw, nr5gScannerRawA, inView]);
 
-  const unifiedDomain = useMemo(() => sampleDomain(unifiedSamples), [unifiedSamples]);
+  // Ο άξονας δείχνει ΟΛΟ το ορατό παράθυρο [αρχή − N, τέλος + N], όχι μόνο όσο φτάνουν τα δείγματα:
+  // όπου δεν υπάρχουν μετρήσεις το διάγραμμα δείχνει «No measurements» αντί να μαζεύει. Ένωση με τα
+  // δείγματα, για την περίπτωση που μετρήσεις της κλήσης βγαίνουν λίγο έξω από τα όριά της.
+  // Περίοδοι "No service" της πλευράς που δείχνει η σελίδα — ίδια πηγή και ίδιο κριτήριο με τη
+  // λωρίδα «NO SERVICE» του Session Overview, ώστε διάγραμμα και overview να λένε το ίδιο.
+  const noServicePeriods = useMemo(() => (selectedLteSide === "B" ? techPeriodsBSide : techPeriods)
+    .filter((period) => period.NetworkStatus != null && /no service|out of service/i.test(period.NetworkStatus))
+    .map((period) => {
+      const from = new Date(period.StartTime).getTime();
+      const to = period.EndTime ? new Date(period.EndTime).getTime() : from + (period.Duration ?? 0);
+      return { from, to };
+    })
+    .filter((period) => Number.isFinite(period.from) && Number.isFinite(period.to) && period.to > period.from),
+  [techPeriods, techPeriodsBSide, selectedLteSide]);
+
+  const unifiedDomain = useMemo(() => {
+    const fromSamples = sampleDomain(unifiedSamples);
+    if (!viewRange || !fromSamples) return fromSamples;
+    return { start: Math.min(viewRange.from, fromSamples.start), end: Math.max(viewRange.to, fromSamples.end) };
+  }, [unifiedSamples, viewRange]);
 
   /** Υπάρχει όντως B-side; Αλλιώς ο επιλογέας πλευράς μένει απενεργοποιημένος. */
   const hasBSideData = bSideLteValues.length > 0 || bSideGsmValues.length > 0
@@ -2728,6 +2736,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
           samples={unifiedSamples}
           domain={unifiedDomain}
           callBounds={callBounds}
+          noServicePeriods={noServicePeriods}
           overviewTimes={sessionOverview?.times ?? []}
           overviewLanes={sessionOverview?.lanes ?? []}
           events={signalEvents}
@@ -2995,20 +3004,27 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
 
             <div className="flex items-center gap-2">
               {/* SRVCC calls start on LTE and hand over to GSM mid-call, CSFB calls drop to GSM to
-                  set the call up — this toggle lets the user inspect either leg's measurements,
-                  and resets side back to "A" on switch */}
+                  set the call up — this toggle lets the user inspect either leg's measurements.
+                  Η πλευρά κρατιέται· γυρίζει σε A μόνο όταν η B δεν έχει μετρήσεις στο νέο σκέλος
+                  (π.χ. SRVCC όπου μόνο η A πέρασε σε GSM). */}
               {canToggleLeg && (
                 <div className="inline-flex rounded-md border border-border overflow-hidden mr-2">
                   <button
                     type="button"
-                    onClick={() => { setSrvccNetwork("LTE"); setSelectedLteSide("A"); }}
+                    onClick={() => {
+                      setSrvccNetwork("LTE");
+                      if (selectedLteSide === "B" && bSideLteValues.length === 0) setSelectedLteSide("A");
+                    }}
                     className={`px-2 py-1 text-xs ${activeLeg === "LTE" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
                   >
                     LTE
                   </button>
                   <button
                     type="button"
-                    onClick={() => { setSrvccNetwork("GSM"); setSelectedLteSide("A"); }}
+                    onClick={() => {
+                      setSrvccNetwork("GSM");
+                      if (selectedLteSide === "B" && bSideGsmValues.length === 0) setSelectedLteSide("A");
+                    }}
                     className={`px-2 py-1 text-xs border-l border-border ${activeLeg === "GSM" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
                   >
                     GSM
@@ -3016,11 +3032,12 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
                 </div>
               )}
 
-              {/* Show A/B toggle only when B-side data exists for the current mode */}
+              {/* A/B toggle: ορατό όσο η κλήση έχει B-side (σε οποιοδήποτε σκέλος) — δεν εξαφανίζεται
+                  όταν αλλάζει το σκέλος. Το B απενεργοποιείται με εξήγηση όταν δεν έχει μετρήσεις
+                  στο τρέχον σκέλος (π.χ. SRVCC: η B έμεινε σε LTE, άρα δεν έχει GSM). */}
               {(() => {
-                const hasBSide = isGSMMode
-                  ? bSideGsmValues.length > 0
-                  : bSideLteValues.length > 0;
+                const hasBSide = bSideGsmValues.length > 0 || bSideLteValues.length > 0;
+                const bSideHasCurrentLeg = isGSMMode ? bSideGsmValues.length > 0 : bSideLteValues.length > 0;
                 if (!hasBSide && isLoadingRadio) {
                   // While loading, show the toggle (placeholder) so layout doesn't jump
                   return (
@@ -3042,8 +3059,13 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
                     </button>
                     <button
                       type="button"
+                      disabled={!bSideHasCurrentLeg}
+                      title={bSideHasCurrentLeg ? undefined : `Η B-side δεν έχει ${isGSMMode ? "GSM" : "LTE"} μετρήσεις σε αυτή την κλήση`}
                       onClick={() => setSelectedLteSide("B")}
-                      className={`px-2 py-1 text-xs border-l border-border ${selectedLteSide === "B" ? "bg-primary text-primary-foreground" : "bg-muted text-foreground hover:bg-muted/80"}`}
+                      className={`px-2 py-1 text-xs border-l border-border ${
+                        !bSideHasCurrentLeg ? "bg-muted text-muted-foreground/50 cursor-not-allowed"
+                        : selectedLteSide === "B" ? "bg-primary text-primary-foreground"
+                        : "bg-muted text-foreground hover:bg-muted/80"}`}
                     >
                       B-side
                     </button>

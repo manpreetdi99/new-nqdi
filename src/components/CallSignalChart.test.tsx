@@ -70,8 +70,7 @@ describe("CallSignalChart", () => {
     // Χωρίς RSRQ το checkbox ποιότητας μένει απενεργοποιημένο αντί να δείχνει άδειο άξονα.
     renderChart({ samples: lteSamples.map(({ t, RSRP }) => ({ t, RSRP })) });
     expect(screen.getByLabelText("RSRQ")).toBeDisabled();
-    expect(screen.queryByLabelText("Scanner")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("Best scanner")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText(/scanner/i)).not.toBeInTheDocument();
   });
 
   it("keeps the NR series off by default on a call filed as plain LTE", () => {
@@ -134,8 +133,27 @@ describe("CallSignalChart", () => {
 
   it("offers the scanner overlay once scanner readings are present", () => {
     renderChart({ samples: lteSamples.map((s, i) => ({ ...s, ScannerStrength: -102 - i })) });
-    expect(screen.getByLabelText("Scanner")).toBeEnabled();
-    expect(screen.queryByLabelText("Best scanner")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("LTE scanner")).toBeEnabled();
+    expect(screen.queryByLabelText("Best LTE scanner")).not.toBeInTheDocument();
+  });
+
+  it("offers LTE and GSM scanner side by side, whatever leg is on screen (SRVCC)", () => {
+    // Σε SRVCC η καμπύλη έχει LTE και GSM κομμάτι μαζί: κάθε scanner έχει δική του σειρά,
+    // ώστε να φαίνεται GSM scanner στο GSM κομμάτι ακόμα κι όταν η σελίδα δείχνει το LTE σκέλος.
+    const srvcc: SignalSample[] = [
+      ...lteSamples.slice(0, 10).map((s, i) => ({ ...s, ScannerStrength: -95 - i, BestScannerStrength: -90 - i })),
+      ...gsmSamples.slice(10).map((s, i) => ({ ...s, GsmScannerStrength: -78 - i, GsmBestScannerStrength: -74 - i })),
+    ];
+    for (const network of ["LTE", "GSM"] as SignalNetwork[]) {
+      const view = renderChart({ network, samples: srvcc });
+      for (const name of ["LTE scanner", "Best LTE scanner", "GSM scanner", "Best GSM scanner"]) {
+        expect(screen.getByLabelText(name)).not.toBeChecked();
+      }
+      fireEvent.click(screen.getByLabelText("GSM scanner"));
+      expect(screen.getByLabelText("GSM scanner")).toBeChecked();
+      expect(screen.getByLabelText("LTE scanner")).not.toBeChecked();
+      view.unmount();
+    }
   });
 
   it("labels signalling events and points the shared cursor at them on hover", () => {

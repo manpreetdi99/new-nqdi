@@ -18,8 +18,14 @@ export interface SignalSample {
   RxQual?: number;
   NrRSRP?: number;
   NrRSRQ?: number;
+  /** LTE scanner (κοινό, ίδια κυψέλη με το κινητό) RSRP */
   ScannerStrength?: number;
+  /** Best LTE scanner (Top 1 του operator) RSRP */
   BestScannerStrength?: number;
+  /** GSM scanner (κοινό, ίδιο CGI με το κινητό) RxLev — δική του σειρά, ανεξάρτητη από το σκέλος */
+  GsmScannerStrength?: number;
+  /** Best GSM scanner (Top 1 του operator) RxLev */
+  GsmBestScannerStrength?: number;
   /** Best 5G scanner SS-RSRP — δική του σειρά, ώστε να μην ανακατεύεται με το LTE/GSM scanner */
   NrBestScannerStrength?: number;
   /** Κοινό 5G scanner (ίδιο serving CID με το κινητό) SS-RSRP */
@@ -75,6 +81,57 @@ export function sampleDomain(samples: readonly SignalSample[]): { start: number;
   return end > start ? { start, end } : null;
 }
 
+/** Έχει το δείγμα μέτρηση κινητού (όχι μόνο scanner); */
+export const hasUeMeasurement = (sample: SignalSample): boolean =>
+  sample.RSRP != null || sample.RSRQ != null || sample.RxLev != null || sample.RxQual != null
+  || sample.NrRSRP != null || sample.NrRSRQ != null;
+
+/**
+ * Διαστήματα του domain χωρίς μετρήσεις κινητού μεγαλύτερα από `minGapMs` — και στην αρχή/στο
+ * τέλος. Ο άξονας του διαγράμματος δείχνει όλο το παράθυρο ±Ns, οπότε αυτά σημαδεύονται
+ * «No measurements» αντί να «μαζεύει» το διάγραμμα στα δεδομένα.
+ */
+export function findMeasurementGaps(
+  samples: readonly SignalSample[],
+  domain: { start: number; end: number },
+  minGapMs: number,
+): { from: number; to: number }[] {
+  const times = samples
+    .filter(hasUeMeasurement)
+    .map((sample) => sample.t)
+    .filter((t) => t >= domain.start && t <= domain.end)
+    .sort((a, b) => a - b);
+  const gaps: { from: number; to: number }[] = [];
+  let previous = domain.start;
+  for (const t of times) {
+    if (t - previous > minGapMs) gaps.push({ from: previous, to: t });
+    previous = t;
+  }
+  if (domain.end - previous > minGapMs) gaps.push({ from: previous, to: domain.end });
+  return gaps;
+}
+
+export type MeasurementGapReason = "no-service" | "no-measurements";
+export interface MeasurementGap { from: number; to: number; reason: MeasurementGapReason }
+
+/**
+ * Γιατί λείπουν μετρήσεις: αν μια περίοδος "No service" (FactRadioTechnology.NetworkStatus)
+ * καλύπτει τουλάχιστον το μισό κενό, το κινητό δεν είχε δίκτυο — εύρημα δικτύου, όχι απλή
+ * απουσία καταγραφής. Αλλιώς "no-measurements" (idle χωρίς reports, τέλος αρχείου κ.λπ.).
+ */
+export function labelMeasurementGaps(
+  gaps: readonly { from: number; to: number }[],
+  noServicePeriods: readonly { from: number; to: number }[],
+): MeasurementGap[] {
+  return gaps.map((gap) => {
+    const covered = noServicePeriods.reduce(
+      (sum, period) => sum + Math.max(0, Math.min(gap.to, period.to) - Math.max(gap.from, period.from)),
+      0,
+    );
+    return { ...gap, reason: covered * 2 >= gap.to - gap.from ? "no-service" : "no-measurements" };
+  });
+}
+
 /** Θέση ενός timestamp μέσα στο domain, ως ποσοστό πλάτους (0..100). */
 export function percentOfTime(t: number, domain: { start: number; end: number }): number {
   const span = domain.end - domain.start;
@@ -121,15 +178,22 @@ export function attachNearest(
   samples: SignalSample[],
   points: readonly { t: number; values: Partial<SignalSample> }[],
   toleranceMs = 1000,
+  /**
+   * Προαιρετικά: κολλάει μόνο σε δείγματα που περνούν το φίλτρο — π.χ. GSM scanner μόνο πάνω
+   * σε GSM δείγματα (RxLev), ώστε σε SRVCC να μην απλωθεί πάνω στο LTE κομμάτι της καμπύλης.
+   */
+  onlyWhere?: (sample: SignalSample) => boolean,
 ): SignalSample[] {
   if (samples.length === 0 || points.length === 0) return samples;
-  const times = samples.map((s) => s.t);
+  const targets = onlyWhere ? samples.filter(onlyWhere) : samples;
+  if (targets.length === 0) return samples;
+  const times = targets.map((s) => s.t);
   for (const point of points) {
     if (!Number.isFinite(point.t)) continue;
     const index = nearestIndex(times, point.t);
     if (index < 0 || Math.abs(times[index] - point.t) > toleranceMs) continue;
     for (const [key, value] of Object.entries(point.values)) {
-      if (value !== undefined) (samples[index] as unknown as Record<string, unknown>)[key] = value;
+      if (value !== undefined) (targets[index] as unknown as Record<string, unknown>)[key] = value;
     }
   }
   return samples;

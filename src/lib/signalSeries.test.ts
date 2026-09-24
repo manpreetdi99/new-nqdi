@@ -2,6 +2,8 @@ import { describe, it, expect } from "vitest";
 
 import {
   attachNearest,
+  findMeasurementGaps,
+  labelMeasurementGaps,
   layoutEventLanes,
   mergeSignalSamples,
   nearestIndex,
@@ -96,6 +98,53 @@ describe("signal series", () => {
     expect(samples[0].ScannerStrength).toBe(-101);
     expect(samples[1].ScannerStrength).toBe(-103);
     expect(samples[2].ScannerStrength).toBeUndefined();
+  });
+
+  it("attaches only to samples of the scanner's own technology when asked (SRVCC)", () => {
+    // LTE κομμάτι (RSRP) και μετά GSM (RxLev): ένα GSM scanner δείγμα κοντά στο LTE κομμάτι
+    // (padding πριν το handover) ΔΕΝ πρέπει να κολλήσει εκεί — μόνο στο πλησιέστερο GSM δείγμα.
+    const samples: SignalSample[] = [
+      { t: at(0), RSRP: -100 }, { t: at(1000), RSRP: -101 },
+      { t: at(2000), RxLev: -80 }, { t: at(3000), RxLev: -81 },
+    ];
+    attachNearest(samples, [
+      { t: at(900), values: { GsmScannerStrength: -70 } },   // κοντά στο LTE, 1.1s από το πρώτο GSM
+      { t: at(2900), values: { GsmScannerStrength: -72 } },
+    ], 1000, (s) => s.RxLev != null);
+    expect(samples[1].GsmScannerStrength).toBeUndefined();
+    expect(samples[2].GsmScannerStrength).toBeUndefined(); // 1.1s > ανοχή 1s
+    expect(samples[3].GsmScannerStrength).toBe(-72);
+  });
+
+  it("finds the stretches without UE measurements, including at the window edges", () => {
+    // Παράθυρο 0–60s· μετρήσεις 10–20s και 22–30s· μετά τίποτα (η κλήση έληξε πριν το «μετά»).
+    const samples: SignalSample[] = [
+      ...[10, 12, 14, 16, 18, 20].map((s) => ({ t: at(s * 1000), RSRP: -100 })),
+      ...[22, 24, 26, 28, 30].map((s) => ({ t: at(s * 1000), RxLev: -80 })),
+      { t: at(45_000), ScannerStrength: -90 },   // μόνο scanner — δεν μετράει ως μέτρηση κινητού
+    ];
+    expect(findMeasurementGaps(samples, { start: at(0), end: at(60_000) }, 5000)).toEqual([
+      { from: at(0), to: at(10_000) },        // αρχή: 10s χωρίς μετρήσεις
+      { from: at(30_000), to: at(60_000) },   // τέλος: το «μετά» χωρίς μετρήσεις
+    ]);
+    // Κενό 2s ανάμεσα σε LTE και GSM < 5s → όχι «No measurements»
+    expect(findMeasurementGaps(samples, { start: at(10_000), end: at(30_000) }, 5000)).toEqual([]);
+  });
+
+  it("labels a gap 'no-service' only when a No-service period covers at least half of it", () => {
+    const gaps = [
+      { from: at(0), to: at(10_000) },
+      { from: at(20_000), to: at(30_000) },
+      { from: at(40_000), to: at(50_000) },
+    ];
+    const noService = [
+      { from: at(1_000), to: at(9_000) },     // 8/10 του πρώτου κενού
+      { from: at(28_000), to: at(31_000) },   // 2/10 του δεύτερου
+    ];
+    expect(labelMeasurementGaps(gaps, noService).map((g) => g.reason)).toEqual([
+      "no-service", "no-measurements", "no-measurements",
+    ]);
+    expect(labelMeasurementGaps(gaps, []).every((g) => g.reason === "no-measurements")).toBe(true);
   });
 
   it("finds the nearest index, preferring the earlier row on a tie", () => {

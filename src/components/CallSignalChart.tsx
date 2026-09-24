@@ -23,7 +23,7 @@ import {
 import { Activity, Pin, PinOff } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { SessionOverview, type OverviewLane } from "@/components/SessionOverview";
-import { layoutEventLanes, nearestIndex, type SignalSample } from "@/lib/signalSeries";
+import { findMeasurementGaps, labelMeasurementGaps, layoutEventLanes, nearestIndex, type SignalSample } from "@/lib/signalSeries";
 
 export type SignalNetwork = "LTE" | "GSM" | "NR";
 
@@ -70,6 +70,12 @@ interface CallSignalChartProps {
   /** Επιλογείς παραθύρου / πλευράς — μπαίνουν στην κεφαλίδα του διαγράμματος. */
   controls?: ReactNode;
   subtitle?: ReactNode;
+  /**
+   * Περίοδοι "No service" της πλευράς που δείχνει η σελίδα (FactRadioTechnology.NetworkStatus):
+   * ένα κενό μετρήσεων που καλύπτεται κυρίως από τέτοια περίοδο γράφει «No service» αντί για
+   * «No measurements» — το κινητό δεν είχε δίκτυο, δεν είναι απλή απουσία καταγραφής.
+   */
+  noServicePeriods?: readonly { from: number; to: number }[];
 }
 
 const LANE_HEIGHT = 17;
@@ -95,12 +101,35 @@ const QUALITY_SERIES = [
   { key: "NrRSRQ", name: "SS-RSRQ", color: "#f472b6" },
 ] as const;
 
-const SCANNER_SERIES = [
-  { key: "ScannerStrength", name: "Scanner", dash: "4 3" },
-  { key: "BestScannerStrength", name: "Best scanner", dash: "2 2" },
-  { key: "NrBestScannerStrength", name: "Best 5G scanner", dash: "6 2 1 2" },
-  { key: "NrScannerStrength", name: "5G scanner", dash: "4 3" },
-] as const;
+/**
+ * Σειρές scanner — μία ανά τεχνολογία × (κοινό / best), ΑΝΕΞΑΡΤΗΤΑ από το σκέλος που δείχνει η
+ * σελίδα: σε SRVCC/CSFB η καμπύλη έχει και LTE και GSM κομμάτι, οπότε θέλει LTE scanner στο ένα
+ * και GSM scanner στο άλλο ταυτόχρονα. Όλες στον άξονα ισχύος, κλειστές από προεπιλογή.
+ */
+// `best`: Top 1 του operator, με δικά του δείγματα — σχεδιάζεται ΠΑΝΩ από τις ζώνες «No measurements»
+// (το scanner μετράει και όταν το κινητό όχι). Τα κοινά μένουν κάτω, όπως οι καμπύλες του κινητού.
+const SCANNER_SERIES: readonly { key: string; name: string; color: string; dash: string; best?: boolean; title: string }[] = [
+  { key: "ScannerStrength", name: "LTE scanner", color: "hsl(45, 93%, 58%)", dash: "4 3",
+    title: "Ο LTE scanner στην ίδια κυψέλη με το κινητό (CGI, αλλιώς EARFCN/PCI) — σύγκριση RSRP κινητού vs scanner." },
+  { key: "BestScannerStrength", name: "Best LTE scanner", color: "hsl(280, 65%, 60%)", dash: "2 2", best: true,
+    title: "Top 1 RSRP του LTE scanner για τον operator της κλήσης, ανεξαρτήτως κυψέλης του κινητού." },
+  { key: "GsmScannerStrength", name: "GSM scanner", color: "hsl(160, 70%, 48%)", dash: "4 3",
+    title: "Ο GSM scanner στο ίδιο CGI με το κινητό — σύγκριση RxLev κινητού vs scanner." },
+  { key: "GsmBestScannerStrength", name: "Best GSM scanner", color: "hsl(95, 60%, 55%)", dash: "2 2", best: true,
+    title: "Top 1 RxLev του GSM scanner για τον operator της κλήσης, ανεξαρτήτως κυψέλης του κινητού." },
+  { key: "NrScannerStrength", name: "5G scanner", color: "hsl(195, 85%, 60%)", dash: "4 3",
+    title: "Ο 5G scanner στην ίδια κυψέλη με το κινητό (CID ή NR-ARFCN + PCI, ισχυρότερο beam) — σύγκριση SS-RSRP κινητού vs scanner." },
+  { key: "NrBestScannerStrength", name: "Best 5G scanner", color: "hsl(330, 80%, 62%)", dash: "6 2 1 2", best: true,
+    title: "Top 1 SS-RSRP του 5G scanner (FactNR5GScannerBeam) για τον operator της κλήσης, ανεξαρτήτως κυψέλης του κινητού." },
+];
+
+/**
+ * Κενό μετρήσεων κινητού πάνω από τόσο → ζώνη «No measurements». Τα measurement reports έρχονται
+ * ανά ~0.5–1.3s (και σε idle), οπότε 5s σημαίνει ότι πραγματικά δεν υπάρχουν δεδομένα.
+ */
+const NO_MEASUREMENTS_GAP_MS = 5_000;
+// Σταθερό default, ώστε το useMemo των κενών να μην ξανατρέχει σε κάθε render
+const NO_PERIODS: readonly { from: number; to: number }[] = [];
 
 /** Κατώφλια ανά δίκτυο — ίδιες τιμές με τις χρωματικές κλίμακες του χάρτη. */
 const THRESHOLDS: Record<SignalNetwork, { strength: [number, number]; quality: [number, number] }> = {
@@ -119,15 +148,14 @@ function clock(ms: number, withMillis = false): string {
 export function CallSignalChart({
   network, technology, samples, domain, callBounds, overviewTimes, overviewLanes, events,
   hoveredTime, onHoverTime, hoverFromOtherSide = false, pinned, onPinnedChange, controls, subtitle,
+  noServicePeriods = NO_PERIODS,
 }: CallSignalChartProps) {
   // Κάθε σειρά (RSRP / SS-RSRP / RSRQ / SS-RSRQ …) έχει δικό της checkbox. Κρατάμε ΜΟΝΟ
   // όσες πείραξε ρητά ο χρήστης· οι υπόλοιπες ακολουθούν την προεπιλογή, ώστε μια σειρά
   // που εμφανίζεται αργότερα (π.χ. SS-RSRP όταν ανοίξει EN-DC) να μη θέλει αρχικοποίηση.
   const [seriesOverride, setSeriesOverride] = useState<Record<string, boolean>>({});
-  const [showScanner, setShowScanner] = useState(false);
-  const [showBScanner, setShowBScanner] = useState(false);
-  const [showNrBScanner, setShowNrBScanner] = useState(false);
-  const [showNrScanner, setShowNrScanner] = useState(false);
+  // Ποιες σειρές scanner έχει ανοίξει ο χρήστης (key → true)· όλες κλειστές από προεπιλογή
+  const [shownScanners, setShownScanners] = useState<Record<string, boolean>>({});
   const [showEvents, setShowEvents] = useState(true);
 
   /**
@@ -172,10 +200,31 @@ export function CallSignalChart({
   const qualitySeries = QUALITY_SERIES.filter(
     (series) => qualityKeys.includes(series.key) && (present.has(series.key) || series.key === primaryQualityKey),
   ).map((series) => ({ ...series, missing: !present.has(series.key) }));
-  const hasScanner = present.has("ScannerStrength");
-  const hasBestScanner = present.has("BestScannerStrength");
-  const hasNrBestScanner = present.has("NrBestScannerStrength");
-  const hasNrScanner = present.has("NrScannerStrength");
+  // Μόνο οι σειρές scanner που έχουν όντως δεδομένα παίρνουν checkbox
+  const scannerSeries = SCANNER_SERIES.filter((series) => present.has(series.key));
+  const visibleScanners = scannerSeries.filter((series) => shownScanners[series.key]);
+  const scannerLine = (series: (typeof SCANNER_SERIES)[number]) => (
+    <Line
+      key={series.key}
+      yAxisId="strength"
+      type="monotone"
+      dataKey={series.key}
+      stroke={series.color}
+      strokeDasharray={series.dash}
+      dot={false}
+      activeDot={false}
+      strokeWidth={2}
+      connectNulls
+      name={series.name}
+    />
+  );
+
+  // Διαστήματα του domain χωρίς μετρήσεις κινητού (και στην αρχή/στο τέλος): ο άξονας δείχνει
+  // ΟΛΟ το παράθυρο ±Ns, οπότε τα κενά μένουν κενά με ένδειξη αντί να «μαζεύει» το διάγραμμα.
+  const measurementGaps = useMemo(
+    () => (domain ? labelMeasurementGaps(findMeasurementGaps(samples, domain, NO_MEASUREMENTS_GAP_MS), noServicePeriods) : []),
+    [samples, domain, noServicePeriods],
+  );
 
   const laidOutEvents = useMemo(
     () => (domain ? layoutEventLanes(events, domain, EVENT_LANES) : []),
@@ -188,9 +237,8 @@ export function CallSignalChart({
   const activeSeriesCount =
     visibleStrength.length +
     visibleQuality.length +
-    [showScanner && hasScanner, showBScanner && hasBestScanner, showNrBScanner && hasNrBestScanner, showNrScanner && hasNrScanner].filter(Boolean).length;
-  const showStrengthAxis = visibleStrength.length > 0 || (showScanner && hasScanner) || (showBScanner && hasBestScanner)
-    || (showNrBScanner && hasNrBestScanner) || (showNrScanner && hasNrScanner);
+    visibleScanners.length;
+  const showStrengthAxis = visibleStrength.length > 0 || visibleScanners.length > 0;
   const showQualityAxis = visibleQuality.length > 0;
   const showStrengthThresholds = activeSeriesCount === 1 && showStrengthAxis;
   const showQualityThresholds = activeSeriesCount === 1 && showQualityAxis;
@@ -269,46 +317,17 @@ export function CallSignalChart({
             {series.name}
           </label>
         ))}
-        {hasScanner && (
-          <label
-            className="inline-flex items-center gap-1 cursor-pointer"
-            title={network === "GSM"
-              ? "Ο scanner στο ίδιο CGI με το κινητό — σύγκριση RxLev κινητού vs scanner στο κοινό serving CGI."
-              : "Ο scanner στο ίδιο EARFCN/PCI με το κινητό — σύγκριση RSRP κινητού vs scanner στο κοινό serving cell."}
-          >
-            <input type="checkbox" checked={showScanner} onChange={(e) => setShowScanner(e.target.checked)} className="h-3 w-3" />
-            Scanner
+        {scannerSeries.map((series) => (
+          <label key={series.key} className="inline-flex items-center gap-1 cursor-pointer" title={series.title}>
+            <input
+              type="checkbox"
+              checked={Boolean(shownScanners[series.key])}
+              onChange={(e) => setShownScanners((prev) => ({ ...prev, [series.key]: e.target.checked }))}
+              className="h-3 w-3"
+            />
+            {series.name}
           </label>
-        )}
-        {hasBestScanner && (
-          <label
-            className="inline-flex items-center gap-1 cursor-pointer"
-            title={network === "GSM"
-              ? "Top 1 RxLev του scanner για τον operator της κλήσης."
-              : "Top 1 RSRP του scanner για τον operator της κλήσης, ανεξαρτήτως EARFCN/PCI του κινητού."}
-          >
-            <input type="checkbox" checked={showBScanner} onChange={(e) => setShowBScanner(e.target.checked)} className="h-3 w-3" />
-            Best scanner
-          </label>
-        )}
-        {hasNrScanner && (
-          <label
-            className="inline-flex items-center gap-1 cursor-pointer"
-            title="Ο 5G scanner στο ίδιο serving CID με το κινητό (ισχυρότερο beam) — σύγκριση SS-RSRP κινητού vs scanner."
-          >
-            <input type="checkbox" checked={showNrScanner} onChange={(e) => setShowNrScanner(e.target.checked)} className="h-3 w-3" />
-            5G scanner
-          </label>
-        )}
-        {hasNrBestScanner && (
-          <label
-            className="inline-flex items-center gap-1 cursor-pointer"
-            title="Top 1 SS-RSRP του 5G scanner (FactNR5GScannerBeam) για τον operator της κλήσης, ανεξαρτήτως serving cell του κινητού."
-          >
-            <input type="checkbox" checked={showNrBScanner} onChange={(e) => setShowNrBScanner(e.target.checked)} className="h-3 w-3" />
-            Best 5G scanner
-          </label>
-        )}
+        ))}
         {laidOutEvents.length > 0 && (
           <label className="inline-flex items-center gap-1 cursor-pointer">
             <input type="checkbox" checked={showEvents} onChange={(e) => setShowEvents(e.target.checked)} className="h-3 w-3" />
@@ -317,7 +336,7 @@ export function CallSignalChart({
         )}
         <span className="ml-auto flex flex-wrap items-center gap-x-2 gap-y-0.5 text-muted-foreground">
           <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 rounded-sm bg-amber-400/30 border border-amber-400/50" />Πριν</span>
-          <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 rounded-sm bg-primary/20 border border-primary/40" />Κατά</span>
+          <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 rounded-sm bg-blue-500/20 border border-blue-500/50" />Κατά</span>
           <span className="flex items-center gap-1"><span className="inline-block w-3 h-2 rounded-sm bg-orange-400/30 border border-orange-400/50" />Μετά</span>
           {/* Το υπόμνημα του Session Overview ανέβηκε εδώ· η λεζάντα κάτω από τις λωρίδες
               έτρωγε μια ακόμη σειρά χωρίς να προσθέτει πληροφορία. */}
@@ -422,18 +441,7 @@ export function CallSignalChart({
                     : <g key={`${series.key}-${props.index}`} />}
               />
             ))}
-            {showScanner && hasScanner && (
-              <Line yAxisId="strength" type="monotone" dataKey="ScannerStrength" stroke="hsl(45, 93%, 58%)" strokeDasharray={SCANNER_SERIES[0].dash} dot={false} activeDot={false} strokeWidth={2} connectNulls name="Scanner" />
-            )}
-            {showBScanner && hasBestScanner && (
-              <Line yAxisId="strength" type="monotone" dataKey="BestScannerStrength" stroke="hsl(280, 65%, 60%)" strokeDasharray={SCANNER_SERIES[1].dash} dot={false} activeDot={false} strokeWidth={2} connectNulls name="Best scanner" />
-            )}
-            {showNrScanner && hasNrScanner && (
-              <Line yAxisId="strength" type="monotone" dataKey="NrScannerStrength" stroke="hsl(195, 85%, 60%)" strokeDasharray={SCANNER_SERIES[3].dash} dot={false} activeDot={false} strokeWidth={2} connectNulls name="5G scanner" />
-            )}
-            {showNrBScanner && hasNrBestScanner && (
-              <Line yAxisId="strength" type="monotone" dataKey="NrBestScannerStrength" stroke="hsl(330, 80%, 62%)" strokeDasharray={SCANNER_SERIES[2].dash} dot={false} activeDot={false} strokeWidth={2} connectNulls name="Best 5G scanner" />
-            )}
+            {visibleScanners.filter((series) => !series.best).map(scannerLine)}
             {visibleQuality.map((series) => (
               <Line
                 key={series.key}
@@ -451,6 +459,36 @@ export function CallSignalChart({
                     : <g key={`${series.key}-${props.index}`} />}
               />
             ))}
+
+            {/* «No measurements»: ΠΑΝΩ από τις καμπύλες (σειρά στο SVG), ώστε η γραμμή που τα
+                connectNulls ενώνουν πάνω από ένα κενό να μη φαίνεται — το κενό μένει κενό */}
+            {(showStrengthAxis || showQualityAxis) && measurementGaps.map((gap) => {
+              const noService = gap.reason === "no-service";
+              return (
+                <ReferenceArea
+                  key={`gap-${gap.from}`}
+                  yAxisId={showStrengthAxis ? "strength" : qualityAxisId}
+                  x1={gap.from}
+                  x2={gap.to}
+                  fill="hsl(var(--card))"
+                  fillOpacity={0.92}
+                  stroke={noService ? "#ef4444" : "hsl(var(--border))"}
+                  strokeOpacity={noService ? 0.7 : 1}
+                  strokeDasharray="3 3"
+                  label={{
+                    value: noService ? "No service" : "No measurements",
+                    position: "center",
+                    fill: noService ? "#f87171" : "hsl(var(--muted-foreground))",
+                    fontSize: 10,
+                    fontWeight: noService ? 600 : 400,
+                  }}
+                />
+              );
+            })}
+
+            {/* Best scanner ΠΑΝΩ από τις ζώνες «No measurements»: έχει δικά του δείγματα, οπότε
+                δείχνει τι έβλεπε το δίκτυο όσο το κινητό δεν μετρούσε */}
+            {visibleScanners.filter((series) => series.best).map(scannerLine)}
 
             {/* Κοινός cursor: δείχνει το δείγμα που αντιστοιχεί σε ό,τι έχει το ποντίκι από πάνω */}
             {highlightTime != null && (showStrengthAxis || showQualityAxis) && (
