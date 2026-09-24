@@ -64,8 +64,41 @@ function techColor(tech: string): string {
   return key ? TECH_COLORS[key] : "bg-muted text-muted-foreground border-border";
 }
 
+/** Διακριτές μη-κενές τιμές ενός πεδίου σε όλα τα tests, με τη σειρά που εμφανίζονται. */
+function distinctValues(tests: DataCallRow[], pick: (r: DataCallRow) => string | null | undefined): string[] {
+  const seen = new Set<string>();
+  for (const r of tests) {
+    const v = pick(r);
+    if (v != null && v !== "") seen.add(v);
+  }
+  return [...seen];
+}
+
+/** Summary πεδίο: μία τιμή κανονικά· αν η session αναμιγνύει τιμές, τις δείχνει όλες σε amber. */
+function SummaryValue({ values }: { values: string[] }) {
+  const mixed = values.length > 1;
+  return (
+    <p
+      className={mixed ? "text-amber-400" : "text-foreground"}
+      title={mixed ? `Η session περιέχει ${values.length} διαφορετικές τιμές` : undefined}
+    >
+      {values.length === 0 ? "N/A" : values.join(", ")}
+    </p>
+  );
+}
+
 export default function DataSessionDetail({ sessionId, tests, onBack, database }: Props) {
-  const first = tests[0];
+  // Το summary βγαίνει από ΟΛΑ τα tests, όχι από το tests[0]: αν μια session αναμίξει
+  // locations/collections/τεχνολογίες, το header το δείχνει αντί να κρύβει τις υπόλοιπες.
+  const locations = distinctValues(tests, r => r.Location);
+  const collections = distinctValues(tests, r => r.CollectionName);
+  const technologies = distinctValues(tests, r => r.technology ?? r.startTechnology);
+  const startTs = tests.reduce<string | null>((min, r) => {
+    const ts = r.callStartTimeStamp;
+    if (!ts || isNaN(new Date(ts).getTime())) return min;
+    return min == null || new Date(ts) < new Date(min) ? ts : min;
+  }, null);
+  const sessionInvalid = tests.some(r => r.isValid === 0);
   const passCount = tests.filter(r => {
     const s = (r.scoringStatus ?? r.status ?? "").toLowerCase();
     return s === "a" || s.includes("success") || s.includes("complet");
@@ -129,7 +162,7 @@ export default function DataSessionDetail({ sessionId, tests, onBack, database }
       <div className="bg-card border border-border rounded-lg p-4 grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
         <div>
           <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Location</p>
-          <p className="text-foreground">{first?.Location ?? "N/A"}</p>
+          <SummaryValue values={locations} />
         </div>
         <div>
           <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Session ID</p>
@@ -137,15 +170,15 @@ export default function DataSessionDetail({ sessionId, tests, onBack, database }
         </div>
         <div>
           <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Start Time</p>
-          <p className="font-mono text-foreground">{formatTs(first?.callStartTimeStamp)}</p>
+          <p className="font-mono text-foreground">{formatTs(startTs)}</p>
         </div>
         <div>
           <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Collection</p>
-          <p className="text-foreground">{first?.CollectionName ?? "N/A"}</p>
+          <SummaryValue values={collections} />
         </div>
         <div>
           <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Technology</p>
-          <p className="text-foreground">{first?.technology ?? first?.startTechnology ?? "N/A"}</p>
+          <SummaryValue values={technologies} />
         </div>
         <div>
           <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Tests</p>
@@ -161,8 +194,8 @@ export default function DataSessionDetail({ sessionId, tests, onBack, database }
         </div>
         <div>
           <p className="text-muted-foreground uppercase tracking-wider text-[10px] mb-0.5">Session Valid</p>
-          <p className={first?.isValid === 0 ? "text-red-400" : "text-green-400"}>
-            {first?.isValid === 0 ? "Invalid" : "Valid"}
+          <p className={sessionInvalid ? "text-red-400" : "text-green-400"}>
+            {sessionInvalid ? "Invalid" : "Valid"}
           </p>
         </div>
       </div>
