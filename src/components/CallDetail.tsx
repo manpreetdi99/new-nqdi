@@ -3098,6 +3098,9 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
                       {gsmScannerMatched.length > 0 && (
                         <th className="px-1 py-1 font-semibold text-cyan-400/80">BSIC</th>
                       )}
+                      {gsmScannerMatched.length > 0 && (
+                        <th className="px-1 py-1 font-semibold text-muted-foreground/60" title="Χρονική απόσταση UE → scanner sample">Δt(s)</th>
+                      )}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border/50">
@@ -3114,6 +3117,9 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
                       const scn = gsmScannerMatched[idx] ?? null;
                       const scnRxAbs = scn ? Math.abs(Number(scn.RxLev)) : null;
                       const scnRxColor = scnRxAbs == null ? "" : scnRxAbs >= 80 ? "text-destructive" : scnRxAbs >= 77 ? "text-warning" : "text-cyan-400";
+                      // Δt(s): πόσο απέχει το scanner sample από τη μέτρηση του κινητού — ίδια χρώματα με τον LTE πίνακα
+                      const dtSec = scn && val.MsgTime ? Math.abs(scn._ts - new Date(val.MsgTime).getTime()) / 1000 : null;
+                      const dtColor = dtSec == null ? "" : dtSec <= 2 ? "text-green-400" : dtSec <= 10 ? "text-yellow-400" : "text-red-400";
 
                       return (
                         <tr
@@ -3136,6 +3142,11 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
                           <td className={`px-1 py-0.5 font-mono font-bold ${rxqColor}`}>{val.RxQualSub}</td>
                           {gsmScannerMatched.length > 0 && (
                             <td className="px-1 py-0.5 font-mono text-cyan-400/80">{scn?.BSIC ?? "—"}</td>
+                          )}
+                          {gsmScannerMatched.length > 0 && (
+                            <td className={`px-1 py-0.5 font-mono ${dtColor}`} title={scn ? `Scanner: ${scn.FullDate}` : ""}>
+                              {dtSec != null ? dtSec.toFixed(1) : "—"}
+                            </td>
                           )}
                         </tr>
                       );
