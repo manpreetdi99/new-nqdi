@@ -602,6 +602,92 @@ WHERE S.Valid = 1
 ORDER BY CA.SessionId DESC`,
   },
   {
+    label: "CST 11000",
+    category: "Calls",
+    mode: "points",
+    valueCol: "Duration_s",
+    colorScheme: "cst_duration",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  F.ASideLocation AS Location,
+  F.CollectionName,
+  CS.SessionId,
+  CS.callType,
+  CS.callDir,
+  CS.callStatus,
+  CS.callMode,
+  K.KpiId,
+  K.ErrorCode,
+  K.StartTime,
+  K.EndTime,
+  K.TriggerTime,
+  K.Duration          AS Duration_ms,
+  K.Duration / 1000.0 AS Duration_s,
+  CAST(P.Latitude  AS FLOAT) AS latitude,
+  CAST(P.Longitude AS FLOAT) AS longitude,
+  N.technology
+FROM CallSession CS
+JOIN Sessions S         ON S.SessionId = CS.SessionId
+JOIN Position P         ON P.PosId     = S.PosId
+JOIN ResultsKPI K       ON K.SessionId = CS.SessionId
+JOIN FileList F         ON F.FileId    = S.FileId
+LEFT JOIN NetworkInfo N ON N.NetworkId = K.NetworkId
+WHERE K.KpiId = 11000
+  AND S.valid = 1
+  AND S.sessionType = 'CALL'
+  AND CS.callStatus <> 'System Release'
+  AND CS.VoiceCallType = 'Intrusive'
+  AND P.Latitude  IS NOT NULL
+  AND P.Longitude IS NOT NULL
+  AND F.CollectionName = '{collection}'
+  AND F.ASideLocation  = '{location}'
+ORDER BY CS.SessionId`,
+  },
+  {
+    label: "CST 11013",
+    category: "Calls",
+    mode: "points",
+    valueCol: "Duration_s",
+    colorScheme: "cst_duration_11013",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  F.ASideLocation AS Location,
+  F.CollectionName,
+  CS.SessionId,
+  CS.callType,
+  CS.callDir,
+  CS.callStatus,
+  CS.callMode,
+  K.KpiId,
+  K.ErrorCode,
+  K.StartTime,
+  K.EndTime,
+  K.TriggerTime,
+  K.Duration          AS Duration_ms,
+  K.Duration / 1000.0 AS Duration_s,
+  CAST(P.Latitude  AS FLOAT) AS latitude,
+  CAST(P.Longitude AS FLOAT) AS longitude,
+  N.technology
+FROM CallSession CS
+JOIN Sessions S         ON S.SessionId = CS.SessionId
+JOIN Position P         ON P.PosId     = S.PosId
+JOIN ResultsKPI K       ON K.SessionId = CS.SessionId
+JOIN FileList F         ON F.FileId    = S.FileId
+LEFT JOIN NetworkInfo N ON N.NetworkId = K.NetworkId
+WHERE K.KpiId = 11013
+  AND S.valid = 1
+  AND S.sessionType = 'CALL'
+  AND CS.callStatus <> 'System Release'
+  AND CS.VoiceCallType = 'Intrusive'
+  AND P.Latitude  IS NOT NULL
+  AND P.Longitude IS NOT NULL
+  AND F.CollectionName = '{collection}'
+  AND F.ASideLocation  = '{location}'
+ORDER BY CS.SessionId`,
+  },
+  {
     label: "Radio Technology",
     category: "Technology",
     mode: "points",

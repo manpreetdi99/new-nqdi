@@ -144,6 +144,30 @@ export const COLOR_SCHEMES: Record<string, ColorScheme> = {
     ],
     defaultColor: "#808080",
   },
+  cst_duration: {
+    type: "range",
+    label: "CST – Duration (s)",
+    suggestCol: "Duration_s",
+    buckets: [
+      { min: 0,   max: 0.5,    color: "#006400", label: "0 – 0.5" },
+      { min: 0.5, max: 1.0,    color: "#7ed957", label: "0.5 – 1.0" },
+      { min: 1.0, max: 1.5,    color: "#d4a800", label: "1.0 – 1.5" },
+      { min: 1.5, max: 2.0,    color: "#ff8c00", label: "1.5 – 2.0" },
+      { min: 2.0, max: 3.0,    color: "#ff4500", label: "2.0 – 3.0" },
+      { min: 3.0, max: 100000, color: "#c00000", label: "> 3.0" },
+    ],
+  },
+  cst_duration_11013: {
+    type: "range",
+    label: "CST 11013 – Duration (s)",
+    suggestCol: "Duration_s",
+    buckets: [
+      { min: 1.0, max: 2.0,    color: "#006400", label: "1.0 – 2.0" },
+      { min: 2.0, max: 2.5,    color: "#7ed957", label: "2.0 – 2.5" },
+      { min: 2.5, max: 3.0,    color: "#d4a800", label: "2.5 – 3.0" },
+      { min: 3.0, max: 100000, color: "#c00000", label: "> 3.0" },
+    ],
+  },
   http_transfer: {
     type: "range",
     label: "HTTP Transfer / 10MB (kbps)",
