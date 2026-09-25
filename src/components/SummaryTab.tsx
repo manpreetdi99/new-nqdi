@@ -13,6 +13,7 @@ import {
   buildHttpsSitesTotal,
   buildPingTotal,
   buildReportPeriod,
+  formatReportWeeks,
   buildServingBandTechTable,
   buildTechnologyMixTable,
   buildVoiceStats,
@@ -1452,7 +1453,7 @@ const SummaryTab = ({
             </p>
 
             <div className="mt-4 flex flex-wrap gap-2">
-              <MetaChip label="Week" value={period.week != null ? String(period.week) : "—"} />
+              <MetaChip label="Week" value={formatReportWeeks(period)} />
               <MetaChip label="Period" value={`${formatDate(period.from)} – ${formatDate(period.to)}`} />
               {/* Ρητή πρόοδος όσο οι 10 πηγές γυρίζουν μία-μία — αλλιώς η σταδιακή εμφάνιση
                   των καρτών μοιάζει με "τελείωσε, λείπουν κομμάτια". */}
@@ -1833,7 +1834,7 @@ const SummaryTab = ({
 
         {(loading.voice || freeTable.total.attempts > 0) && (
           <ReportCard
-            title="Free (2G-3G-LTE) Call Stats"
+            title="Free (2G-3G-LTE-VoNR) Call Stats"
             subtitle={loading.voice ? "loading…" : `${formatCount(freeTable.total.attempts)} call attempts`}
             icon={Phone}
             footer={loading.voice || compact ? undefined : <OutcomeLegend />}

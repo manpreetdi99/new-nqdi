@@ -1335,12 +1335,19 @@ const SECTION_ORDER: SectionGroup[] = [
  */
 const UNMATCHED_RANK = SECTION_ORDER.findIndex((group) => group.match("ping 40 b", "ping 40 b")) - 0.5;
 
-const sectionRank = (label: string): [number, number] => {
+/**
+ * [θέση Ε-group, θέση κανόνα, subRank]. Η θέση του group = ο ΠΡΩΤΟΣ κανόνας του group στο
+ * SECTION_ORDER — ώστε ένας κανόνας που είναι πιο κάτω στη λίστα μόνο για λόγους matching
+ * (π.χ. ο γενικός DL/UL site κανόνας, "Sport24 DL") να ταξινομείται ΜΑΖΙ με το group του
+ * (Ε4, κάτω από τα γνωστά sites) και όχι μετά το Ε5.
+ */
+const sectionRank = (label: string): [number, number, number] => {
   const l = label.toLowerCase();
   const index = SECTION_ORDER.findIndex((group) => group.match(l, label));
-  if (index === -1) return [UNMATCHED_RANK, 0];
+  if (index === -1) return [UNMATCHED_RANK, 0, 0];
   const group = SECTION_ORDER[index];
-  return [index, group.subRank ? group.subRank(l) : 0];
+  const groupIndex = SECTION_ORDER.findIndex((other) => other.group === group.group);
+  return [groupIndex, index, group.subRank ? group.subRank(l) : 0];
 };
 
 /** Το "Εν · ..." group label ενός section, για group headers στο SummaryTab. "" όταν unmatched. */
@@ -1396,9 +1403,10 @@ export const buildDataSections = (rows: DataCallRow[]): DataTestSection[] => {
       return { key, label: key, group: sectionGroupOf(key), byOperator, total: buildDataTestStats(sectionRows) };
     })
     .sort((a, b) => {
-      const [groupA, subA] = sectionRank(a.label);
-      const [groupB, subB] = sectionRank(b.label);
+      const [groupA, ruleA, subA] = sectionRank(a.label);
+      const [groupB, ruleB, subB] = sectionRank(b.label);
       if (groupA !== groupB) return groupA - groupB;
+      if (ruleA !== ruleB) return ruleA - ruleB;
       if (subA !== subB) return subA - subB;
       return b.total.total - a.total.total || a.label.localeCompare(b.label);
     });
@@ -2191,6 +2199,8 @@ export interface ReportPeriod {
   to: Date | null;
   /** ISO week number της πρώτης μέρας — το "Week:" του Attachment C. */
   week: number | null;
+  /** ISO week number της τελευταίας μέρας — ίσο με το week όταν όλα πέφτουν στην ίδια εβδομάδα. */
+  weekTo: number | null;
 }
 
 /** ISO-8601 week number (Δευτέρα = 1η μέρα). */
@@ -2207,10 +2217,21 @@ export const buildReportPeriod = (timestamps: (string | null | undefined)[]): Re
     .map((value) => (value ? new Date(value).getTime() : Number.NaN))
     .filter((value) => !Number.isNaN(value));
 
-  if (times.length === 0) return { from: null, to: null, week: null };
+  if (times.length === 0) return { from: null, to: null, week: null, weekTo: null };
 
   const from = new Date(Math.min(...times));
-  return { from, to: new Date(Math.max(...times)), week: isoWeek(from) };
+  const to = new Date(Math.max(...times));
+  return { from, to, week: isoWeek(from), weekTo: isoWeek(to) };
+};
+
+/**
+ * "29" για μία εβδομάδα, "5 – 30" όταν οι μετρήσεις απλώνονται σε πολλές (π.χ. όλα τα
+ * collections μιας βάσης μαζί, MTWS_26H2), "—" χωρίς δεδομένα.
+ */
+export const formatReportWeeks = (period: ReportPeriod): string => {
+  if (period.week == null) return "—";
+  if (period.weekTo == null || period.weekTo === period.week) return String(period.week);
+  return `${period.week} – ${period.weekTo}`;
 };
 
 /* ────────────────────────── Formatting ────────────────────────── */

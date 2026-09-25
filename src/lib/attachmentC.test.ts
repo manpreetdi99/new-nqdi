@@ -10,6 +10,7 @@ import {
   buildHttpsSitesTotal,
   buildPingTotal,
   buildReportPeriod,
+  formatReportWeeks,
   excludeCdrPingDuplicates,
   buildServingBandTechTable,
   buildSrvccTable,
@@ -828,6 +829,23 @@ describe("PS data KPIs", () => {
     ]);
   });
 
+  it("sorts a generic DL/UL site test (e.g. 'Sport24 DL', walk DBs) inside Ε4, right after the known sites — not after Ε5", () => {
+    const sections = buildDataSections([
+      dataTest({ testType: "YouTube Service", direction: null }),
+      dataTest({ testType: "Sport24 DL", direction: null }),
+      dataTest({ testType: "https://www.amazon.com", direction: null }),
+      dataTest({ testType: "Kepler", direction: null }),
+    ]);
+
+    expect(sections.map((s) => s.key)).toEqual(["Kepler", "https://www.amazon.com", "Sport24 DL", "YouTube Service"]);
+    expect(sections.map((s) => s.group)).toEqual([
+      "Ε3 · Browser engines",
+      "Ε4 · HTTPS sites",
+      "Ε4 · HTTPS sites",
+      "Ε5 · Video streaming",
+    ]);
+  });
+
   it("groups every Kepler/Kepler +30s Pause/Newton test into Ε3 regardless of raw format (bare / 'Browser (site)')", () => {
     // Ο πελάτης ανέφερε ότι το Ε3 · Browser engines έλειπε τελείως — ίδιο σκεπτικό με
     // το Ε4 bug: αν το raw TestName φτάνει τυλιγμένο σε "Browser (Kepler)" αντί για
@@ -1415,6 +1433,18 @@ describe("report period", () => {
   });
 
   it("survives an empty dataset", () => {
-    expect(buildReportPeriod([])).toEqual({ from: null, to: null, week: null });
+    expect(buildReportPeriod([])).toEqual({ from: null, to: null, week: null, weekTo: null });
+    expect(formatReportWeeks(buildReportPeriod([]))).toBe("—");
+  });
+
+  it("shows a week range when the measurements span several weeks (all collections of a DB)", () => {
+    const single = buildReportPeriod(["2026-07-13T08:00:00", "2026-07-15T10:00:00"]);
+    expect(formatReportWeeks(single)).toBe("29");
+
+    // 2026-01-27 -> ISO week 5, 2026-07-21 -> ISO week 30.
+    const range = buildReportPeriod(["2026-07-21T10:00:00", "2026-01-27T08:00:00", "2026-04-01T12:00:00"]);
+    expect(range.week).toBe(5);
+    expect(range.weekTo).toBe(30);
+    expect(formatReportWeeks(range)).toBe("5 – 30");
   });
 });

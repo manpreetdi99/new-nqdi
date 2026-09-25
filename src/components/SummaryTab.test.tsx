@@ -428,7 +428,7 @@ describe("SummaryTab", () => {
 
       // Το κέλυφος των καρτών υπάρχει ήδη — ο χρήστης βλέπει τι έρχεται.
       expect(screen.getByText("GSM Call Stats")).toBeInTheDocument();
-      expect(screen.getByText("Free (2G-3G-LTE) Call Stats")).toBeInTheDocument();
+      expect(screen.getByText("Free (2G-3G-LTE-VoNR) Call Stats")).toBeInTheDocument();
       expect(screen.getByText("PS Data Stats")).toBeInTheDocument();
       expect(screen.getByText("3/10 sources")).toBeInTheDocument();
       // Πρόωρο "δεν υπάρχουν δεδομένα" ενώ ακόμα φορτώνει θα ήταν ψέμα.
