@@ -2328,11 +2328,11 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
                         />
                       ))}
 
-                      {srvccShowStrength && <Line yAxisId="strength" type="monotone" dataKey="LTE_RSRP" stroke="#22c55e" dot={srvccShowDots ? { r: 1.5, fill: "#22c55e" } : false} strokeWidth={2} name="LTE RSRP" />}
-                      {srvccShowStrength && <Line yAxisId="strength" type="monotone" dataKey="GSM_RxLev" stroke="#fbbf24" dot={srvccShowDots ? { r: 1.5, fill: "#fbbf24" } : false} strokeWidth={2} name="GSM RxLev" />}
-                      {srvccShowQuality && <Line yAxisId="db" type="monotone" dataKey="LTE_RSRQ" stroke="#38bdf8" dot={false} strokeWidth={1.5} strokeDasharray="4 2" name="LTE RSRQ" />}
-                      {srvccShowQuality && <Line yAxisId="rxqual" type="monotone" dataKey="GSM_RxQual" stroke="#e2e8f0" dot={false} strokeWidth={1.5} strokeDasharray="4 2" name="GSM RxQual" />}
-                      {srvccShowSinr && <Line yAxisId="db" type="monotone" dataKey="LTE_SINR" stroke="#a855f7" dot={false} strokeWidth={1.5} strokeDasharray="2 2" name="LTE SINR" />}
+                      {srvccShowStrength && <Line isAnimationActive={false} yAxisId="strength" type="monotone" dataKey="LTE_RSRP" stroke="#22c55e" dot={srvccShowDots ? { r: 1.5, fill: "#22c55e" } : false} strokeWidth={2} name="LTE RSRP" />}
+                      {srvccShowStrength && <Line isAnimationActive={false} yAxisId="strength" type="monotone" dataKey="GSM_RxLev" stroke="#fbbf24" dot={srvccShowDots ? { r: 1.5, fill: "#fbbf24" } : false} strokeWidth={2} name="GSM RxLev" />}
+                      {srvccShowQuality && <Line isAnimationActive={false} yAxisId="db" type="monotone" dataKey="LTE_RSRQ" stroke="#38bdf8" dot={false} strokeWidth={1.5} strokeDasharray="4 2" name="LTE RSRQ" />}
+                      {srvccShowQuality && <Line isAnimationActive={false} yAxisId="rxqual" type="monotone" dataKey="GSM_RxQual" stroke="#e2e8f0" dot={false} strokeWidth={1.5} strokeDasharray="4 2" name="GSM RxQual" />}
+                      {srvccShowSinr && <Line isAnimationActive={false} yAxisId="db" type="monotone" dataKey="LTE_SINR" stroke="#a855f7" dot={false} strokeWidth={1.5} strokeDasharray="2 2" name="LTE SINR" />}
                     </LineChart>
                   </ResponsiveContainer>
 
