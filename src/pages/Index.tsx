@@ -1001,7 +1001,9 @@ const Index = () => {
     return allCallsRows.filter((row) => {
       // Filter by session valid
       if (sessionValidFilter === "1" && row.isValid !== 1) return false;
-      if (sessionValidFilter === "0" && row.isValid !== 0) return false;
+      // Το «Invalid» δείχνει ό,τι βγαίνει με κόκκινο badge — οι System Release είναι κι αυτές isValid=0,
+      // αλλά έχουν δικό τους (μωβ) badge και δικό τους φίλτρο status, οπότε δεν μπαίνουν εδώ.
+      if (sessionValidFilter === "0" && (row.isValid !== 0 || isSystemReleaseStatus(row.status))) return false;
 
       // Filter by status
       if (statusFilters.length > 0) {
