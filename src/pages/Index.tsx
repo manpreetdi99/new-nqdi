@@ -1011,6 +1011,9 @@ const Index = () => {
         if (!hasMatchingStatus) return false;
       }
 
+      // Filter by location chips (Data / Free + GSM (Voice)) — ίδιο φίλτρο με τη data λίστα.
+      if (locationTableFilter.length > 0 && !locationTableFilter.includes(row.Location ?? "")) return false;
+
       // Filter by file group (time-clustered run)
       if (selectedFileGroupSessionIds && !selectedFileGroupSessionIds.voiceIds.has(row.SessionId)) return false;
 
@@ -1035,13 +1038,13 @@ const Index = () => {
 
       return true;
     });
-  }, [allCallsRows, sessionValidFilter, statusFilters, selectedFileGroupSessionIds, allCallsSearchQuery]);
+  }, [allCallsRows, sessionValidFilter, statusFilters, locationTableFilter, selectedFileGroupSessionIds, allCallsSearchQuery]);
 
   const filteredCallRecords = useMemo(() => {
-    if (sessionValidFilter === "all" && statusFilters.length === 0 && selectedFileGroupIds.length === 0) return callRecords;
+    if (sessionValidFilter === "all" && statusFilters.length === 0 && locationTableFilter.length === 0 && selectedFileGroupIds.length === 0) return callRecords;
     const validIds = new Set(filteredAllCallsRows.map((r) => r.SessionId));
     return callRecords.filter((c) => validIds.has(c.callId));
-  }, [callRecords, filteredAllCallsRows, sessionValidFilter, statusFilters, selectedFileGroupIds]);
+  }, [callRecords, filteredAllCallsRows, sessionValidFilter, statusFilters, locationTableFilter, selectedFileGroupIds]);
 
   const locationSummary = useMemo(() => {
     const map = new Map<string, { complete: number; drop: number; fail: number; sysRelease: number; total: number }>();
@@ -1190,10 +1193,11 @@ const Index = () => {
   const locationGroups = useMemo(() => {
     const lower = (s: string) => s.toLowerCase();
     const dataLocs = locations.filter((l) => lower(l).includes("data"));
-    const freeGsmLocs = locations.filter((l) => lower(l).includes("free") || lower(l).includes("gsm"));
+    // Voice συσκευές: η location περιέχει "free", "gsm" ή "voice" (ίδιο κανόνα με resolveMode στο attachmentC).
+    const freeGsmLocs = locations.filter((l) => /free|gsm|voice/.test(lower(l)));
     const groups: { group: string; locs: string[] }[] = [];
     if (dataLocs.length > 0) groups.push({ group: "Data", locs: dataLocs });
-    if (freeGsmLocs.length > 0) groups.push({ group: "Free + GSM", locs: freeGsmLocs });
+    if (freeGsmLocs.length > 0) groups.push({ group: "Free + GSM (Voice)", locs: freeGsmLocs });
     return groups;
   }, [locations]);
 
