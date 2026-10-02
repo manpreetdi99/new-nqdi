@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback, Fragment } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp, History, Search } from "lucide-react";
+import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp, History, Search, BookOpen } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import QueryEditor from "@/components/QueryEditor";
 import ResultsTable from "@/components/ResultsTable";
@@ -17,6 +17,7 @@ import QueryMap from "@/components/QueryMap";
 import ValidationTab from "@/components/ValidationTab";
 import SummaryTab from "@/components/SummaryTab";
 import HistoricTab from "@/components/HistoricTab";
+import UserManualTab from "@/components/UserManualTab";
 import { useDebouncedValue } from "@/hooks/use-debounced-value"; //καθυστερεί το fetch μεχρι να ησυχασει η επιλογη
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import { useUrlNullableStringState, useUrlStringListState, useUrlStringState } from "@/hooks/use-url-state"; //state που ζει στο URL (shareable link), με localStorage fallback
@@ -1446,7 +1447,7 @@ const Index = () => {
             </div>
           </div>
 
-          {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
+          {!["queries", "query-map", "map2", "validation", "Summary", "manual"].includes(activeTab) && (
             <div className="flex items-center gap-2">
               {/* Edit Filters button */}
               <button
@@ -1475,7 +1476,7 @@ const Index = () => {
           )}
 
           <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-            {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
+            {!["queries", "query-map", "map2", "validation", "Summary", "manual"].includes(activeTab) && (
               <button
                 type="button"
                 onClick={clearCallsFilters}
@@ -1500,7 +1501,7 @@ const Index = () => {
                 </motion.button>
               )}
             </AnimatePresence>
-            {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
+            {!["queries", "query-map", "map2", "validation", "Summary", "manual"].includes(activeTab) && (
               <span className="hidden xl:inline">{filteredCallRecords.length} calls recorded</span>
             )}
           </div>
@@ -1534,6 +1535,9 @@ const Index = () => {
               </TabsTrigger>
               <TabsTrigger value="historic" className="gap-1.5 text-xs">
                 <History className="h-3.5 w-3.5 text-yellow-400" /> Historic
+              </TabsTrigger>
+              <TabsTrigger value="manual" className="gap-1.5 text-xs">
+                <BookOpen className="h-3.5 w-3.5 text-sky-400" /> User Manual
               </TabsTrigger>
             </TabsList>
           </div>
@@ -2403,6 +2407,10 @@ const Index = () => {
 
           <TabsContent value="historic">
             <HistoricTab />
+          </TabsContent>
+
+          <TabsContent value="manual">
+            <UserManualTab />
           </TabsContent>
         </Tabs>
       </main>
