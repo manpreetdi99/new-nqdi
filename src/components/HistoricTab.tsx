@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   AudioWaveform,
+  ChartScatter,
   Database,
   GraduationCap,
   History,
@@ -47,6 +48,7 @@ import {
   type HistoricVoiceRow,
 } from "@/lib/api";
 import { AXIS_STYLE, DEFAULTS, GRID_STYLE, LEGEND_WRAPPER_STYLE } from "@/lib/chartStyles";
+import HistoricDataBandwidth from "./historic/HistoricDataBandwidth";
 import HistoricGrades from "./historic/HistoricGrades";
 import HistoricGreeceMap from "./historic/HistoricGreeceMap";
 import HistoricRadioCodecs from "./historic/HistoricRadioCodecs";
@@ -683,9 +685,9 @@ const ScorecardBarChart = ({ scores }: { scores: HistoricScoreRow[] }) => {
 
 /* ────────────────────────── Historic tab ────────────────────────── */
 
-/** Οι σελίδες του Historic tab: το αρχικό snapshot ενός campaign + οι σελίδες 01–05 του .pbix
- * (βλ. src/components/historic/ και backend/routers/historic_pages.py). */
-type HistoricPage = "snapshot" | "map" | "grades" | "mtof" | "mtom" | "radio";
+/** Οι σελίδες του Historic tab: το αρχικό snapshot ενός campaign + οι σελίδες 01–05 και 14 του
+ * .pbix (βλ. src/components/historic/ και backend/routers/historic_pages.py). */
+type HistoricPage = "snapshot" | "map" | "grades" | "mtof" | "mtom" | "radio" | "bandwidth";
 
 const PAGES: { key: HistoricPage; label: string; icon: typeof Database }[] = [
   { key: "snapshot", label: "Campaign snapshot", icon: History },
@@ -694,6 +696,7 @@ const PAGES: { key: HistoricPage; label: string; icon: typeof Database }[] = [
   { key: "mtof", label: "Voice M→F", icon: PhoneCall },
   { key: "mtom", label: "Voice M→M", icon: Phone },
   { key: "radio", label: "Radio Tech & Codecs", icon: AudioWaveform },
+  { key: "bandwidth", label: "Data Bandwidth", icon: ChartScatter },
 ];
 
 const HistoricTab = () => {
@@ -811,7 +814,8 @@ const HistoricTab = () => {
   }, [selectedCollection]);
 
   // Οι slicers των σελίδων 01–05 φορτώνουν την πρώτη φορά που ανοίγει μία από αυτές. Αρχικό
-  // φίλτρο: το campaign του snapshot αν έχει διαλεχτεί, αλλιώς το πιο πρόσφατο scope.
+  // φίλτρο: κενό scope (επιλέγεται τελευταίο)· αν έχει διαλεχτεί campaign στο snapshot, έρχονται
+  // ήδη επιλεγμένα το Area και το Collection του.
   const needsFilters = page !== "snapshot";
   useEffect(() => {
     if (!needsFilters || filterOptions) return;
@@ -822,7 +826,11 @@ const HistoricTab = () => {
         if (cancelled) return;
         setFilterOptions(options);
         const picked = options.collections.find((c) => c.name === selectedCollection);
-        setPageFilters(picked ? { scope: picked.scope, area: picked.area, collection: picked.name } : { scope: options.scopes[0] });
+        setPageFilters(
+          picked
+            ? { scope: "", area: picked.area, collectionBase: `${picked.area}|${picked.collection}|${picked.category}` }
+            : { scope: "" },
+        );
       })
       .catch((err) => {
         if (!cancelled) setFilterOptionsError(err instanceof Error ? err.message : "Failed to load filters");
@@ -894,11 +902,21 @@ const HistoricTab = () => {
           {filterOptions && pageFilters && (
             <>
               <HistoricFilterBar options={filterOptions} filters={pageFilters} onChange={setPageFilters} />
-              {page === "map" && <HistoricGreeceMap filters={pageFilters} />}
-              {page === "grades" && <HistoricGrades filters={pageFilters} />}
-              {page === "mtof" && <HistoricVoicePage kind="mtof" filters={pageFilters} />}
-              {page === "mtom" && <HistoricVoicePage kind="mtom" filters={pageFilters} />}
-              {page === "radio" && <HistoricRadioCodecs filters={pageFilters} />}
+              {!pageFilters.scope && (
+                <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-card py-24 text-center">
+                  <History className="h-8 w-8 text-muted-foreground" />
+                  <p className="text-sm font-medium text-foreground">Pick a Scope</p>
+                  <p className="max-w-sm text-xs text-muted-foreground">
+                    Διάλεξε Area / Category / Collection (προαιρετικά) και στο τέλος το Scope για να φορτώσουν τα δεδομένα.
+                  </p>
+                </div>
+              )}
+              {pageFilters.scope && page === "map" && <HistoricGreeceMap filters={pageFilters} />}
+              {pageFilters.scope && page === "grades" && <HistoricGrades filters={pageFilters} />}
+              {pageFilters.scope && page === "mtof" && <HistoricVoicePage kind="mtof" filters={pageFilters} />}
+              {pageFilters.scope && page === "mtom" && <HistoricVoicePage kind="mtom" filters={pageFilters} />}
+              {pageFilters.scope && page === "radio" && <HistoricRadioCodecs filters={pageFilters} />}
+              {pageFilters.scope && page === "bandwidth" && <HistoricDataBandwidth filters={pageFilters} />}
             </>
           )}
         </>

@@ -5,6 +5,7 @@
   [03] VOICE M->F                -> /api/historic/voice_page?kind=mtof
   [04] VOICE M->M                -> /api/historic/voice_page?kind=mtom
   [05] RADIO TECH-VOICE CODECS   -> /api/historic/radio_codecs
+  [14] DATA-BANDWIDTH (scatter)  -> /api/historic/data_bandwidth
 
 Σε αντίθεση με το historic.py (ΕΝΑ CollectionName τη φορά), εδώ το φίλτρο είναι οι slicers
 της σελίδας του .pbix: Scope (υποχρεωτικό) + προαιρετικά GreaterArea / Category /
@@ -17,6 +18,7 @@ COSMOTE_BI_lineage_ana_selida_1.md· όπου ξεφεύγουμε, το σχό�
 """
 from fastapi import APIRouter, HTTPException, Query
 
+from api_utils import sinr_throughput_scatter
 from db import get_connection
 from routers.historic import (
     _CST_EXPR,
@@ -684,6 +686,58 @@ def get_historic_radio_codecs(
             "freeCodecs": free_codecs,
             "evsRates": evs_rates,
         }
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+# ─────────────────────────────── [14] DATA-BANDWIDTH ───────────────────────────────
+
+
+@router.get("/api/historic/data_bandwidth")
+def get_historic_data_bandwidth(
+    scope: str = Query(..., min_length=1),
+    area: str | None = None,
+    category: str | None = None,
+    collection: str | None = None,
+):
+    """Τα δύο scatter της σελίδας DATA-BANDWIDTH: 14.4 X = Capacity[testAvgSINR],
+    Y = Capacity[AvgThrpDL] και 14.6 ίδιο με Y = Capacity[AvgThrpUL], series = HomeOperator
+    (groups), visual filter TaskStatus = 'Success'. Ένα σημείο ανά test (το AvgThrpDL είναι
+    γεμάτο μόνο στα Capacity DL, το AvgThrpUL μόνο στα Capacity UL). kbps -> Mbps εδώ, όπως
+    στο /api/historic/data."""
+    conn = None
+    try:
+        conn = get_connection("BI_VOICE")
+        names = _selected(conn.cursor(), scope, area, category, collection)
+        conn.close()
+        conn = None
+        if not names:
+            return {"dl": [], "ul": []}
+        facts = list(_fact_map(names))
+
+        conn = get_connection("BI_DATA")
+        cur = conn.cursor()
+        cur.execute(
+            f"""
+            SELECT {_OPERATOR_CASE} AS operator, CAST(testAvgSINR AS float) AS sinr,
+                   CAST(AvgThrpDL AS float) / 1000.0 AS dl, CAST(AvgThrpUL AS float) / 1000.0 AS ul
+            FROM BI_Capacity
+            WHERE CollectionName IN {_in(facts)} AND TaskStatus = 'Success' AND testAvgSINR IS NOT NULL
+              AND (AvgThrpDL IS NOT NULL OR AvgThrpUL IS NOT NULL)
+            ORDER BY TestId
+            """,
+            facts,
+        )
+        rows = []
+        for row in cur.fetchall():
+            if row.dl is not None:
+                rows.append((row.operator, "DL", row.sinr, row.dl))
+            if row.ul is not None:
+                rows.append((row.operator, "UL", row.sinr, row.ul))
+        return sinr_throughput_scatter(rows, _OPERATORS)
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
     finally:

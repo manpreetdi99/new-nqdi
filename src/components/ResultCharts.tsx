@@ -333,8 +333,10 @@ function configFromLegacy(props: ResultChartsProps, profiles: ColumnProfile[], p
   const ys = (props.defaultYCols ?? []).filter((c) => pmap.has(c) && c !== x);
   const categoricalY = ys.filter((c) => !pmap.get(c)!.numeric);
   const numericY = ys.filter((c) => pmap.get(c)!.numeric);
-  // Ο παλιός μηχανισμός εφάρμοζε το groupCol μόνο σε bar charts.
-  const legacySplit = type === "bar" && props.defaultGroupCol && pmap.has(props.defaultGroupCol) ? props.defaultGroupCol : "";
+  // Ο παλιός μηχανισμός εφάρμοζε το groupCol μόνο σε bar charts· στο scatter είναι το χρώμα
+  // ανά ομάδα (π.χ. ένα σύννεφο ανά operator στα "Capacity — SINR vs …" templates).
+  const legacySplit =
+    (type === "bar" || type === "scatter") && props.defaultGroupCol && pmap.has(props.defaultGroupCol) ? props.defaultGroupCol : "";
 
   const measures: ChartMeasure[] = numericY.map((col, i) => {
     const p = pmap.get(col)!;

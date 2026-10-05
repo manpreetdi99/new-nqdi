@@ -1679,10 +1679,15 @@ export async function fetchHistoricTrend(): Promise<HistoricTrendScope[]> {
  * collections που ταιριάζουν, όχι ΕΝΑ collection όπως τα endpoints παραπάνω.
  */
 export interface HistoricPageFilters {
+  /** "" = δεν έχει διαλεχτεί ακόμα — οι σελίδες δεν φορτώνουν μέχρι να επιλεγεί. */
   scope: string;
   area?: string;
   category?: string;
+  /** Το πλήρες όνομα (STR_ID, με το scope) — αυτό πάει στο backend. */
   collection?: string;
+  /** Μόνο UI: το collection χωρίς scope ("area|collection|category"), ώστε η επιλογή να
+   * κρατιέται και πριν διαλεχτεί scope. Δεν στέλνεται στο backend. */
+  collectionBase?: string;
 }
 
 export interface HistoricFilterCollection {
@@ -1807,6 +1812,34 @@ export interface HistoricRadioCodecs {
 
 export async function fetchHistoricRadioCodecs(filters: HistoricPageFilters): Promise<HistoricRadioCodecs> {
   return requestJson(`/api/historic/radio_codecs?${historicPageParams(filters)}`);
+}
+
+/**
+ * Scatter SINR → DL/UL throughput ανά operator (σελίδα DATA-BANDWIDTH του .pbix, 14.4/14.6) από
+ * το BI warehouse (/api/historic/data_bandwidth). Για την τρέχουσα βάση υπάρχει το template
+ * "Capacity — SINR vs DL/UL throughput" στο Queries tab. Βλ. sinr_throughput_scatter στο backend/api_utils.py: τα n/avg/r/bins
+ * βγαίνουν από ΟΛΑ τα tests, τα `points` είναι δείγμα (έως 1500 ανά operator).
+ */
+export interface SinrThroughputSeries {
+  operator: string;
+  n: number;
+  avgSinr: number;
+  avgMbps: number;
+  /** Pearson r ανάμεσα σε SINR και throughput. */
+  r: number | null;
+  /** [SINR dB, Mbps] ανά test. */
+  points: [number, number][];
+  /** [SINR dB (ακέραιο), μέση Mbps, πλήθος tests] — bins με >= 5 tests. */
+  bins: [number, number, number][];
+}
+
+export interface SinrThroughputData {
+  dl: SinrThroughputSeries[];
+  ul: SinrThroughputSeries[];
+}
+
+export async function fetchHistoricDataBandwidth(filters: HistoricPageFilters): Promise<SinrThroughputData> {
+  return requestJson(`/api/historic/data_bandwidth?${historicPageParams(filters)}`);
 }
 
 export interface RunMapResponse {

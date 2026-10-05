@@ -1,9 +1,9 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
-import { ChevronDown, Database, Loader2 } from "lucide-react";
+import { ChevronDown, Database, FilterX, Loader2 } from "lucide-react";
 import { useMap } from "react-leaflet";
 import { Bar, BarChart, CartesianGrid, Legend, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
-import type { HistoricFilterOptions, HistoricMixRow, HistoricPageFilters } from "@/lib/api";
+import type { HistoricFilterCollection, HistoricFilterOptions, HistoricMixRow, HistoricPageFilters } from "@/lib/api";
 import { AXIS_STYLE, GRID_STYLE, LEGEND_WRAPPER_STYLE } from "@/lib/chartStyles";
 
 /**
@@ -264,13 +264,19 @@ export const PartSelect = ({
   );
 };
 
-/* ────────────────────────── Slicer bar (Scope / Area / Category / Collection) ────────────────────────── */
+/* ────────────────────────── Slicer bar (Area / Category / Collection / Scope) ────────────────────────── */
 
 const ALL = "All";
 
-/** Οι slicers των σελίδων 01–05 του .pbix: Scope (υποχρεωτικό) + Area / Category / Collection
- * (προαιρετικά — "All" = χωρίς φίλτρο). Κάθε επόμενο dropdown δείχνει μόνο ό,τι υπάρχει
- * στο scope + τα προηγούμενα φίλτρα. */
+/** Οι slicers των σελίδων του .pbix, με σειρά Area → Category → Collection → Scope. Το
+ * Collection εδώ είναι το collection ΧΩΡΙΣ scope (area + collection + category), και το Scope
+ * δείχνει μόνο τις περιόδους όπου υπάρχει η τρέχουσα επιλογή. Το Scope ξεκινά κενό και
+ * επιλέγεται τελευταίο· όταν μια αλλαγή το αφήνει χωρίς δεδομένα, αδειάζει ξανά.
+ * Area / Category / Collection: "All" = χωρίς φίλτρο. */
+const baseOf = (c: HistoricFilterCollection) => `${c.area}|${c.collection}|${c.category}`;
+
+const uniqueSorted = (values: string[]) => Array.from(new Set(values)).sort();
+
 export const HistoricFilterBar = ({
   options,
   filters,
@@ -280,44 +286,59 @@ export const HistoricFilterBar = ({
   filters: HistoricPageFilters;
   onChange: (next: HistoricPageFilters) => void;
 }) => {
-  const inScope = useMemo(() => options.collections.filter((c) => c.scope === filters.scope), [options, filters.scope]);
-  const areas = useMemo(() => [ALL, ...Array.from(new Set(inScope.map((c) => c.area))).sort()], [inScope]);
+  const rows = options.collections;
+  const selected = filters.collection ? rows.find((c) => c.name === filters.collection) : undefined;
+  const base = filters.collectionBase || (selected ? baseOf(selected) : "");
+
+  const matches = (c: HistoricFilterCollection, area?: string, category?: string, b?: string) =>
+    (!area || c.area === area) && (!category || c.category === category) && (!b || baseOf(c) === b);
+
+  const areas = useMemo(() => [ALL, ...uniqueSorted(rows.map((c) => c.area))], [rows]);
   const categories = useMemo(
-    () => [ALL, ...Array.from(new Set(inScope.filter((c) => !filters.area || c.area === filters.area).map((c) => c.category))).sort()],
-    [inScope, filters.area],
+    () => [ALL, ...uniqueSorted(rows.filter((c) => matches(c, filters.area)).map((c) => c.category))],
+    [rows, filters.area],
   );
-  const collections = useMemo(
-    () => [
-      ALL,
-      ...inScope
-        .filter((c) => (!filters.area || c.area === filters.area) && (!filters.category || c.category === filters.category))
-        .map((c) => c.name),
-    ],
-    [inScope, filters.area, filters.category],
+  const baseLabels = useMemo(() => {
+    const labels = new Map<string, string>();
+    for (const c of rows) {
+      if (matches(c, filters.area, filters.category)) {
+        labels.set(baseOf(c), filters.category ? `${c.area} · ${c.collection}` : `${c.area} · ${c.collection} · ${c.category}`);
+      }
+    }
+    return labels;
+  }, [rows, filters.area, filters.category]);
+  const bases = useMemo(
+    () => [ALL, ...Array.from(baseLabels.keys()).sort((a, b) => baseLabels.get(a)!.localeCompare(baseLabels.get(b)!))],
+    [baseLabels],
   );
-  const shortName = (name: string) => {
-    const c = options.collections.find((x) => x.name === name);
-    return c ? `${c.area} · ${c.collection}` : name;
+  const scopesFor = (area?: string, category?: string, b?: string) => {
+    const present = new Set(rows.filter((c) => matches(c, area, category, b)).map((c) => c.scope));
+    return options.scopes.filter((scope) => present.has(scope));
   };
-  const scopeCount = inScope.length;
-  const selectedCount = collections.length - 1;
+  const scopes = scopesFor(filters.area, filters.category, base || undefined);
+
+  /** Εφαρμόζει μια επιλογή: κρατάει το scope μόνο αν έχει δεδομένα για τη νέα επιλογή (αλλιώς
+   * κενό), και μεταφράζει το collection χωρίς scope στο πλήρες όνομα (STR_ID) του backend. */
+  const apply = (area: string | undefined, category: string | undefined, b: string | undefined, scope: string) => {
+    const nextScope = scope && scopesFor(area, category, b).includes(scope) ? scope : "";
+    const collection = b && nextScope ? rows.find((c) => baseOf(c) === b && c.scope === nextScope)?.name : undefined;
+    onChange({ scope: nextScope, area, category, collection, collectionBase: b });
+  };
+
+  const fromAll = (v: string) => (v === ALL ? undefined : v);
+  /** Clear: όλα "All" και κενό scope — ίδιο με την αρχική κατάσταση της σελίδας. */
+  const isCleared = !filters.area && !filters.category && !base && !filters.scope;
+  const inScope = rows.filter((c) => c.scope === filters.scope);
+  const selectedCount = filters.collection ? 1 : inScope.filter((c) => matches(c, filters.area, filters.category)).length;
 
   return (
     <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border bg-card px-4 py-3">
-      <PartSelect
-        label="Scope"
-        placeholder="Select scope"
-        options={options.scopes}
-        value={filters.scope}
-        onChange={(scope) => onChange({ scope })}
-        widthClass="w-32"
-      />
       <PartSelect
         label="Area"
         placeholder={ALL}
         options={areas}
         value={filters.area || ALL}
-        onChange={(v) => onChange({ scope: filters.scope, area: v === ALL ? undefined : v })}
+        onChange={(v) => apply(fromAll(v), undefined, undefined, filters.scope)}
         widthClass="w-32"
       />
       <PartSelect
@@ -325,20 +346,39 @@ export const HistoricFilterBar = ({
         placeholder={ALL}
         options={categories}
         value={filters.category || ALL}
-        onChange={(v) => onChange({ scope: filters.scope, area: filters.area, category: v === ALL ? undefined : v })}
+        onChange={(v) => apply(filters.area, fromAll(v), undefined, filters.scope)}
         widthClass="w-44"
       />
       <PartSelect
         label="Collection"
         placeholder={ALL}
-        options={collections}
-        value={filters.collection || ALL}
-        onChange={(v) => onChange({ ...filters, collection: v === ALL ? undefined : v })}
-        widthClass="w-64"
-        formatOption={(o) => (o === ALL ? ALL : shortName(o))}
+        options={bases}
+        value={base || ALL}
+        onChange={(v) => apply(filters.area, filters.category, fromAll(v), filters.scope)}
+        widthClass="w-80"
+        formatOption={(o) => (o === ALL ? ALL : (baseLabels.get(o) ?? o))}
       />
+      <PartSelect
+        label="Scope"
+        placeholder="Select scope"
+        options={scopes}
+        value={filters.scope}
+        onChange={(scope) => apply(filters.area, filters.category, base || undefined, scope)}
+        widthClass="w-40"
+      />
+      <button
+        type="button"
+        onClick={() => onChange({ scope: "" })}
+        disabled={isCleared}
+        className="flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-muted-foreground"
+      >
+        <FilterX className="h-4 w-4" />
+        Clear filters
+      </button>
       <p className="ml-auto pb-2 text-[11px] text-muted-foreground">
-        {filters.collection ? 1 : selectedCount} of {scopeCount} collections in {filters.scope}
+        {filters.scope
+          ? `${selectedCount} of ${inScope.length} collections in ${filters.scope}`
+          : `${scopes.length} scope${scopes.length === 1 ? "" : "s"} available — pick one`}
       </p>
     </div>
   );

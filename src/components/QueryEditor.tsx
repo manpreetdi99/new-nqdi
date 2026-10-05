@@ -1330,6 +1330,92 @@ FROM Sessions
 WHERE CollectionName like '%%' AND Sessions.Valid=1 AND TestInfo.Valid=1 AND capa.lastblock=1`,
   },
   {
+    // Ίδιο με το visual 14.4 της σελίδας DATA-BANDWIDTH του BI (Historic → Data Bandwidth),
+    // για την τρέχουσα βάση. Ορισμοί του "bi queries/CAPACITY_newDB.sql": testAvgSINR =
+    // CAST(ROUND(AVG(SINR0),2) AS bigint) ανά test, AvgThrpDL = AVG(8×ThroughputGet)/1000 πάνω στις
+    // γραμμές lastBlock/σφάλματος, μόνο επιτυχημένα tests (errorCode = 0).
+    label: "Capacity — SINR vs DL throughput (scatter)",
+    category: "Data Tests",
+    defaultChart: { type: "scatter", xCol: "SINR_dB", yCols: ["DL_Mbps"], groupCol: "Operator" },
+    sql: `WITH thr AS (
+  SELECT r.TestId,
+    AVG(CASE WHEN r.ThroughputGet >= 0 THEN 8.0 * r.ThroughputGet END) / 1000000.0 AS DL_Mbps,
+    MAX(CASE WHEN r.ErrorCode = 0 AND r.LastBlock = 1 THEN 1 ELSE 0 END) AS success
+  FROM ResultsCapacityTest r
+  WHERE r.ErrorCode <> 1001
+    AND ((r.ErrorCode = 0 AND r.LastBlock = 1) OR (r.ErrorCode > 0 AND r.ErrorCode <> 1002))
+  GROUP BY r.TestId
+),
+sinr AS (
+  SELECT m.TestId, CAST(ROUND(AVG(CAST(m.SINR0 AS float)), 2) AS bigint) AS SINR_dB
+  FROM LTEMeasurementReport m
+  GROUP BY m.TestId
+)
+SELECT
+  CASE WHEN NI.HomeOperator LIKE 'Cosmote%'  THEN 'COSMOTE'
+       WHEN NI.HomeOperator LIKE 'Vodafone%' THEN 'VODAFONE'
+       WHEN NI.HomeOperator IN ('NOVA', 'Nova', 'Wind') THEN 'NOVA'
+       ELSE NI.HomeOperator END AS Operator,
+  FL.CollectionName,
+  FL.ASideLocation AS Location,
+  TI.TestId,
+  sinr.SINR_dB,
+  ROUND(thr.DL_Mbps, 3) AS DL_Mbps
+FROM thr
+JOIN TestInfo TI   ON TI.TestId = thr.TestId AND TI.Valid = 1
+JOIN Sessions S    ON S.SessionId = TI.SessionId AND S.Valid = 1
+JOIN FileList FL   ON FL.FileId = S.FileId
+JOIN NetworkInfo NI ON NI.NetworkId = S.NetworkId
+JOIN ResultsCapacityTestParameters P ON P.TestId = thr.TestId AND P.Direction = 'GET'
+JOIN sinr ON sinr.TestId = thr.TestId
+WHERE thr.success = 1 AND thr.DL_Mbps > 0
+  AND FL.CollectionName LIKE '%%'
+ORDER BY Operator, sinr.SINR_dB`,
+  },
+  {
+    // Ίδιο με το visual 14.6 της σελίδας DATA-BANDWIDTH του BI (Historic → Data Bandwidth),
+    // για την τρέχουσα βάση. Ορισμοί του "bi queries/CAPACITY_newDB.sql": testAvgSINR =
+    // CAST(ROUND(AVG(SINR0),2) AS bigint) ανά test, AvgThrpUL = AVG(8×ThroughputPut)/1000 πάνω στις
+    // γραμμές lastBlock/σφάλματος, μόνο επιτυχημένα tests (errorCode = 0).
+    label: "Capacity — SINR vs UL throughput (scatter)",
+    category: "Data Tests",
+    defaultChart: { type: "scatter", xCol: "SINR_dB", yCols: ["UL_Mbps"], groupCol: "Operator" },
+    sql: `WITH thr AS (
+  SELECT r.TestId,
+    AVG(CASE WHEN r.ThroughputPut >= 0 THEN 8.0 * r.ThroughputPut END) / 1000000.0 AS UL_Mbps,
+    MAX(CASE WHEN r.ErrorCode = 0 AND r.LastBlock = 1 THEN 1 ELSE 0 END) AS success
+  FROM ResultsCapacityTest r
+  WHERE r.ErrorCode <> 1001
+    AND ((r.ErrorCode = 0 AND r.LastBlock = 1) OR (r.ErrorCode > 0 AND r.ErrorCode <> 1002))
+  GROUP BY r.TestId
+),
+sinr AS (
+  SELECT m.TestId, CAST(ROUND(AVG(CAST(m.SINR0 AS float)), 2) AS bigint) AS SINR_dB
+  FROM LTEMeasurementReport m
+  GROUP BY m.TestId
+)
+SELECT
+  CASE WHEN NI.HomeOperator LIKE 'Cosmote%'  THEN 'COSMOTE'
+       WHEN NI.HomeOperator LIKE 'Vodafone%' THEN 'VODAFONE'
+       WHEN NI.HomeOperator IN ('NOVA', 'Nova', 'Wind') THEN 'NOVA'
+       ELSE NI.HomeOperator END AS Operator,
+  FL.CollectionName,
+  FL.ASideLocation AS Location,
+  TI.TestId,
+  sinr.SINR_dB,
+  ROUND(thr.UL_Mbps, 3) AS UL_Mbps
+FROM thr
+JOIN TestInfo TI   ON TI.TestId = thr.TestId AND TI.Valid = 1
+JOIN Sessions S    ON S.SessionId = TI.SessionId AND S.Valid = 1
+JOIN FileList FL   ON FL.FileId = S.FileId
+JOIN NetworkInfo NI ON NI.NetworkId = S.NetworkId
+JOIN ResultsCapacityTestParameters P ON P.TestId = thr.TestId AND P.Direction = 'PUT'
+JOIN sinr ON sinr.TestId = thr.TestId
+WHERE thr.success = 1 AND thr.UL_Mbps > 0
+  AND FL.CollectionName LIKE '%%'
+ORDER BY Operator, sinr.SINR_dB`,
+  },
+  {
     label: "HTTPS Transfer RAW",
     category: "Data Tests",
     sql: `SELECT
