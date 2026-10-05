@@ -1034,7 +1034,9 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
     ];
   }
 
-  if (testType.includes("youtube")) {
+  // "HTTPS Browser (youtube)" είναι απλό browsing (E4), όχι video streaming — πέφτει στο
+  // default throughput όπως τα υπόλοιπα sites.
+  if (testType.includes("youtube") && !testType.includes("browser")) {
     const mos = collect((row) => numeric(row.youtubeMos));
     // 0 interruptions είναι έγκυρη τιμή (τέλειο playback), γι' αυτό allowZero.
     const interruptions = collect((row) => numeric(row.youtubeInterruptions), true);
