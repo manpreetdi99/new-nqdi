@@ -46,6 +46,14 @@ export function callStatusColor(status: string | null | undefined): string | nul
   return CALL_STATUS_COLORS[(status ?? "").trim().toLowerCase()] ?? null;
 }
 
+/** Status χρώματα (καλό → κρίσιμο) — μόνο όταν το χρώμα ΣΗΜΑΙΝΕΙ κατάσταση, ποτέ για "σειρά 4". */
+export const STATUS_COLORS = {
+  good: "#0ca30c",
+  warning: "#fab219",
+  serious: "#ec835a",
+  critical: "#d03b3b",
+} as const;
+
 export const DEFAULTS = {
   areaFillOpacity: 0.1,
   radarFillOpacity: 0.15,

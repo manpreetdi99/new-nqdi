@@ -238,12 +238,6 @@ export interface AllCallsRow {
    * ώστε το "Codec Type Usage %" να ζυγίζεται με πραγματικό όγκο tests, όχι με τον
    * ένα "dominant" codec ανά session.
    */
-  /**
-   * Το παλιό, ενιαίο "FR AMR WB" bucket του cosmote backend (calls.py εδώ γυρίζει ακόμα
-   * αυτό, όχι τα αναλυτικά codecEvs / codecAmr του main). Το attachmentC.ts το διαβάζει
-   * για το "Codec Type Usage %" — μην το αφαιρέσεις πριν έρθει και το calls.py του main.
-   */
-  codecFrAmrWbCount?: number | null;
   codecEvsCount?: number | null;
   codecEvsWbCount?: number | null;
   codecAmrUmtsCount?: number | null;
@@ -820,6 +814,14 @@ export async function fetchCallSideComparison(
   const params = new URLSearchParams({ database, session_id });
   return requestJson(`/api/call_side_comparison?${params.toString()}`);
 }
+
+/**
+ * Το Sessions.Valid που γράφει το /api/calls/comment μαζί με το σχόλιο — ίδιος κανόνας με το
+ * backend (routers/calls.py): σχόλιο που αρχίζει από "fake" (χωρίς trim, case-insensitive) → 0,
+ * οτιδήποτε άλλο → 1. Χρησιμοποιείται για να ενημερωθεί η λίστα κλήσεων χωρίς refetch.
+ */
+export const sessionValidAfterComment = (comment: string): 0 | 1 =>
+  comment.toLowerCase().startsWith("fake") ? 0 : 1;
 
 export async function updateCallComment(
   database: string,

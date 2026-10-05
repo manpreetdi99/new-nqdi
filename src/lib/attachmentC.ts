@@ -155,15 +155,48 @@ export interface Sample {
 
 const EMPTY_SAMPLE: Sample = { avg: null, samples: 0, min: null, max: null };
 
-const mean = (values: number[]): Sample =>
-  values.length === 0
-    ? EMPTY_SAMPLE
-    : {
-        avg: values.reduce((sum, v) => sum + v, 0) / values.length,
-        samples: values.length,
-        min: Math.min(...values),
-        max: Math.max(...values),
-      };
+/**
+ * Μέσος όρος + min/max σε ΕΝΑ πέρασμα, ΧΩΡΙΣ spread.
+ *
+ * Το `Math.min(...values)` έσκαγε σε RangeError ("Maximum call stack size exceeded")
+ * πάνω από ~124k τιμές, γιατί κάθε τιμή γίνεται ξεχωριστό argument. Ακριβώς αυτό
+ * συνέβαινε όταν το Summary φόρτωνε ΟΛΑ τα collections μιας βάσης (PEL_26H2: 169k DNS
+ * δείγματα) — η εξαίρεση ανέβαινε μέσα από το render του SummaryTab και έριχνε όλο το
+ * tab. Η μορφή του Sample δεν αλλάζει.
+ */
+const mean = (values: number[]): Sample => {
+  let sum = 0;
+  let min: number | null = null;
+  let max: number | null = null;
+
+  for (const value of values) {
+    sum += value;
+    if (min == null || value < min) min = value;
+    if (max == null || value > max) max = value;
+  }
+
+  return values.length === 0 ? EMPTY_SAMPLE : { avg: sum / values.length, samples: values.length, min, max };
+};
+
+/**
+ * Πόσα πραγματικά tests αντιπροσωπεύει μια γραμμή. 1 για κάθε raw row· >1 για τις
+ * ΗΔΗ-ΑΘΡΟΙΣΜΕΝΕΣ πηγές (/api/dns, /api/ping_1000?aggregate=1), που στέλνουν μία γραμμή
+ * ανά group μαζί με το πλήθος του — βλ. DataCallRow.weight.
+ */
+const rowWeight = (row: DataCallRow): number => {
+  const weight = row.weight;
+  return weight == null || !Number.isFinite(weight) || weight < 0 ? 1 : weight;
+};
+
+/**
+ * Πόσα από τα tests της γραμμής έχουν έγκυρη τιμή στη μετρική. Default: όσα και τα tests
+ * (ένα raw row είτε έχει τιμή είτε όχι). Τα ping aggregates το δίνουν ρητά, γιατί ένα
+ * failed ping μετράει στο Total αλλά ΔΕΝ έχει RTT — βλ. DataCallRow.metricSamples.
+ */
+const rowMetricSamples = (row: DataCallRow): number => {
+  const samples = row.metricSamples;
+  return samples == null || !Number.isFinite(samples) || samples < 0 ? rowWeight(row) : samples;
+};
 
 const ratio = (numerator: number, denominator: number): number | null =>
   denominator > 0 ? numerator / denominator : null;
@@ -365,7 +398,11 @@ export const EMPTY_VOICE_STATS: VoiceStats = {
 
 /** Σταθερά χρώματα για τα γνωστά codec buckets· ό,τι άλλο παίρνει χρώμα από FALLBACK_CODEC_COLORS. */
 const CODEC_BUCKET_COLORS: Record<string, string> = {
-  "FR AMR WB": "#2f8f6e",
+  EVS: "#ef6c8f",
+  "EVS WB": "#c94f78",
+  "AMR UMTS": "#2f8f6e",
+  "AMR FR": "#3d9b78",
+  "AMR WB": "#287b62",
   "AMR HR": "#d99a2b",
   AMR: "#3568c9",
   EFR: "#8a4fd1",
@@ -377,7 +414,7 @@ const CODEC_BUCKET_COLORS: Record<string, string> = {
 const FALLBACK_CODEC_COLORS = ["#767a8a", "#9a8f6a", "#6a9a8f", "#9a6a8f", "#8f9a6a"];
 
 /** Σειρά εμφάνισης των γνωστών buckets· ό,τι δεν αναγνωρίζεται πάει αλφαβητικά στο τέλος. */
-const CODEC_BUCKET_ORDER = ["FR AMR WB", "AMR HR", "AMR", "EFR", "FR", "HR", "no codec rate"];
+const CODEC_BUCKET_ORDER = ["EVS", "AMR UMTS", "AMR FR", "AMR HR", "EFR", "FR", "HR", "no codec rate", "AMR WB", "EVS WB", "AMR"];
 
 export interface CodecShare {
   bucket: string;
@@ -392,7 +429,11 @@ export interface CodecShare {
  * που έχει το A-LEVEL "CallCodecTypeUsageGSM.sql" reference query.
  */
 const CODEC_COUNT_FIELDS: { bucket: string; field: keyof AllCallsRow }[] = [
-  { bucket: "FR AMR WB", field: "codecFrAmrWbCount" },
+  { bucket: "EVS", field: "codecEvsCount" },
+  { bucket: "EVS WB", field: "codecEvsWbCount" },
+  { bucket: "AMR UMTS", field: "codecAmrUmtsCount" },
+  { bucket: "AMR FR", field: "codecAmrFrCount" },
+  { bucket: "AMR WB", field: "codecAmrWbCount" },
   { bucket: "AMR HR", field: "codecAmrHrCount" },
   { bucket: "AMR", field: "codecAmrCount" },
   { bucket: "EFR", field: "codecEfrCount" },
@@ -419,7 +460,7 @@ export const buildCodecMix = (rows: AllCallsRow[]): CodecShare[] => {
   }
 
   const total = Array.from(counts.values()).reduce((sum, count) => sum + count, 0);
-  const known = CODEC_BUCKET_ORDER.filter((bucket) => counts.has(bucket));
+  const known = total > 0 ? CODEC_BUCKET_ORDER : [];
   const rest = Array.from(counts.keys())
     .filter((bucket) => !CODEC_BUCKET_ORDER.includes(bucket))
     .sort((a, b) => a.localeCompare(b));
@@ -799,6 +840,12 @@ export interface DataTestSection {
   group: string;
   byOperator: Map<string, DataTestStats>;
   total: DataTestStats;
+  /**
+   * Μόνο στα merged compact sections — "HTTPS sites (all sites combined)" (βλ.
+   * buildHttpsSitesTotal) ή "Ping (all sizes combined)" (βλ. buildPingTotal) — τι μπήκε
+   * μέσα στο merge, για tooltip στο section title (βλ. SummaryTab's DataSectionBlock).
+   */
+  combinedFrom?: string[];
 }
 
 const DIRECTION_LABELS: Record<string, string> = { dl: "DL", ul: "UL", downlink: "DL", uplink: "UL" };
@@ -833,6 +880,11 @@ const NO_DL_SUFFIX_TESTS = /https?\s*browser|^youtube service/i;
 const SECTION_LABEL_RENAMES: Record<string, string> = {
   "HTTP Transfer (DL)": "HTTP Transfer (DL) 10MB",
   "HTTP UL": "HTTP Transfer (UL) 5MB",
+  // "walk" DBs: ίδιο test, ένα κοινό TestName "HTTP TRANSFER" και για τις δύο κατευθύνσεις
+  // (χωρίς παρένθεση όπως στο drive) — 2026-09-21, βγαίνε ξεχωριστό ασύνδετο section στο
+  // compact αντί να μπει στο Ε1 merge/COMPACT_EXCLUDED_SECTION_LABELS σαν το drive.
+  "HTTP TRANSFER DL": "HTTP Transfer (DL) 10MB",
+  "HTTP TRANSFER UL": "HTTP Transfer (UL) 5MB",
   // Capacity ανά Link (grx/akamai) — βλ. mapCapacityLinkRowsToDataCallRows. ΕΠΙΠΛΕΟΝ
   // sections δίπλα στα κύρια "Capacity DL 10GB"/"Capacity UL 1GB" (CDRCombined), μόνο
   // στο Full mode (βλ. COMPACT_EXCLUDED_SECTION_LABELS στο SummaryTab.tsx).
@@ -882,8 +934,36 @@ const sectionLabel = (row: DataCallRow): string => {
 
 const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
   const testType = (rows[0]?.testType ?? "").toLowerCase();
-  const collect = (pick: (row: DataCallRow) => number | null): Sample =>
-    mean(rows.map(pick).filter((value): value is number => value != null && value > 0));
+
+  /**
+   * Σταθμισμένος μέσος όρος σε ένα πέρασμα, χωρίς ενδιάμεσα map/filter arrays (σε ~300k
+   * rows × 5 μετρικές αυτά ήταν από μόνα τους δεκάδες MB garbage). Για raw rows
+   * (weight=1) δίνει ΤΟ ΙΔΙΟ αποτέλεσμα με το προηγούμενο mean(map().filter()).
+   *
+   * `allowZero`: το 0 σημαίνει "δεν υπάρχει τιμή" σχεδόν παντού, αλλά ένα
+   * PacketsLostRate=0 (τέλειο τεστ) είναι έγκυρο και πρέπει να μετρήσει στον μέσο όρο.
+   */
+  const collect = (pick: (row: DataCallRow) => number | null, allowZero = false): Sample => {
+    let weightedSum = 0;
+    let samples = 0;
+    let min: number | null = null;
+    let max: number | null = null;
+
+    for (const row of rows) {
+      const value = pick(row);
+      if (value == null || (allowZero ? value < 0 : value <= 0)) continue;
+
+      const rowSamples = rowMetricSamples(row);
+      if (rowSamples <= 0) continue;
+
+      weightedSum += value * rowSamples;
+      samples += rowSamples;
+      if (min == null || value < min) min = value;
+      if (max == null || value > max) max = value;
+    }
+
+    return samples > 0 ? { avg: weightedSum / samples, samples, min, max } : EMPTY_SAMPLE;
+  };
 
   // Έλεγχος πριν το γενικό "ping" — reuse του ίδιου πεδίου (pingRttAvg) για το DNS
   // resolution time, βλ. mapDnsRowsToDataCallRows. Ίδιο σχήμα μετρικής (ένα "Mean X σε
@@ -908,15 +988,10 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
   }
 
   if (testType.includes("interactivity")) {
-    // PacketsLostRate=0 (τέλειο τεστ, καθόλου απώλειες) είναι έγκυρο και θέλουμε να
-    // μετράει στον μέσο όρο — σε αντίθεση με το `collect` παραπάνω (φιλτράρει value>0
-    // παντού αλλού, όπου το 0 σημαίνει "δεν υπάρχει τιμή"), εδώ κρατάμε και τα μηδενικά.
-    const collectAllowZero = (pick: (row: DataCallRow) => number | null): Sample =>
-      mean(rows.map(pick).filter((value): value is number => value != null && value >= 0));
-
     const throughput = collect((row) => numeric(row.throughputKbps));
     const rtt = collect((row) => numeric(row.interactivityRtt));
-    const packetsLostRate = collectAllowZero((row) => numeric(row.interactivityPacketsLostRate));
+    // PacketsLostRate=0 (τέλειο τεστ, καθόλου απώλειες) είναι έγκυρη τιμή, όχι "λείπει".
+    const packetsLostRate = collect((row) => numeric(row.interactivityPacketsLostRate), true);
     const packetDelay = collect((row) => numeric(row.interactivityPacketDelay));
     const qoe = collect((row) => numeric(row.interactivityQoeScore));
 
@@ -959,11 +1034,12 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
     ];
   }
 
-  if (testType.includes("youtube")) {
+  // "HTTPS Browser (youtube)" είναι απλό browsing (E4), όχι video streaming — πέφτει στο
+  // default throughput όπως τα υπόλοιπα sites.
+  if (testType.includes("youtube") && !testType.includes("browser")) {
     const mos = collect((row) => numeric(row.youtubeMos));
-    const interruptions = mean(
-      rows.map((row) => numeric(row.youtubeInterruptions)).filter((value): value is number => value != null),
-    );
+    // 0 interruptions είναι έγκυρη τιμή (τέλειο playback), γι' αυτό allowZero.
+    const interruptions = collect((row) => numeric(row.youtubeInterruptions), true);
     return [
       { label: "Mean video MOS", unit: "", decimals: 2, higherIsBetter: true, value: mos.avg, samples: mos.samples },
       {
@@ -1005,16 +1081,22 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
 };
 
 const buildDataTestStats = (rows: DataCallRow[]): DataTestStats => {
+  let total = 0;
   let success = 0;
   let failed = 0;
+  // rowWeight αντί για ++ / rows.length: μια γραμμή από ήδη-αθροισμένη πηγή μετράει όσα
+  // tests αντιπροσωπεύει. Για raw rows (weight=1) είναι ακριβώς ό,τι έκανε το ++.
   for (const row of rows) {
+    const weight = rowWeight(row);
+    total += weight;
+
     const outcome = classifyDataTest(row);
-    if (outcome === "success") success++;
-    else if (outcome === "failed") failed++;
+    if (outcome === "success") success += weight;
+    else if (outcome === "failed") failed += weight;
   }
 
   return {
-    total: rows.length,
+    total,
     success,
     failed,
     // Success rate μόνο πάνω στα scored tests — τα "other" δεν κρίθηκαν.
@@ -1027,14 +1109,14 @@ const buildDataTestStats = (rows: DataCallRow[]): DataTestStats => {
  * Σταθερή, ρητή σειρά εμφάνισης των PS Data Stats sections στο Attachment C — η
  * "5 group, QoS → QoE" πρόταση του πελάτη (2026-08-26), 5 ενότητες:
  *
- *   Ε1 · Bulk throughput            Capacity DL/UL, HTTP Transfer DL/UL, Ookla DL/UL
+ *   Ε1 · Bulk throughput            Capacity DL/UL, Ookla DL/UL, HTTP Transfer DL/UL
  *   Ε2 · Latency / Responsiveness   Ping 40/800/1000 B, DNS Resolution, Interactivity
  *   Ε3 · Browser engines            Kepler, Kepler +30s Pause, Newton
  *   Ε4 · HTTPS sites                website tests, αλφαβητικά (alpha, amazon, car.gr, …)
  *   Ε5 · Video streaming            YouTube Service / 4K / Live
  *
- * (αντικατέστησε την προηγούμενη επίπεδη 26-θέσεων λίστα — το Ookla μετακινήθηκε
- * ΜΕΤΑ το HTTP Transfer μέσα στο Ε1, και το Ping/DNS/Interactivity ανέβηκε πολύ πιο
+ * (αντικατέστησε την προηγούμενη επίπεδη 26-θέσεων λίστα — το Ookla μπήκε
+ * ΠΡΙΝ από το HTTP Transfer μέσα στο Ε1, και το Ping/DNS/Interactivity ανέβηκε πολύ πιο
  * πάνω, στο Ε2, αντί να είναι τελευταίο). Ό,τι test type δεν ταιριάζει σε κανένα από
  * αυτά (π.χ. ένα απλό "Ping" χωρίς μέγεθος, ή ένα ad-hoc "FTP DL") πέφτει στο
  * UNMATCHED_RANK, ακριβώς πριν το Ping 40/800/1000 group — ίδια σχετική θέση με το
@@ -1083,6 +1165,19 @@ const parenOrWhole = (l: string): string => {
 const httpsSiteKeyword = (l: string): string | null =>
   HTTPS_SITE_ORDER.find((keyword) => parenOrWhole(l).includes(keyword)) ?? null;
 
+/**
+ * Καθαρό, ανθρώπινο όνομα site από ένα section label — για το tooltip του "HTTPS sites
+ * (all sites combined)" (βλ. buildHttpsSitesTotal). Ξεφλουδίζει το "Browser (X)" wrapper,
+ * το "https://www." πρόθεμα, και το trailing " DL"/" UL" — ό,τι raw format κι αν έφτασε
+ * ("HTTPS Browser (alpha)" -> "alpha", "https://www.amazon.com" -> "amazon.com",
+ * "Sport24 DL" -> "Sport24").
+ */
+const siteDisplayName = (label: string): string =>
+  parenOrWhole(label)
+    .replace(/^https?:\/\/(www\.)?/i, "")
+    .replace(/\s+(dl|ul)$/i, "")
+    .trim();
+
 /** Σειρά μεταξύ των "YouTube Service*" sections: plain, μετά _4K, μετά _Live. */
 /**
  * Space, όχι underscore — ίδια μορφή με το SECTION_LABEL_RENAMES's "YouTube Service
@@ -1090,6 +1185,14 @@ const httpsSiteKeyword = (l: string): string | null =>
  * μετονομασμένο label, όχι στο raw testType).
  */
 const YOUTUBE_SERVICE_ORDER = ["youtube service", "youtube service 4k", "youtube service live"];
+
+/**
+ * Ένα TestName που ξεκινάει από "youtube" ΚΑΙ δεν είναι το γυμνό site-load domain
+ * "youtube.com" (βλ. HTTPS_SITE_ORDER/httpsSiteKeyword — Ε4, όχι εδώ) — δηλαδή το ίδιο το
+ * video-streaming test, drive "YouTube Service*" ή walk bare "YouTube"/"YouTube Live"/
+ * "YouTube 4K" (2026-09-21, χωρίς "Service"). Το (?!\.) αποκλείει ρητά το "youtube.com".
+ */
+const YOUTUBE_VIDEO_TEST_RE = /^youtube\b(?!\.)/;
 
 /**
  * Ε2 · Latency / Responsiveness — A-LEVEL "PING RAW.sql" reference query (ίδιο με το
@@ -1162,7 +1265,8 @@ export const pingPacketSizeBytes = (label: string): number | null => {
 const KEPLER_PAUSE_RE = /^kepler\b.*(pause|\b2\b)/i;
 
 interface SectionGroup {
-  match: (l: string) => boolean;
+  /** `l` = lowercased label. `original` = πριν το lowercase (βλ. γενικό DL/UL site κανόνα, που χρειάζεται το casing). */
+  match: (l: string, original: string) => boolean;
   /** Σειρά ΜΕΣΑ στο group· χωρίς αυτό, ισοπαλία -> count-sort σαν πριν. */
   subRank?: (l: string) => number;
   group: string;
@@ -1173,12 +1277,12 @@ const SECTION_ORDER: SectionGroup[] = [
   // "Capacity DL 10GB (grx)"/"(akamai)" — βλ. mapCapacityLinkRowsToDataCallRows.
   { match: (l) => /^capacity dl\b/.test(l), subRank: (l) => (l.includes("(") ? 1 : 0), group: SECTION_GROUP_LABELS.bulkThroughput },
   { match: (l) => /^capacity ul\b/.test(l), subRank: (l) => (l.includes("(") ? 1 : 0), group: SECTION_GROUP_LABELS.bulkThroughput },
-  { match: (l) => l.includes("http transfer (dl)"), group: SECTION_GROUP_LABELS.bulkThroughput },
-  { match: (l) => l.includes("http transfer (ul)"), group: SECTION_GROUP_LABELS.bulkThroughput },
   { match: (l) => l.includes("ookla") && /\bdl\b/.test(l), subRank: () => 0, group: SECTION_GROUP_LABELS.bulkThroughput },
   { match: (l) => l.includes("ookla") && /\bul\b/.test(l), subRank: () => 1, group: SECTION_GROUP_LABELS.bulkThroughput },
   // Ookla χωρίς DL/UL στο label (π.χ. "Ookla Speedtest").
   { match: (l) => l.includes("ookla"), subRank: () => 0.5, group: SECTION_GROUP_LABELS.bulkThroughput },
+  { match: (l) => l.includes("http transfer (dl)"), group: SECTION_GROUP_LABELS.bulkThroughput },
+  { match: (l) => l.includes("http transfer (ul)"), group: SECTION_GROUP_LABELS.bulkThroughput },
   { match: (l) => PING_B_ORDER.includes(l), subRank: (l) => PING_B_ORDER.indexOf(l), group: SECTION_GROUP_LABELS.latency },
   { match: (l) => l.includes("dns"), group: SECTION_GROUP_LABELS.latency },
   // Substring, όχι exact-equality — το label φτάνει εδώ ήδη μετονομασμένο σε
@@ -1191,38 +1295,67 @@ const SECTION_ORDER: SectionGroup[] = [
   { match: (l) => KEPLER_PAUSE_RE.test(parenOrWhole(l)), group: SECTION_GROUP_LABELS.browserEngines },
   { match: (l) => /^newton\b/.test(parenOrWhole(l)), group: SECTION_GROUP_LABELS.browserEngines },
   {
-    // "YouTube Service*" tests περιέχουν κι αυτά "youtube" σαν substring — αποκλείονται
-    // ρητά εδώ ώστε να μην τα αρπάξει το Ε4 group αντί για το σωστό τους Ε5.
-    match: (l) => !l.includes("service") && httpsSiteKeyword(l) !== null,
+    // Ε4 · HTTPS sites — εκτός "youtube" ΒΙΝΤΕΟ tests (βλ. YOUTUBE_VIDEO_TEST_RE): το site-load
+    // test του youtube μπορεί να φτάσει σαν γυμνό domain "youtube.com" (βλ. test fixture
+    // "groups every HTTPS site test into Ε4...") — αυτό ΞΕΚΙΝΑΕΙ κι αυτό από "youtube" αλλά
+    // ΔΕΝ είναι το ίδιο με το video-streaming test, γι' αυτό το lookahead (?!\.) στο regex.
+    match: (l) => !YOUTUBE_VIDEO_TEST_RE.test(l) && httpsSiteKeyword(l) !== null,
     subRank: (l) => HTTPS_SITE_ORDER.indexOf(httpsSiteKeyword(l)!),
     group: SECTION_GROUP_LABELS.httpsSites,
   },
   {
-    match: (l) => YOUTUBE_SERVICE_ORDER.includes(l),
-    subRank: (l) => YOUTUBE_SERVICE_ORDER.indexOf(l),
+    // Ε5 · Video streaming: "youtube service*" (drive, exact) ΚΑΙ οποιοδήποτε άλλο bare
+    // "youtube ..." TestName (2026-09-21, walk DBs: "YouTube"/"YouTube Live"/"YouTube 4K",
+    // χωρίς το "Service" που έχει το drive) — ίδιο group, όποιο κι αν είναι το raw naming.
+    match: (l) => YOUTUBE_VIDEO_TEST_RE.test(l),
+    subRank: (l) => (YOUTUBE_SERVICE_ORDER.includes(l) ? YOUTUBE_SERVICE_ORDER.indexOf(l) : YOUTUBE_SERVICE_ORDER.length),
     group: SECTION_GROUP_LABELS.videoStreaming,
+  },
+  // Γενικός κανόνας (2026-09-21, "walk" DBs): ένα TestName με DL/UL κατάληξη που δεν
+  // αναγνωρίστηκε από κανέναν παραπάνω κανόνα (π.χ. "Sport24 DL", άγνωστο site εκτός
+  // HTTPS_SITE_ORDER) θεωρείται HTTPS site test — μπαίνει στο ίδιο Ε4/"HTTPS sites (all
+  // sites combined)" merge (βλ. buildHttpsSitesTotal) αντί να μείνει ορφανό ξεχωριστό
+  // section στο compact. Τελευταίο στη λίστα ώστε να μην αρπάζει tests που ήδη
+  // αναγνωρίζονται σωστά αλλού (Capacity/HTTP Transfer/Ookla/Ping/DNS/Interactivity/
+  // Kepler/Newton/YouTube Service).
+  //
+  // ΜΟΝΟ για site-λεξιλόγιο, ΟΧΙ για πρωτόκολλα/ακρωνύμια: ένα ολόκληρο-κεφαλαίο test
+  // name (π.χ. "FTP DL", "SMTP DL") ΔΕΝ μπαίνει εδώ — μένει unmatched σαν πριν (βλ.
+  // UNMATCHED_RANK, ρητό test case attachmentC.test.ts). Το testType ενός site έχει
+  // πάντα τουλάχιστον ένα πεζό γράμμα (site/domain name, π.χ. "Sport24", όχι ακρωνύμιο).
+  {
+    match: (l, original) => /\s(dl|ul)$/.test(l) && /[a-z]/.test(original.replace(/\s(dl|ul)$/i, "")),
+    group: SECTION_GROUP_LABELS.httpsSites,
   },
 ];
 
 /**
- * Ό,τι δεν ταιριάζει σε κανένα SECTION_ORDER group (π.χ. ένα απλό "Ping" χωρίς
- * μέγεθος, ή ένα ad-hoc "FTP DL") — ακριβώς πριν το Ping 40/800/1000 group, ίδια
- * σχετική θέση με το παλιό "rank 3" catch-all.
+ * Ό,τι δεν ταιριάζει σε κανένα SECTION_ORDER group (π.χ. ένα απλό "Ping" χωρίς μέγεθος,
+ * ή "FTP" χωρίς DL/UL κατάληξη — βλ. και τον γενικό DL/UL→HTTPS site κανόνα παραπάνω,
+ * που πιάνει τα υπόλοιπα) — ακριβώς πριν το Ping 40/800/1000 group, ίδια σχετική θέση
+ * με το παλιό "rank 3" catch-all.
  */
-const UNMATCHED_RANK = SECTION_ORDER.findIndex((group) => group.match("ping 40 b")) - 0.5;
+const UNMATCHED_RANK = SECTION_ORDER.findIndex((group) => group.match("ping 40 b", "ping 40 b")) - 0.5;
 
-const sectionRank = (label: string): [number, number] => {
+/**
+ * [θέση Ε-group, θέση κανόνα, subRank]. Η θέση του group = ο ΠΡΩΤΟΣ κανόνας του group στο
+ * SECTION_ORDER — ώστε ένας κανόνας που είναι πιο κάτω στη λίστα μόνο για λόγους matching
+ * (π.χ. ο γενικός DL/UL site κανόνας, "Sport24 DL") να ταξινομείται ΜΑΖΙ με το group του
+ * (Ε4, κάτω από τα γνωστά sites) και όχι μετά το Ε5.
+ */
+const sectionRank = (label: string): [number, number, number] => {
   const l = label.toLowerCase();
-  const index = SECTION_ORDER.findIndex((group) => group.match(l));
-  if (index === -1) return [UNMATCHED_RANK, 0];
+  const index = SECTION_ORDER.findIndex((group) => group.match(l, label));
+  if (index === -1) return [UNMATCHED_RANK, 0, 0];
   const group = SECTION_ORDER[index];
-  return [index, group.subRank ? group.subRank(l) : 0];
+  const groupIndex = SECTION_ORDER.findIndex((other) => other.group === group.group);
+  return [groupIndex, index, group.subRank ? group.subRank(l) : 0];
 };
 
 /** Το "Εν · ..." group label ενός section, για group headers στο SummaryTab. "" όταν unmatched. */
 export const sectionGroupOf = (label: string): string => {
   const l = label.toLowerCase();
-  return SECTION_ORDER.find((group) => group.match(l))?.group ?? "";
+  return SECTION_ORDER.find((group) => group.match(l, label))?.group ?? "";
 };
 
 /**
@@ -1272,9 +1405,10 @@ export const buildDataSections = (rows: DataCallRow[]): DataTestSection[] => {
       return { key, label: key, group: sectionGroupOf(key), byOperator, total: buildDataTestStats(sectionRows) };
     })
     .sort((a, b) => {
-      const [groupA, subA] = sectionRank(a.label);
-      const [groupB, subB] = sectionRank(b.label);
+      const [groupA, ruleA, subA] = sectionRank(a.label);
+      const [groupB, ruleB, subB] = sectionRank(b.label);
       if (groupA !== groupB) return groupA - groupB;
+      if (ruleA !== ruleB) return ruleA - ruleB;
       if (subA !== subB) return subA - subB;
       return b.total.total - a.total.total || a.label.localeCompare(b.label);
     });
@@ -1459,6 +1593,7 @@ export const buildHttpsSitesTotal = (sections: DataTestSection[]): DataTestSecti
     group: SECTION_GROUP_LABELS.httpsSites,
     byOperator,
     total: mergeWeightedTestStats(siteSections.map((section) => section.total)),
+    combinedFrom: [...new Set(siteSections.map((section) => siteDisplayName(section.label)))].sort((a, b) => a.localeCompare(b)),
   };
 
   const result: DataTestSection[] = [];
@@ -1514,6 +1649,10 @@ export const buildPingTotal = (sections: DataTestSection[]): DataTestSection[] =
     group: SECTION_GROUP_LABELS.latency,
     byOperator,
     total: mergeWeightedTestStats(pingSections.map((section) => section.total)),
+    // Αριθμητική ταξινόμηση (40 B -> 800 B -> 1000 B), όχι αλφαβητική ("1000 B" < "40 B" as string).
+    combinedFrom: [...pingSections]
+      .sort((a, b) => (pingPacketSizeBytes(a.label) ?? 0) - (pingPacketSizeBytes(b.label) ?? 0))
+      .map((section) => section.label.replace(/^ping\s+/i, "")),
   };
 
   const result: DataTestSection[] = [];
@@ -1626,6 +1765,13 @@ export const mapCapacityLinkRowsToDataCallRows = (rows: CapacityLinkRow[]): Data
  * έχει πάντα packet size) — αν συμβεί, πέφτει σε "Ping ? B" (δεν ταιριάζει με κανένα
  * rename, μένει ορατό ως-έχει αντί να χαθεί σιωπηλά).
  *
+ * AGGREGATE MODE (2026-09-16): όταν το /api/ping_1000 κληθεί με aggregate=1, κάθε row
+ * είναι ΕΝΑ group (location, collection, host, packet size, outcome) με `count` packets
+ * και `rttSamples` από αυτά που έχουν RTT — περνάνε ως weight/metricSamples και βγάζουν
+ * ακριβώς τα ίδια Total/Success Rate/Mean RTT με τα raw packets, από ~300 γραμμές αντί
+ * για 63k. Το ίδιο mapping δουλεύει και για τα δύο modes: χωρίς count/rttSamples, το
+ * weight πέφτει στο 1 (ένα row = ένα packet), δηλαδή ό,τι ίσχυε πάντα.
+ *
  * ΣΗΜΕΙΩΣΗ (2026-08-31): το backend δεν φιλτράρει πια σε PacketSize=1000 — το
  * /api/ping_1000 (A-LEVEL "PING RAW.sql" reference query) γυρνάει packets ΚΑΙ για τα
  * τρία μεγέθη μαζί, βλ. docstring του get_ping_1000 στο backend/routers/calls.py. Τα
@@ -1635,10 +1781,11 @@ export const mapCapacityLinkRowsToDataCallRows = (rows: CapacityLinkRow[]): Data
  * μετρήσει διπλά (μία φορά από το CDRCombined, μία από εδώ).
  */
 export const mapPing1000RowsToDataCallRows = (rows: PingRow[]): DataCallRow[] =>
-  rows.map((row) => ({
+  rows.map((row, groupIndex) => ({
     Location: row.location,
-    SessionId: row.sessionId,
-    TestId: row.testId,
+    // Aggregate mode: μια γραμμή δεν ανήκει σε ένα session — συνθετικό, μοναδικό id.
+    SessionId: row.sessionId ?? `ping-${groupIndex}`,
+    TestId: row.testId ?? null,
     callStartTimeStamp: null,
     testType: row.packetSize != null ? `Ping ${row.packetSize}` : "Ping ? B",
     direction: null,
@@ -1662,6 +1809,11 @@ export const mapPing1000RowsToDataCallRows = (rows: PingRow[]): DataCallRow[] =>
     comment: null,
     latitude: null,
     longitude: null,
+    // Raw mode: count/rttSamples λείπουν -> weight 1, metricSamples = weight (ένα packet,
+    // με RTT ή χωρίς). Aggregate mode: η γραμμή μετράει `count` packets, από τα οποία μόνο
+    // `rttSamples` έχουν RTT > 0 και μπαίνουν στο Mean RTT — βλ. DataCallRow.weight.
+    weight: row.count,
+    metricSamples: row.rttSamples,
   }));
 
 /**
@@ -1731,51 +1883,55 @@ export const mapInteractivityRowsToDataCallRows = (rows: InteractivityRow[]): Da
  * view, βλ. σχόλιο στο /api/data_calls) σε DataCallRow σχήμα (testType="DNS") ώστε να
  * μπουν στο ίδιο buildDataSections pipeline με τα υπόλοιπα PS Data tests.
  *
- * Σε αντίθεση με τα Ookla/Ping1000/Interactivity mappings (raw, ένα row ανά πραγματικό
- * test), εδώ η SQL φτάνει ήδη ομαδοποιημένη ανά (location, status) — δεν έχουμε per-
- * attempt δείγματα. Για να δουλέψει σωστά το ίδιο weighted-average σκεπτικό με το
- * buildDataTestStats/buildDataMetrics (ένα row = ένα test), φτιάχνουμε `count`
- * συνθετικά rows ανά group με value = το group's avg — το unweighted mean πάνω σε
- * αυτά τα αντίγραφα ισοδυναμεί ακριβώς με το σωστό, count-σταθμισμένο mean μεταξύ
- * groups (sum(avg_i × count_i) / sum(count_i)). Η πραγματική min/max ανά attempt χάνεται
- * (όλα τα αντίγραφα ενός group έχουν την ίδια τιμή), αλλά το DataMetric δεν τη δείχνει
- * ούτως ή άλλως — μόνο τον μέσο όρο (βλ. buildDataMetrics's "dns" branch).
+ * Σε αντίθεση με τα Ookla/Interactivity mappings (raw, ένα row ανά πραγματικό test), εδώ
+ * η SQL φτάνει ήδη ομαδοποιημένη ανά (location, status) — δεν έχουμε per-attempt δείγματα.
+ * ΕΝΑ DataCallRow ανά group, με `weight: count`: το buildDataTestStats μετράει το group
+ * σαν `count` tests και το buildDataMetrics σταθμίζει τον μέσο όρο με το ίδιο count, άρα
+ * sum(avg_i × count_i) / sum(count_i) — ακριβώς το σωστό, count-σταθμισμένο mean.
+ *
+ * ΠΡΟΣΟΧΗ (2026-09-16): πριν, το ίδιο αποτέλεσμα βγαίνε με `count` ΣΥΝΘΕΤΙΚΑ αντίγραφα
+ * ανά group. Σε μία βάση αυτό ήταν 169.381 αντικείμενα των 24 πεδίων από 6 γραμμές JSON
+ * (742 bytes!) — πάγωνε το tab, και το mean() έσκαγε σε RangeError πάνω από ~124k τιμές.
+ * Μη γυρίσεις σε expansion: ό,τι χρειάζεται το Attachment C από το DNS είναι
+ * count/success/failed/avg, και τα τέσσερα βγαίνουν σταθμισμένα.
+ *
+ * Η πραγματική min/max ανά attempt δεν υπάρχει (όπως και πριν) — το DataMetric δείχνει
+ * μόνο τον μέσο όρο, βλ. buildDataMetrics's "dns" branch.
  *
  * `pingRttAvg` reused ως γενικό "duration σε ms" πεδίο (ίδιο σχήμα μετρικής με το
  * Ping — δες buildDataMetrics) — δεν σημαίνει RTT εδώ, σημαίνει DNS resolution time.
  */
 export const mapDnsRowsToDataCallRows = (rows: DnsRow[]): DataCallRow[] =>
-  rows.flatMap((row, groupIndex) =>
-    Array.from({ length: Math.max(row.count, 0) }, (_, i) => ({
-      Location: row.location,
-      // Συνθετικό, μοναδικό ανά group — δεν αντιστοιχεί σε πραγματικό session.
-      SessionId: `dns-${groupIndex}-${i}`,
-      TestId: null,
-      callStartTimeStamp: null,
-      testType: "DNS",
-      direction: null,
-      status: row.status,
-      scoringStatus: row.status,
-      host: null,
-      pingRttAvg: row.avg,
-      throughputKbps: null,
-      capacityThroughputKbps: null,
-      youtubeMos: null,
-      youtubeInterruptions: null,
-      interactivityQoeScore: null,
-      interactivityRtt: null,
-      interactivityPacketsLostRate: null,
-      interactivityPacketDelay: null,
-      technology: null,
-      startTechnology: null,
-      CollectionName: null,
-      ASideFileName: null,
-      isValid: 1,
-      comment: null,
-      latitude: null,
-      longitude: null,
-    })),
-  );
+  rows.map((row, groupIndex) => ({
+    Location: row.location,
+    // Συνθετικό, μοναδικό ανά group — δεν αντιστοιχεί σε πραγματικό session.
+    SessionId: `dns-${groupIndex}`,
+    TestId: null,
+    callStartTimeStamp: null,
+    testType: "DNS",
+    direction: null,
+    status: row.status,
+    scoringStatus: row.status,
+    host: null,
+    pingRttAvg: row.avg,
+    throughputKbps: null,
+    capacityThroughputKbps: null,
+    youtubeMos: null,
+    youtubeInterruptions: null,
+    interactivityQoeScore: null,
+    interactivityRtt: null,
+    interactivityPacketsLostRate: null,
+    interactivityPacketDelay: null,
+    technology: null,
+    startTechnology: null,
+    CollectionName: null,
+    ASideFileName: null,
+    isValid: 1,
+    comment: null,
+    latitude: null,
+    longitude: null,
+    weight: Math.max(row.count, 0),
+  }));
 
 /* ────────────────────────── Technology mix ────────────────────────── */
 
@@ -2045,12 +2201,7 @@ export interface ReportPeriod {
   to: Date | null;
   /** ISO week number της πρώτης μέρας — το "Week:" του Attachment C. */
   week: number | null;
-  /**
-   * ISO week number της τελευταίας μέρας. Ίδιο με το `week` όταν όλα τα timestamps πέφτουν
-   * μέσα στην ίδια εβδομάδα· διαφορετικό όταν η επιλογή (π.χ. παραπάνω από ένα collection,
-   * το καθένα από άλλη εβδομάδα) καλύπτει περισσότερες — βλ. Week chip στο SummaryTab, που
-   * δείχνει εύρος "από–έως" αντί για ένα (παραπλανητικό) νούμερο σε αυτή την περίπτωση.
-   */
+  /** ISO week number της τελευταίας μέρας — ίσο με το week όταν όλα πέφτουν στην ίδια εβδομάδα. */
   weekTo: number | null;
 }
 
@@ -2073,6 +2224,16 @@ export const buildReportPeriod = (timestamps: (string | null | undefined)[]): Re
   const from = new Date(Math.min(...times));
   const to = new Date(Math.max(...times));
   return { from, to, week: isoWeek(from), weekTo: isoWeek(to) };
+};
+
+/**
+ * "29" για μία εβδομάδα, "5 – 30" όταν οι μετρήσεις απλώνονται σε πολλές (π.χ. όλα τα
+ * collections μιας βάσης μαζί, MTWS_26H2), "—" χωρίς δεδομένα.
+ */
+export const formatReportWeeks = (period: ReportPeriod): string => {
+  if (period.week == null) return "—";
+  if (period.weekTo == null || period.weekTo === period.week) return String(period.week);
+  return `${period.week} – ${period.weekTo}`;
 };
 
 /* ────────────────────────── Formatting ────────────────────────── */

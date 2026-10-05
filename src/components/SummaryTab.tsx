@@ -13,6 +13,7 @@ import {
   buildHttpsSitesTotal,
   buildPingTotal,
   buildReportPeriod,
+  formatReportWeeks,
   buildServingBandTechTable,
   buildTechnologyMixTable,
   buildVoiceStats,
@@ -57,6 +58,11 @@ export interface SummaryLoading {
   /** Πόσες από τις πηγές έχουν φορτώσει — για το "Loaded n/10" chip. */
   done: number;
   totalSources: number;
+  /**
+   * Πόσες πηγές τα παράτησαν (timeout / δίκτυο / SQL error). Optional για τα tests και για
+   * καλούντες που δεν το ξέρουν· 0/undefined = κανένα σφάλμα, το chip δεν εμφανίζεται.
+   */
+  failed?: number;
 }
 
 const NOT_LOADING: SummaryLoading = {
@@ -66,6 +72,7 @@ const NOT_LOADING: SummaryLoading = {
   servingBandTech: false,
   done: 0,
   totalSources: 0,
+  failed: 0,
 };
 
 interface SummaryTabProps {
@@ -105,6 +112,8 @@ interface SummaryTabProps {
   onToggleCollection?: (name: string) => void;
   onSelectAllCollections?: () => void;
   onClearCollections?: () => void;
+  /** Ξανατρέχει ΜΟΝΟ τις πηγές που απέτυχαν — βλ. loading.failed. */
+  onRetryFailedSources?: () => void;
 }
 
 /* ────────────────────────── Χρώματα & κατώφλια ────────────────────────── */
@@ -633,7 +642,7 @@ const voiceRows = (excludeSysRelease: boolean): KpiRowSpec<VoiceStats>[] => [
   { label: "Call outcome mix", cell: (s) => ({ kind: "mix", stats: s }) },
   {
     label: "Codec Type Usage %",
-    hint: "FR AMR WB / AMR HR / AMR / EFR / FR / HR — βλ. CallCodecTypeUsageGSM.sql",
+    hint: "EVS / AMR UMTS / AMR FR / AMR HR / EFR / FR / HR / no codec rate / AMR WB / EVS WB — βλ. CallCodecTypeUsageGSM.sql",
     cell: (s) => ({ kind: "codecMix", mix: s.codecMix }),
   },
   {
@@ -820,8 +829,10 @@ function KpiTable<T>({
   const columns = operators.map((operator) => ({ operator, stats: statsFor(operator.key) }));
 
   // Πλάτος ανά στήλη ώστε η στήλη με τα ονόματα των KPI να μη στριμώχνεται. Compact:
-  // στενότερες στήλες — τα cells έχουν λιγότερο περιεχόμενο (χωρίς hint/n=/incl. SR lines).
-  const minWidth = (compact ? 190 : 260) + columns.length * (compact ? 130 : 190) + 90;
+  // στενότερες στήλες — τα cells έχουν λιγότερο περιεχόμενο (χωρίς hint/n=/incl. SR lines) ΚΑΙ
+  // πιο στενό label/meter/value (βλ. παρακάτω στο cell render) ώστε να χωράει σε μισό πλάτος
+  // (grid-cols-2 στο compact) χωρίς οριζόντιο scroll μέσα στον πίνακα.
+  const minWidth = (compact ? 176 : 260) + columns.length * (compact ? 100 : 190) + (compact ? 60 : 90);
   const headPad = compact ? "px-3 py-1.5" : "px-4 py-3";
   const cellPad = compact ? "px-3 py-1" : "px-4 py-2";
   const labelPad = compact ? "px-3 py-1" : "px-4 py-2.5";
@@ -902,20 +913,21 @@ function KpiTable<T>({
                       ) : cell.kind === "technologyMix" ? (
                         <TechnologyMixBar mix={(cell as Extract<Cell, { kind: "technologyMix" }>).mix} />
                       ) : (
-                        <div className="flex items-center justify-end gap-2.5">
+                        <div className={`flex items-center justify-end ${compact ? "gap-1" : "gap-2.5"}`}>
                           <span
-                            className="w-7 shrink-0 text-right text-[9px] uppercase tracking-wider text-muted-foreground"
+                            className={`${compact ? "w-6" : "w-7"} shrink-0 text-right text-[9px] uppercase tracking-wider text-muted-foreground`}
                             title={isBest ? "Best value in this row" : undefined}
                           >
                             {isBest ? "best" : ""}
                           </span>
 
-                          {/* Σταθερή θέση για τη ράβδο ώστε να ευθυγραμμίζονται οι αριθμοί — μόνο τα ποσοστά παίρνουν μπάρα. */}
-                          <span className="w-14 shrink-0">
+                          {/* Σταθερή θέση για τη ράβδο ώστε να ευθυγραμμίζονται οι αριθμοί — μόνο τα ποσοστά παίρνουν μπάρα.
+                              Compact: στενότερη ράβδος (βλ. minWidth πιο πάνω) ώστε να χωράει σε μισό πλάτος. */}
+                          <span className={`${compact ? "w-8" : "w-14"} shrink-0`}>
                             {cell.kind === "rate" && <RateMeter value={cell.value} higherIsBetter={cell.higherIsBetter} />}
                           </span>
 
-                          <span className="w-[4.75rem] text-right">
+                          <span className={`${compact ? "w-14" : "w-[4.75rem]"} text-right`}>
                             <span
                               className={`block font-mono tabular-nums ${
                                 row.emphasis ? "text-sm font-bold text-foreground" : "text-[13px] font-medium text-foreground/90"
@@ -1199,6 +1211,7 @@ const SummaryTab = ({
   onToggleCollection,
   onSelectAllCollections,
   onClearCollections,
+  onRetryFailedSources,
 }: SummaryTabProps) => {
   const [hideEmptyRows, setHideEmptyRows] = useState(false);
   const [markBest, setMarkBest] = useState(true);
@@ -1440,19 +1453,7 @@ const SummaryTab = ({
             </p>
 
             <div className="mt-4 flex flex-wrap gap-2">
-              {/* Εύρος "35–37" αντί για ένα (παραπλανητικό) νούμερο όταν η επιλογή — π.χ.
-                  παραπάνω από ένα collection, το καθένα από άλλη εβδομάδα — καλύπτει
-                  περισσότερες από μία ISO εβδομάδες. Βλ. period.weekTo/buildReportPeriod. */}
-              <MetaChip
-                label="Week"
-                value={
-                  period.week == null
-                    ? "—"
-                    : period.weekTo != null && period.weekTo !== period.week
-                      ? `${period.week}–${period.weekTo}`
-                      : String(period.week)
-                }
-              />
+              <MetaChip label="Week" value={formatReportWeeks(period)} />
               <MetaChip label="Period" value={`${formatDate(period.from)} – ${formatDate(period.to)}`} />
               {/* Ρητή πρόοδος όσο οι 10 πηγές γυρίζουν μία-μία — αλλιώς η σταδιακή εμφάνιση
                   των καρτών μοιάζει με "τελείωσε, λείπουν κομμάτια". */}
@@ -1463,6 +1464,31 @@ const SummaryTab = ({
                     <span className="flex items-center gap-1.5">
                       <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
                       {loading.done}/{loading.totalSources} sources
+                    </span>
+                  }
+                />
+              )}
+              {/* Μια πηγή που έκανε timeout έδειχνε ΙΔΙΑ με "δεν υπάρχουν δεδομένα" — σιωπηλά
+                  κενά κελιά. Ρητό chip + Retry μόνο για τις αποτυχημένες, ώστε να μην
+                  ξαναζητηθούν από την αρχή και οι 11 πηγές. */}
+              {(loading.failed ?? 0) > 0 && (
+                <MetaChip
+                  label="Failed"
+                  value={
+                    <span className="flex items-center gap-2">
+                      <span className="flex items-center gap-1.5 text-red-500">
+                        <span className="h-1.5 w-1.5 rounded-full bg-red-500" />
+                        {loading.failed}/{loading.totalSources} sources
+                      </span>
+                      {onRetryFailedSources && (
+                        <button
+                          type="button"
+                          onClick={onRetryFailedSources}
+                          className="rounded border border-border bg-muted px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider hover:bg-muted/70"
+                        >
+                          Retry
+                        </button>
+                      )}
                     </span>
                   }
                 />
@@ -1808,7 +1834,7 @@ const SummaryTab = ({
 
         {(loading.voice || freeTable.total.attempts > 0) && (
           <ReportCard
-            title="Free (2G-3G-LTE) Call Stats"
+            title="Free (2G-3G-LTE-VoNR) Call Stats"
             subtitle={loading.voice ? "loading…" : `${formatCount(freeTable.total.attempts)} call attempts`}
             icon={Phone}
             footer={loading.voice || compact ? undefined : <OutcomeLegend />}
@@ -1969,7 +1995,12 @@ const DataSectionBlock = ({
         compact={compact}
         cornerLabel={
           <div>
-            <div className="text-xs font-bold normal-case tracking-normal text-foreground">{section.label}</div>
+            <div
+              className={`text-xs font-bold normal-case tracking-normal text-foreground ${section.combinedFrom ? "cursor-help underline decoration-dotted decoration-muted-foreground/60 underline-offset-2" : ""}`}
+              title={section.combinedFrom ? `Combined: ${section.combinedFrom.join(", ")}` : undefined}
+            >
+              {section.label}
+            </div>
             <div className="mt-0.5 text-[10px] font-normal normal-case tracking-normal text-muted-foreground">
               {formatCount(section.total.total)} tests · {formatPercent(section.total.successRate, 1)} success
               {section.total.metrics[0]?.value != null && ` · ${formatMetric(section.total.metrics[0])}`}

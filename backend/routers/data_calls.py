@@ -1,6 +1,7 @@
 """Σελίδα Data Sessions: λίστα data tests (CDRCombined)."""
 from fastapi import APIRouter, HTTPException, Query
 
+from api_utils import rows_response
 from db import get_connection
 
 router = APIRouter(tags=["data-calls"])
@@ -26,7 +27,11 @@ def list_data_calls(
                 CC.TestDirection                                    AS direction,
                 CC.[Transfer Status]                                AS status,
                 CC.[Scoring Status]                                 AS scoringStatus,
-                CC.Host                                             AS host,
+                -- CAST σε bounded varchar: το CC.Host είναι varchar(8000) και το
+                -- COALESCE(AC.Comment, ...) παρακάτω varchar(MAX) — και τα δύο βάζουν τον
+                -- ODBC driver σε ακριβό per-row μονοπάτι για 30k+ γραμμές (fetch 2.2s -> 1.7s).
+                -- Τα πραγματικά μήκη είναι <100 chars (host) και <30 (comment).
+                CAST(CC.Host AS varchar(255))                       AS host,
                 CC.[Ping_RTT Avg (ms)]                              AS pingRttAvg,
                 CC.[Transfer Throughput (kbps)]                     AS throughputKbps,
                 CC.[Capacity_Sustainable Throughput (kbps)]         AS capacityThroughputKbps,
@@ -37,7 +42,7 @@ def list_data_calls(
                 FL.CollectionName,
                 FL.ASideFileName,
                 S.Valid                                             AS isValid,
-                COALESCE(AC.Comment, S.InvalidReason)               AS comment,
+                CAST(COALESCE(AC.Comment, S.InvalidReason) AS varchar(1000)) AS comment,
                 P.Latitude                                          AS latitude,
                 P.Longitude                                         AS longitude
             FROM CDRCombined CC
@@ -73,16 +78,11 @@ def list_data_calls(
 
         cursor.execute(query, tuple(params))
 
-        columns = [col[0] for col in cursor.description] if cursor.description else []
-        rows = cursor.fetchall() if cursor.description else []
-
-        data = []
-        for row in rows:
-            data.append({columns[idx]: row[idx] for idx in range(len(columns))})
+        response = rows_response(cursor)
 
         conn.close()
 
-        return {"rows": data}
+        return response
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

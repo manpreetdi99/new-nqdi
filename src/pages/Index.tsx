@@ -1,7 +1,7 @@
-import { useState, useMemo, useEffect, useRef, Fragment } from "react";
+import { useState, useMemo, useEffect, useRef, useCallback, Fragment } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp, History } from "lucide-react";
+import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp, Search, BookOpen } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import QueryEditor from "@/components/QueryEditor";
 import ResultsTable from "@/components/ResultsTable";
@@ -16,6 +16,8 @@ import AntennasMap from "@/components/AntennasMap";
 import QueryMap from "@/components/QueryMap";
 import ValidationTab from "@/components/ValidationTab";
 import SummaryTab from "@/components/SummaryTab";
+import UserManualTab from "@/components/UserManualTab";
+import { useDebouncedValue } from "@/hooks/use-debounced-value"; //καθυστερεί το fetch μεχρι να ησυχασει η επιλογη
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import { useUrlNullableStringState, useUrlStringListState, useUrlStringState } from "@/hooks/use-url-state"; //state που ζει στο URL (shareable link), με localStorage fallback
 import type { CallRecord } from "@/lib/callData";
@@ -32,6 +34,7 @@ import { Badge } from "@/components/ui/badge";
 import {
   ApiClientError,
   fetchAllCalls,
+  sessionValidAfterComment,
   fetchCapacityLink,
   fetchCellBandCount,
   fetchDataCalls,
@@ -118,6 +121,12 @@ type StatusFilterKey = "completed" | "dropped" | "failed" | "system release";
 /** Οι τιμές που δέχεται το `?sub=` — ό,τι άλλο (χειρόγραφο URL) πέφτει πίσω στο "list". */
 const CALLS_SUB_TABS = ["list", "detail", "data-detail"] as const;
 
+/** Το status έρχεται και ως "system realase" (τυπογραφικό του εξαγωγέα), οπότε δεχόμαστε και τις δύο γραφές. */
+const isSystemReleaseStatus = (status: string | null | undefined): boolean => {
+  const normalized = (status || "").toLowerCase();
+  return normalized.includes("system release") || normalized.includes("system realase");
+};
+
 const matchesStatusFilter = (status: string | null | undefined, filter: StatusFilterKey): boolean => {
   const normalized = (status || "").toLowerCase();
 
@@ -130,16 +139,16 @@ const matchesStatusFilter = (status: string | null | undefined, filter: StatusFi
   if (filter === "failed") {
     return normalized.includes("fail");
   }
-  return normalized.includes("system release") || normalized.includes("system realase");
+  return isSystemReleaseStatus(status);
 };
 
 const getAllCallsRowClass = (row: AllCallsRow): string => {
+  const normalized = (row.status || "").toLowerCase();
+  if (isSystemReleaseStatus(row.status)) {
+    return "bg-violet-500/25 hover:bg-violet-500/35 border-violet-500/40";
+  }
   if (row.isValid === 0) {
     return "bg-red-500/25 hover:bg-red-500/35 border-red-500/40";
-  }
-  const normalized = (row.status || "").toLowerCase();
-  if (normalized.includes("system release") || normalized.includes("system realase")) {
-    return "bg-violet-500/25 hover:bg-violet-500/35 border-violet-500/40";
   }
   if (normalized.includes("drop") || normalized.includes("fail")) {
     return "bg-orange-500/25 hover:bg-orange-500/35 border-orange-500/40";
@@ -148,19 +157,20 @@ const getAllCallsRowClass = (row: AllCallsRow): string => {
 };
 
 const getAllCallsStatusStyle = (row: AllCallsRow): { label: string; className: string } => {
+  // Ίδια σειρά προτεραιότητας με το getAllCallsRowClass, ώστε το badge να μη διαφωνεί με το χρώμα της γραμμής.
+  if (isSystemReleaseStatus(row.status)) {
+    return { label: row.status || "System release", className: "border-violet-500/40 bg-violet-500/15 text-violet-300" };
+  }
   if (row.isValid === 0) {
     return { label: "Invalid", className: "border-red-500/40 bg-red-500/15 text-red-300" };
   }
 
   const normalized = (row.status || "").toLowerCase();
-  if (normalized.includes("system release") || normalized.includes("system realase")) {
-    return { label: row.status || "System release", className: "border-violet-500/40 bg-violet-500/15 text-violet-300" };
-  }
   if (normalized.includes("drop")) {
     return { label: row.status || "Dropped", className: "border-orange-500/40 bg-orange-500/15 text-orange-300" };
   }
   if (normalized.includes("fail")) {
-    return { label: row.status || "Failed", className: "border-red-500/40 bg-red-500/15 text-red-300" };
+    return { label: row.status || "Failed", className: "border-orange-500/40 bg-orange-500/15 text-orange-300" };
   }
 
   return { label: row.status || "Completed", className: "border-emerald-500/40 bg-emerald-500/15 text-emerald-300" };
@@ -281,8 +291,10 @@ const Index = () => {
   const [callsLoading, setCallsLoading] = useState(false);
   const [allCallsRows, setAllCallsRows] = useState<AllCallsRow[]>([]);
   const [dataCallsRows, setDataCallsRows] = useState<DataCallRow[]>([]);
-  /** Ανά-band technology mix (GSM 900/1800, LTE E-UTRA N, ...) για το SummaryTab — βλ. /api/technology_mix. */
-  const [technologyMixRows, setTechnologyMixRows] = useState<TechnologyMixRow[]>([]);
+  // Το ανά-band technology mix (/api/technology_mix) ΔΕΝ φορτώνεται εδώ: μόνο το SummaryTab
+  // το δείχνει και το τραβάει μόνο του (summaryTechnologyMixQuery, δικό του database/collections
+  // + react-query cache). Το "All Sessions" tab το ζητούσε παράλληλα και πετούσε το αποτέλεσμα —
+  // ήταν το πιο αργό από τα τρία requests (~10s) και κρατούσε πίσω ολόκληρο το tab.
   // Database/collections επιλογή αποκλειστικά για το Summary tab — ΔΕΝ μοιράζεται state με το
   // selectedDatabase/selectedCallsCollections του "Edit Filters" panel / "All Calls" tab, ώστε η
   // επιλογή στο ένα tab να μην αλλάζει καθόλου το άλλο.
@@ -324,6 +336,11 @@ const Index = () => {
     [callRecords, selectedCallId]
   );
   const [activeTab, setActiveTab] = useUrlStringState<string>("tab", "queries", { storageKey: "perf-insights-active-tab" });
+  // Το "historic" tab αφαιρέθηκε· παλιό link (?tab=historic) ή τιμή στο localStorage θα
+  // άφηνε κενή σελίδα, οπότε γυρνάμε σε ένα ορατό tab.
+  useEffect(() => {
+    if (activeTab === "historic") setActiveTab("queries");
+  }, [activeTab, setActiveTab]);
 
   // Το ύψος του sticky header δημοσιεύεται ως CSS variable, ώστε ό,τι άλλο κολλάει στην
   // κορυφή (π.χ. το καρφιτσωμένο διάγραμμα σήματος στο Call Detail) να ξεκινά ακριβώς από
@@ -341,6 +358,19 @@ const Index = () => {
   }, []);
   // "Call Detail" and "Data Detail" live as a sub-navbar inside the "All Calls" tab
   const [callsSubTab, setCallsSubTab] = useUrlStringState<"list" | "detail" | "data-detail">("sub", "list", { allowed: CALLS_SUB_TABS });
+
+  // Σχόλιο αποθηκεύτηκε στο Call Detail: το backend έγραψε μαζί και το Sessions.Valid, οπότε
+  // ενημερώνουμε τη γραμμή στη λίστα (σχόλιο + Valid/Invalid χρώμα/badge/φίλτρο) και το
+  // CallRecord του Call Detail — στο «Πίσω» η λίστα είναι ήδη σωστή, χωρίς refetch.
+  const handleCommentSaved = useCallback((sessionId: string, comment: string) => {
+    const isValid = sessionValidAfterComment(comment);
+    setAllCallsRows((rows) => rows.map((row) =>
+      String(row.SessionId) === String(sessionId) ? { ...row, comment, isValid } : row
+    ));
+    setCallRecords((records) => records.map((record) =>
+      String(record.callId) === String(sessionId) ? { ...record, comment } : record
+    ));
+  }, []);
 
   const openCallDetail = (record: CallRecord) => {
     setSelectedCallId(String(record.callId));
@@ -360,6 +390,11 @@ const Index = () => {
   const [listFiltersCollapsed, setListFiltersCollapsed] = useState(false);
   const [locationTableFilter, setLocationTableFilter] = useState<string[]>([]);
   const [selectedFileGroupIds, setSelectedFileGroupIds] = useState<string[]>([]);
+  /** Free-text search πάνω στο "All Calls" table — φιλτράρει σε Location/SessionId/
+   * Technology/Call Mode/Call Type/Call Dir/Status/Comment/CollectionName (βλ.
+   * filteredAllCallsRows). Ανεξάρτητο από τα υπόλοιπα structured filters (status/valid/
+   * location/file group) — combine με AND, ίδιο idiom με τα υπόλοιπα φίλτρα εκεί. */
+  const [allCallsSearch, setAllCallsSearch] = useState("");
 
   useEffect(() => {
     if (activeTab === "calls" && callsSubTab === "list" && lastClickedRowId) {
@@ -604,7 +639,6 @@ const Index = () => {
         setCallRecords([]);
         setSelectedCallId(null);
         setDataCallsRows([]);
-        setTechnologyMixRows([]);
         return;
       }
 
@@ -616,15 +650,15 @@ const Index = () => {
       setCallsLoading(true);
       setDataCallsLoading(true);
 
-      const [voiceResult, dataResult, technologyMixResult] = await Promise.allSettled([
+      const [voiceResult, dataResult] = await Promise.allSettled([
         fetchAllCalls(selectedDatabase, selectedCallsCollections, effectiveLocations),
         fetchDataCalls(selectedDatabase, selectedCallsCollections, effectiveLocations),
-        fetchTechnologyMix(selectedDatabase, selectedCallsCollections, effectiveLocations),
       ]);
 
       if (voiceResult.status === "fulfilled") {
+        const records = mapAllCallsRows(voiceResult.value);
         setAllCallsRows(voiceResult.value);
-        setCallRecords(mapAllCallsRows(voiceResult.value));
+        setCallRecords(records);
         // Το selectedCall προκύπτει derived από τα callRecords (βλ. useMemo πάνω), οπότε δεν
         // χρειάζεται συγχρονισμός εδώ: όσο η κλήση υπάρχει στα νέα αποτελέσματα το Call Detail
         // μένει ανοιχτό — αν την έκοψαν τα φίλτρα, γίνεται από μόνο του null.
@@ -644,15 +678,6 @@ const Index = () => {
         setDataCallsRows([]);
       }
 
-      // Χωρίς toast σε αποτυχία: το SummaryTab πέφτει σιωπηλά στο χοντρικό
-      // technologyMix του VoiceStats — δεν αξίζει να διακόψει τη σελίδα γι' αυτό.
-      if (technologyMixResult.status === "fulfilled") {
-        setTechnologyMixRows(technologyMixResult.value);
-      } else {
-        console.error("Failed to fetch technology mix:", technologyMixResult.reason);
-        setTechnologyMixRows([]);
-      }
-
       setCallsLoading(false);
       setDataCallsLoading(false);
     };
@@ -669,72 +694,86 @@ const Index = () => {
   // (το /api/srvcc είναι 3 γραμμές, το /api/calls/ping_1000 χιλιάδες). Το react-query
   // δίνει επιπλέον cache ανά (database, collections) και race-safety στη γρήγορη αλλαγή
   // επιλογής — δεν μπορεί παλιό response να γράψει πάνω σε νεότερο.
-  const summaryEnabled = Boolean(summaryDatabase) && summaryCollections.length > 0;
+  /**
+   * ΤΑ QUERIES ΚΡΕΜΟΝΤΑΙ ΑΠΟ ΑΥΤΟ, ΟΧΙ ΑΠΟ ΤΟ summaryCollections. Κάθε κλικ σε checkbox
+   * άλλαζε αμέσως το queryKey και έστελνε 11 νέα βαριά SQL queries· τα προηγούμενα ΔΕΝ
+   * σταματούσαν (ο SQL Server τα τελειώνει ό,τι κι αν κάνει ο browser), οπότε το
+   * "Select all" πάνω σε 20 collections έριχνε ~220 queries στον server και ό,τι
+   * προλάβαινε τελείωνε — από εκεί έρχονταν τα timeouts. Με 600ms ησυχία πριν το fetch,
+   * ένα πέρασμα επιλογών = ένα κύμα από 11 queries.
+   */
+  const summaryCollectionsForQuery = useDebouncedValue(summaryCollections, 600);
+  /** True όσο ο χρήστης ακόμα κλικάρει — τα skeletons πρέπει να μένουν ορατά. */
+  const summarySelectionSettling = summaryCollections !== summaryCollectionsForQuery;
+  const summaryEnabled = Boolean(summaryDatabase) && summaryCollectionsForQuery.length > 0;
   // Ταξινομημένα collections μέσα στο key: αλλαγή σειράς δεν είναι αλλαγή dataset.
-  const summaryCollectionsKey = useMemo(() => [...summaryCollections].sort(), [summaryCollections]);
+  const summaryCollectionsKey = useMemo(() => [...summaryCollectionsForQuery].sort(), [summaryCollectionsForQuery]);
 
   const summaryQueries = useQueries({
     queries: [
       {
         queryKey: ["summary", "calls", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchAllCalls(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchAllCalls(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled,
       },
       {
         queryKey: ["summary", "dataCalls", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchDataCalls(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchDataCalls(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled,
       },
       {
         // "Technology mix" row δεν είναι στο COMPACT_VOICE_ROW_ORDER — άχρηστο σε compact
         // (βλ. σχόλιο στο summaryCompact state).
         queryKey: ["summary", "technologyMix", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchTechnologyMix(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchTechnologyMix(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled && !summaryCompact,
       },
       {
         queryKey: ["summary", "servingBandTech", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchServingBandTech(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchServingBandTech(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled,
       },
       {
         queryKey: ["summary", "cellBandCount", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchCellBandCount(summaryDatabase, summaryCollections),
+        queryFn: ({ signal }) => fetchCellBandCount(summaryDatabase, summaryCollectionsForQuery, { signal }),
         enabled: summaryEnabled,
       },
       {
         queryKey: ["summary", "srvcc", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchSrvcc(summaryDatabase, summaryCollections),
+        queryFn: ({ signal }) => fetchSrvcc(summaryDatabase, summaryCollectionsForQuery, { signal }),
         enabled: summaryEnabled,
       },
       {
         queryKey: ["summary", "ookla", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchOokla(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchOokla(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled,
       },
       {
         queryKey: ["summary", "ping1000", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchPing1000(summaryDatabase, summaryCollections, []),
+        // aggregate=true: το Summary θέλει μόνο Total/Success Rate/Mean RTT ανά operator
+        // & packet size. Τα raw packets ήταν 63k γραμμές / ~20 MB ανά βάση και πάγωναν
+        // τον browser — βλ. fetchPing1000.
+        queryFn: ({ signal }) => fetchPing1000(summaryDatabase, summaryCollectionsForQuery, [], { signal }, true),
         enabled: summaryEnabled,
       },
       {
         // "Interactivity (eGaming)" section καταργείται εντελώς σε compact (βλ.
         // COMPACT_EXCLUDED_SECTION_LABELS στο SummaryTab.tsx) — άχρηστο fetch.
         queryKey: ["summary", "interactivity", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchInteractivity(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchInteractivity(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled && !summaryCompact,
       },
       {
         // "DNS Resolution" section, ίδιο σκεπτικό.
         queryKey: ["summary", "dns", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchDns(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchDns(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled && !summaryCompact,
       },
       {
         // Capacity (grx)/(akamai) breakdown: ρητά Full-only (βλ. σχόλιο στο
         // COMPACT_EXCLUDED_SECTION_LABELS), άχρηστο fetch σε compact.
         queryKey: ["summary", "capacityLink", summaryDatabase, summaryCollectionsKey],
-        queryFn: () => fetchCapacityLink(summaryDatabase, summaryCollections, []),
+        queryFn: ({ signal }) => fetchCapacityLink(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
         enabled: summaryEnabled && !summaryCompact,
       },
     ],
@@ -777,22 +816,39 @@ const Index = () => {
    * capacity_link), οπότε το `data` είναι pending όσο έστω μία από αυτές τρέχει — αλλιώς
    * ο πίνακας θα εμφανιζόταν μισός σαν να ήταν πλήρης.
    */
-  const voicePending = summaryEnabled && summaryVoiceQuery.isPending;
+  // Όσο τρέχει το debounce window (summarySelectionSettling) τα queries ΔΕΝ έχουν ξεκινήσει
+  // ακόμα για τη νέα επιλογή, οπότε χωρίς αυτό ο πίνακας θα έδειχνε τα ΠΑΛΙΑ δεδομένα σαν
+  // τελειωμένα για ~600ms μετά το κλικ.
+  const voicePending = summarySelectionSettling || (summaryEnabled && summaryVoiceQuery.isPending);
   const dataPending =
-    summaryEnabled &&
-    [
-      summaryDataQuery,
-      summaryOoklaQuery,
-      summaryPing1000Query,
-      summaryInteractivityQuery,
-      summaryDnsQuery,
-      summaryCapacityLinkQuery,
-    ].some((query) => isQueryLoading(query));
-  const technologyMixPending = summaryEnabled && isQueryLoading(summaryTechnologyMixQuery);
-  const servingBandTechPending = summaryEnabled && summaryServingBandTechQuery.isPending;
-  const summarySourcesDone = summaryEnabled
-    ? summaryQueries.filter((query) => !isQueryLoading(query)).length
-    : summaryQueries.length;
+    summarySelectionSettling ||
+    (summaryEnabled &&
+      [
+        summaryDataQuery,
+        summaryOoklaQuery,
+        summaryPing1000Query,
+        summaryInteractivityQuery,
+        summaryDnsQuery,
+        summaryCapacityLinkQuery,
+      ].some((query) => isQueryLoading(query)));
+  const technologyMixPending = summarySelectionSettling || (summaryEnabled && isQueryLoading(summaryTechnologyMixQuery));
+  const servingBandTechPending = summarySelectionSettling || (summaryEnabled && summaryServingBandTechQuery.isPending);
+  const summarySourcesDone = summarySelectionSettling
+    ? 0
+    : summaryEnabled
+      ? summaryQueries.filter((query) => !isQueryLoading(query)).length
+      : summaryQueries.length;
+  /**
+   * Πόσες πηγές τα παράτησαν (timeout/δίκτυο/SQL error). Το SummaryTab το δείχνει σαν chip
+   * με Retry αντί να υποβαθμίζεται σιωπηλά — πριν, μια πηγή που έκανε timeout φαινόταν
+   * ίδια με "δεν υπάρχουν δεδομένα".
+   */
+  const summarySourcesFailed = summaryEnabled ? summaryQueries.filter((query) => query.isError).length : 0;
+  const retrySummarySources = useCallback(() => {
+    for (const query of summaryQueries) {
+      if (query.isError) void query.refetch();
+    }
+  }, [summaryQueries]);
 
   // Memo σε primitives (όχι στο summaryQueries array, που αλλάζει ταυτότητα κάθε render)
   // ώστε το prop να μένει σταθερό όσο δεν αλλάζει πραγματικά κάποιο loading state.
@@ -804,8 +860,17 @@ const Index = () => {
       servingBandTech: servingBandTechPending,
       done: summarySourcesDone,
       totalSources: summaryQueries.length,
+      failed: summarySourcesFailed,
     }),
-    [voicePending, dataPending, technologyMixPending, servingBandTechPending, summarySourcesDone, summaryQueries.length],
+    [
+      voicePending,
+      dataPending,
+      technologyMixPending,
+      servingBandTechPending,
+      summarySourcesDone,
+      summaryQueries.length,
+      summarySourcesFailed,
+    ],
   );
 
   // "Ookla DL"/"Ookla UL" (mapOoklaRowsToDataCallRows), "Ping 40"/"Ping 800"/"Ping 1000"
@@ -939,11 +1004,15 @@ const Index = () => {
     return { voiceIds, dataIds };
   }, [fileGroups, selectedFileGroupIds]);
 
+  const allCallsSearchQuery = allCallsSearch.trim().toLowerCase();
+
   const filteredAllCallsRows = useMemo(() => {
     return allCallsRows.filter((row) => {
       // Filter by session valid
       if (sessionValidFilter === "1" && row.isValid !== 1) return false;
-      if (sessionValidFilter === "0" && row.isValid !== 0) return false;
+      // Το «Invalid» δείχνει ό,τι βγαίνει με κόκκινο badge — οι System Release είναι κι αυτές isValid=0,
+      // αλλά έχουν δικό τους (μωβ) badge και δικό τους φίλτρο status, οπότε δεν μπαίνουν εδώ.
+      if (sessionValidFilter === "0" && (row.isValid !== 0 || isSystemReleaseStatus(row.status))) return false;
 
       // Filter by status
       if (statusFilters.length > 0) {
@@ -953,18 +1022,40 @@ const Index = () => {
         if (!hasMatchingStatus) return false;
       }
 
+      // Filter by location chips (Data / Free + GSM (Voice)) — ίδιο φίλτρο με τη data λίστα.
+      if (locationTableFilter.length > 0 && !locationTableFilter.includes(row.Location ?? "")) return false;
+
       // Filter by file group (time-clustered run)
       if (selectedFileGroupSessionIds && !selectedFileGroupSessionIds.voiceIds.has(row.SessionId)) return false;
 
+      // Free-text search across the columns shown in the table
+      if (allCallsSearchQuery) {
+        const haystack = [
+          row.Location,
+          row.SessionId,
+          row.technology,
+          row.callMode,
+          row.callType,
+          row.callDir,
+          row.status,
+          row.comment,
+          row.CollectionName,
+        ]
+          .filter(Boolean)
+          .join(" ")
+          .toLowerCase();
+        if (!haystack.includes(allCallsSearchQuery)) return false;
+      }
+
       return true;
     });
-  }, [allCallsRows, sessionValidFilter, statusFilters, selectedFileGroupSessionIds]);
+  }, [allCallsRows, sessionValidFilter, statusFilters, locationTableFilter, selectedFileGroupSessionIds, allCallsSearchQuery]);
 
   const filteredCallRecords = useMemo(() => {
-    if (sessionValidFilter === "all" && statusFilters.length === 0 && selectedFileGroupIds.length === 0) return callRecords;
+    if (sessionValidFilter === "all" && statusFilters.length === 0 && locationTableFilter.length === 0 && selectedFileGroupIds.length === 0) return callRecords;
     const validIds = new Set(filteredAllCallsRows.map((r) => r.SessionId));
     return callRecords.filter((c) => validIds.has(c.callId));
-  }, [callRecords, filteredAllCallsRows, sessionValidFilter, statusFilters, selectedFileGroupIds]);
+  }, [callRecords, filteredAllCallsRows, sessionValidFilter, statusFilters, locationTableFilter, selectedFileGroupIds]);
 
   const locationSummary = useMemo(() => {
     const map = new Map<string, { complete: number; drop: number; fail: number; sysRelease: number; total: number }>();
@@ -1113,10 +1204,11 @@ const Index = () => {
   const locationGroups = useMemo(() => {
     const lower = (s: string) => s.toLowerCase();
     const dataLocs = locations.filter((l) => lower(l).includes("data"));
-    const freeGsmLocs = locations.filter((l) => lower(l).includes("free") || lower(l).includes("gsm"));
+    // Voice συσκευές: η location περιέχει "free", "gsm" ή "voice" (ίδιο κανόνα με resolveMode στο attachmentC).
+    const freeGsmLocs = locations.filter((l) => /free|gsm|voice/.test(lower(l)));
     const groups: { group: string; locs: string[] }[] = [];
     if (dataLocs.length > 0) groups.push({ group: "Data", locs: dataLocs });
-    if (freeGsmLocs.length > 0) groups.push({ group: "Free + GSM", locs: freeGsmLocs });
+    if (freeGsmLocs.length > 0) groups.push({ group: "Free + GSM (Voice)", locs: freeGsmLocs });
     return groups;
   }, [locations]);
 
@@ -1363,7 +1455,7 @@ const Index = () => {
             </div>
           </div>
 
-          {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
+          {!["queries", "query-map", "map2", "validation", "Summary", "manual"].includes(activeTab) && (
             <div className="flex items-center gap-2">
               {/* Edit Filters button */}
               <button
@@ -1392,7 +1484,7 @@ const Index = () => {
           )}
 
           <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-            {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
+            {!["queries", "query-map", "map2", "validation", "Summary", "manual"].includes(activeTab) && (
               <button
                 type="button"
                 onClick={clearCallsFilters}
@@ -1417,7 +1509,7 @@ const Index = () => {
                 </motion.button>
               )}
             </AnimatePresence>
-            {!["queries", "query-map", "map2", "validation", "Summary"].includes(activeTab) && (
+            {!["queries", "query-map", "map2", "validation", "Summary", "manual"].includes(activeTab) && (
               <span className="hidden xl:inline">{filteredCallRecords.length} calls recorded</span>
             )}
           </div>
@@ -1449,8 +1541,8 @@ const Index = () => {
               <TabsTrigger value="map2" className="gap-1.5 text-xs">
                 <MapPin className="h-3.5 w-3.5 text-cyan-400" /> Antennas
               </TabsTrigger>
-              <TabsTrigger value="historic" className="gap-1.5 text-xs">
-                <History className="h-3.5 w-3.5 text-yellow-400" /> Historic
+              <TabsTrigger value="manual" className="gap-1.5 text-xs">
+                <BookOpen className="h-3.5 w-3.5 text-sky-400" /> User Manual
               </TabsTrigger>
             </TabsList>
           </div>
@@ -1481,6 +1573,7 @@ const Index = () => {
               onToggleCollection={toggleSummaryCollection}
               onSelectAllCollections={selectAllSummaryCollections}
               onClearCollections={clearSummaryCollectionSelection}
+              onRetryFailedSources={retrySummarySources}
             />
           </TabsContent>
 
@@ -1941,10 +2034,37 @@ const Index = () => {
                   )}
                 </div>
 
+                <div className="border-b border-border bg-muted/10 px-3 py-2 sm:px-4">
+                  <div className="relative max-w-sm">
+                    <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground" />
+                    <input
+                      type="text"
+                      value={allCallsSearch}
+                      onChange={(e) => setAllCallsSearch(e.target.value)}
+                      placeholder="Search location, status, comment…"
+                      className="w-full rounded-md border border-border bg-background py-1.5 pl-8 pr-7 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-2 focus:ring-primary/40"
+                    />
+                    {allCallsSearch && (
+                      <button
+                        type="button"
+                        onClick={() => setAllCallsSearch("")}
+                        aria-label="Clear search"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                      >
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </div>
+
                 <div className="sm:hidden">
                   {!callsLoading && filteredAllCallsRows.length === 0 && (
                     <p className="px-4 py-8 text-center text-xs text-muted-foreground">
-                      {allCallsRows.length === 0 ? "Select a collection to load calls." : "No rows match the selected filters."}
+                      {allCallsRows.length === 0
+                        ? "Select a collection to load calls."
+                        : allCallsSearch
+                          ? "No rows match your search."
+                          : "No rows match the selected filters."}
                     </p>
                   )}
 
@@ -2060,7 +2180,11 @@ const Index = () => {
                       {!callsLoading && filteredAllCallsRows.length === 0 && (
                         <tr>
                           <td colSpan={13} className="px-2 py-6 text-center text-muted-foreground">
-                            {allCallsRows.length === 0 ? "Select a collection to load calls." : "No rows match the selected filters."}
+                            {allCallsRows.length === 0
+                              ? "Select a collection to load calls."
+                              : allCallsSearch
+                                ? "No rows match your search."
+                                : "No rows match the selected filters."}
                           </td>
                         </tr>
                       )}
@@ -2217,6 +2341,7 @@ const Index = () => {
                   call={selectedCall}
                   database={selectedDatabase}
                   onBack={() => setCallsSubTab("list")}
+                  onCommentSaved={handleCommentSaved}
                   onNavigateToCall={(sessionId) => {
                     const record = callRecords.find((c) => String(c.callId) === String(sessionId));
                     if (record) {
@@ -2290,14 +2415,8 @@ const Index = () => {
             />
           </TabsContent>
 
-          <TabsContent value="historic">
-            <div className="flex flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-border bg-card py-24 text-center">
-              <History className="h-8 w-8 text-muted-foreground" />
-              <p className="text-sm font-medium text-foreground">Historic</p>
-              <p className="max-w-sm text-xs text-muted-foreground">
-                This section is coming soon.
-              </p>
-            </div>
+          <TabsContent value="manual">
+            <UserManualTab />
           </TabsContent>
         </Tabs>
       </main>

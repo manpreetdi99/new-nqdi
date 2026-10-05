@@ -10,6 +10,7 @@ import {
   buildHttpsSitesTotal,
   buildPingTotal,
   buildReportPeriod,
+  formatReportWeeks,
   excludeCdrPingDuplicates,
   buildServingBandTechTable,
   buildSrvccTable,
@@ -745,18 +746,34 @@ describe("PS data KPIs", () => {
     ...overrides,
   });
 
-  it("mapDnsRowsToDataCallRows expands each aggregated (location, status, count) group into `count` DataCallRows", () => {
+  it("mapDnsRowsToDataCallRows keeps ONE row per aggregated group, carrying `count` as weight", () => {
     const mapped = mapDnsRowsToDataCallRows([
       dnsRow({ status: "Success", count: 3, avg: 20 }),
       dnsRow({ status: "Failed", count: 1, avg: 100 }),
     ]);
 
-    expect(mapped).toHaveLength(4);
-    expect(mapped.filter((r) => r.scoringStatus === "Success")).toHaveLength(3);
-    expect(mapped.filter((r) => r.scoringStatus === "Failed")).toHaveLength(1);
+    // Μία γραμμή ανά group, ΟΧΙ `count` αντίγραφα: 6 γραμμές DNS του PEL_26H2 έφτιαχναν
+    // 169.381 αντικείμενα και πάγωναν το tab (βλ. σχόλιο στο mapDnsRowsToDataCallRows).
+    expect(mapped).toHaveLength(2);
+    expect(mapped.map((r) => r.weight)).toEqual([3, 1]);
     expect(mapped.every((r) => r.testType === "DNS")).toBe(true);
-    // Κάθε αντίγραφο ενός group κρατάει το group's avg σαν "duration" (πάνω στο pingRttAvg).
-    expect(mapped.filter((r) => r.scoringStatus === "Success").every((r) => r.pingRttAvg === 20)).toBe(true);
+    // Κάθε group κρατάει το avg του σαν "duration" (πάνω στο pingRttAvg).
+    expect(mapped.find((r) => r.scoringStatus === "Success")?.pingRttAvg).toBe(20);
+  });
+
+  it("weights count/success/failed by row.weight — ένα aggregated group δεν μετράει σαν ένα test", () => {
+    const [section] = buildDataSections([
+      dataTest({ testType: "Ping 1000", direction: null, scoringStatus: "success", pingRttAvg: 10, weight: 50, metricSamples: 50 }),
+      // Failed group: μετράει στο Total/Failed, αλλά δεν έχει RTT να μπει στον μέσο όρο.
+      dataTest({ testType: "Ping 1000", direction: null, scoringStatus: "failed", pingRttAvg: null, weight: 5, metricSamples: 0 }),
+    ]);
+
+    expect(section.total.total).toBe(55);
+    expect(section.total.success).toBe(50);
+    expect(section.total.failed).toBe(5);
+    expect(section.total.metrics[0].label).toBe("Mean RTT");
+    expect(section.total.metrics[0].value).toBeCloseTo(10, 6);
+    expect(section.total.metrics[0].samples).toBe(50);
   });
 
   it("feeds DNS rows through buildDataSections into its own 'DNS' section, weighted-averaging across (location, status) groups", () => {
@@ -809,6 +826,23 @@ describe("PS data KPIs", () => {
       "yahoo.com",
       "youtube.com",
       "YouTube Service",
+    ]);
+  });
+
+  it("sorts a generic DL/UL site test (e.g. 'Sport24 DL', walk DBs) inside Ε4, right after the known sites — not after Ε5", () => {
+    const sections = buildDataSections([
+      dataTest({ testType: "YouTube Service", direction: null }),
+      dataTest({ testType: "Sport24 DL", direction: null }),
+      dataTest({ testType: "https://www.amazon.com", direction: null }),
+      dataTest({ testType: "Kepler", direction: null }),
+    ]);
+
+    expect(sections.map((s) => s.key)).toEqual(["Kepler", "https://www.amazon.com", "Sport24 DL", "YouTube Service"]);
+    expect(sections.map((s) => s.group)).toEqual([
+      "Ε3 · Browser engines",
+      "Ε4 · HTTPS sites",
+      "Ε4 · HTTPS sites",
+      "Ε5 · Video streaming",
     ]);
   });
 
@@ -877,15 +911,15 @@ describe("PS data KPIs", () => {
     const sections = buildDataSections(rows);
 
     // Ε1 · Bulk throughput -> Ε2 · Latency/Responsiveness -> Ε3 · Browser engines ->
-    // Ε4 · HTTPS sites (αλφαβητικά) -> Ε5 · Video streaming. Το Ookla μπαίνει ΜΕΤΑ το
-    // HTTP Transfer μέσα στο Ε1 (όχι πριν, όπως στην παλιά επίπεδη λίστα).
+    // Ε4 · HTTPS sites (αλφαβητικά) -> Ε5 · Video streaming. Το Ookla μπαίνει ΠΡΙΝ από το
+    // HTTP Transfer μέσα στο Ε1.
     expect(sections.map((s) => s.key)).toEqual([
       "Capacity DL 10GB",
       "Capacity UL 1GB",
-      "HTTP Transfer (DL) 10MB",
-      "HTTP Transfer (UL) 5MB",
       "Ookla DL",
       "Ookla UL",
+      "HTTP Transfer (DL) 10MB",
+      "HTTP Transfer (UL) 5MB",
       "FTP DL",
       "Ping",
       "Ping 40 B",
@@ -1407,5 +1441,17 @@ describe("report period", () => {
 
   it("survives an empty dataset", () => {
     expect(buildReportPeriod([])).toEqual({ from: null, to: null, week: null, weekTo: null });
+    expect(formatReportWeeks(buildReportPeriod([]))).toBe("—");
+  });
+
+  it("shows a week range when the measurements span several weeks (all collections of a DB)", () => {
+    const single = buildReportPeriod(["2026-07-13T08:00:00", "2026-07-15T10:00:00"]);
+    expect(formatReportWeeks(single)).toBe("29");
+
+    // 2026-01-27 -> ISO week 5, 2026-07-21 -> ISO week 30.
+    const range = buildReportPeriod(["2026-07-21T10:00:00", "2026-01-27T08:00:00", "2026-04-01T12:00:00"]);
+    expect(range.week).toBe(5);
+    expect(range.weekTo).toBe(30);
+    expect(formatReportWeeks(range)).toBe("5 – 30");
   });
 });
