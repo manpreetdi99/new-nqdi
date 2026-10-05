@@ -1529,8 +1529,7 @@ export async function fetchMarkers(
 
 /**
  * Historic tab: read-only snapshot από το BI data warehouse (BI_VOICE/BI_DATA), ΕΝΑ
- * campaign (CollectionName) τη φορά — βλ. backend/routers/historic.py +
- * src/components/BI_DW_SYSTEM_PROMPT.md. Ξεχωριστό dataset από τα fetchAllCalls/
+ * campaign (CollectionName) τη φορά — βλ. backend/routers/historic.py. Ξεχωριστό dataset από τα fetchAllCalls/
  * fetchDataCalls παραπάνω: εκεί ο χρήστης διαλέγει `database` (swissqual-srvsa, live
  * per-campaign DB)· εδώ η πηγή είναι πάντα το warehouse, οπότε τα endpoints παίρνουν
  * μόνο `collection`.
@@ -1570,13 +1569,25 @@ export async function fetchHistoricScorecard(collection: string): Promise<Histor
   return requestJson(`/api/historic/scorecard?${params.toString()}`);
 }
 
-export interface HistoricVoiceRow {
+/**
+ * Voice KPIs ανά operator, ίδιοι ορισμοί με τις σελίδες «Comparison Voice …» του .pbix — βλ.
+ * backend/routers/historic.py::_voice_kpis. successRate/afr = COMPLETED/FAILED ÷ CALL ATTEMPTS,
+ * dcr = DROPPED ÷ (COMPLETED + DROPPED). CST σε δευτερόλεπτα.
+ */
+interface HistoricVoiceKpis {
   operator: string;
   attempts: number;
-  cssr: number | null;
+  successRate: number | null;
+  afr: number | null;
   dcr: number | null;
-  completionRate: number | null;
   mos: number | null;
+  p10Mos: number | null;
+  avgCst: number | null;
+  p90Cst: number | null;
+}
+
+/** Free voice (Mobile-to-Mobile). voltePct: από CustomCallMode, όχι measure του report. */
+export interface HistoricVoiceRow extends HistoricVoiceKpis {
   voltePct: number | null;
 }
 
@@ -1586,21 +1597,8 @@ export async function fetchHistoricVoice(collection: string): Promise<HistoricVo
   return json.rows;
 }
 
-/**
- * GSM voice (Mobile-to-Fixed) KPIs — βλ. backend/routers/historic.py::get_historic_voice_gsm.
- * Ίδιο σχήμα με HistoricVoiceRow (FREE/M→M), χωρίς voltePct (χαρακτηριστικό μόνο του FREE
- * axis) και με avgCallSetupTime αντ' αυτού (MO_CallSetupTime — μονάδα όπως είναι αποθηκευμένη
- * στη βάση, μη επαληθευμένη).
- */
-export interface HistoricVoiceGsmRow {
-  operator: string;
-  attempts: number;
-  cssr: number | null;
-  dcr: number | null;
-  completionRate: number | null;
-  mos: number | null;
-  avgCallSetupTime: number | null;
-}
+/** GSM voice (Mobile-to-Fixed) — ίδιο σχήμα με το Free, χωρίς voltePct. */
+export type HistoricVoiceGsmRow = HistoricVoiceKpis;
 
 export async function fetchHistoricVoiceGsm(collection: string): Promise<HistoricVoiceGsmRow[]> {
   const params = new URLSearchParams({ collection });
@@ -1609,7 +1607,8 @@ export async function fetchHistoricVoiceGsm(collection: string): Promise<Histori
 }
 
 /** YouTube/video KPIs — βλ. backend/routers/historic.py::get_historic_video. `freezingPct`
- * είναι το "test" measure (AVERAGE(Youtube[FreezingTimePerc])) του blueprint §04/§09. */
+ * είναι το "test" measure (AVERAGE(Youtube[FreezingTimePerc])) ήδη ×100 σε ποσοστό· `avgVmos`
+ * από το TestQualityAvg (αντιστοίχιση του Youtube[Vmos] ανεπιβεβαίωτη, βλ. backend). */
 export interface HistoricVideoRow {
   operator: string;
   attempts: number;
@@ -1652,10 +1651,11 @@ export async function fetchHistoricData(collection: string): Promise<HistoricDat
 export interface HistoricTrendOperatorRow {
   operator: string;
   totalScore: number | null;
-  cssr: number | null;
+  /** Success Rate (%) του M→M = COMPLETED ÷ COUNT(callStatus). */
+  successRate: number | null;
   avgThrpDlMbps: number | null;
   deltaTotalScore: number | null;
-  deltaCssr: number | null;
+  deltaSuccessRate: number | null;
   deltaAvgThrpDlMbps: number | null;
 }
 
@@ -1670,6 +1670,143 @@ export interface HistoricTrendScope {
 export async function fetchHistoricTrend(): Promise<HistoricTrendScope[]> {
   const json = await requestJson<{ scopes: HistoricTrendScope[] }>("/api/historic/trend");
   return json.scopes;
+}
+
+/**
+ * Historic — οι σελίδες 01–05 του .pbix (GREECE MAP, GRADES, VOICE M→F / M→M, RADIO TECH-VOICE
+ * CODECS), βλ. backend/routers/historic_pages.py. Φίλτρο = οι slicers της σελίδας: Scope
+ * (υποχρεωτικό) + προαιρετικά Area / Category / CollectionName — pooled πάνω σε όλα τα
+ * collections που ταιριάζουν, όχι ΕΝΑ collection όπως τα endpoints παραπάνω.
+ */
+export interface HistoricPageFilters {
+  scope: string;
+  area?: string;
+  category?: string;
+  collection?: string;
+}
+
+export interface HistoricFilterCollection {
+  name: string;
+  area: string;
+  collection: string;
+  category: string;
+  scope: string;
+}
+
+export interface HistoricFilterOptions {
+  /** Πιο πρόσφατο πρώτα· τα μη χρονολογικά στο τέλος. */
+  scopes: string[];
+  collections: HistoricFilterCollection[];
+}
+
+export async function fetchHistoricFilters(): Promise<HistoricFilterOptions> {
+  return requestJson("/api/historic/filters");
+}
+
+const historicPageParams = (filters: HistoricPageFilters, extra: Record<string, string> = {}) => {
+  const params = new URLSearchParams({ ...extra, scope: filters.scope });
+  if (filters.area) params.set("area", filters.area);
+  if (filters.category) params.set("category", filters.category);
+  if (filters.collection) params.set("collection", filters.collection);
+  return params.toString();
+};
+
+export interface HistoricMapCollection {
+  name: string;
+  area: string;
+  collection: string;
+  category: string;
+  /** Κέντρο βάρους των σημείων κλήσεων — null όταν το collection δεν έχει voice σημεία. */
+  lat: number | null;
+  lon: number | null;
+  scores: Record<string, { total: number | null; voice: number | null; data: number | null }>;
+  /** BI_BEST_OP_SCORE ανά CATEGORY (TOTAL/VOICE/DATA)· >1 operators = ισοβαθμία. */
+  winners: Record<string, { operators: string[]; score: number | null }>;
+}
+
+export interface HistoricGreeceMap {
+  collections: HistoricMapCollection[];
+  kpis: {
+    firstDate: string | null;
+    lastDate: string | null;
+    minutes: number | null;
+    dataGb: number | null;
+    kms: number | null;
+  };
+}
+
+export async function fetchHistoricGreeceMap(filters: HistoricPageFilters): Promise<HistoricGreeceMap> {
+  return requestJson(`/api/historic/greece_map?${historicPageParams(filters)}`);
+}
+
+export type HistoricGradeKey = "gsm" | "free" | "http" | "cap" | "browsing" | "yt" | "ping";
+
+export interface HistoricGradeRow {
+  name: string;
+  collection: string;
+  operator: string;
+  /** WEIGHT της κατηγορίας (MAJOR CITIES 85, MOTORWAYS/MAJOR TOWNS 65, …). */
+  weight: number;
+  /** SUB_SCORE_* (0–1). */
+  sub: Record<HistoricGradeKey, number | null>;
+}
+
+export async function fetchHistoricGrades(filters: HistoricPageFilters): Promise<HistoricGradeRow[]> {
+  const json = await requestJson<{ rows: HistoricGradeRow[] }>(`/api/historic/grades?${historicPageParams(filters)}`);
+  return json.rows;
+}
+
+export type HistoricVoiceKind = "mtof" | "mtom";
+
+export interface HistoricVoicePageOperator {
+  operator: string;
+  attempts: number;
+  completed: number;
+  failed: number;
+  dropped: number;
+  successRate: number | null;
+  afr: number | null;
+  dcr: number | null;
+  avgCst: number | null;
+  p90Cst: number | null;
+  mos: number | null;
+  p10Mos: number | null;
+  lowMosPct: number | null;
+  /** M→F μόνο: Avg(ThreeGMO), CSFB 3G MO setup (s). */
+  threeGMo?: number | null;
+  /** M→M μόνο. */
+  interHoSr?: number | null;
+  intraHoSr?: number | null;
+  srvccDurationMs?: number | null;
+  avgCst11000?: number | null;
+  p90Cst11000?: number | null;
+}
+
+export interface HistoricVoicePage {
+  operators: HistoricVoicePageOperator[];
+  callModes: { operator: string; mode: string; count: number }[];
+  failures: { operator: string; status: "Dropped" | "Failed"; lat: number; lon: number; collection: string }[];
+}
+
+export async function fetchHistoricVoicePage(kind: HistoricVoiceKind, filters: HistoricPageFilters): Promise<HistoricVoicePage> {
+  return requestJson(`/api/historic/voice_page?${historicPageParams(filters, { kind })}`);
+}
+
+export interface HistoricMixRow {
+  operator: string;
+  parts: { key: string; value: number; mos: number | null }[];
+}
+
+export interface HistoricRadioCodecs {
+  gsmBands: HistoricMixRow[];
+  freeTech: HistoricMixRow[];
+  gsmCodecs: HistoricMixRow[];
+  freeCodecs: HistoricMixRow[];
+  evsRates: HistoricMixRow[];
+}
+
+export async function fetchHistoricRadioCodecs(filters: HistoricPageFilters): Promise<HistoricRadioCodecs> {
+  return requestJson(`/api/historic/radio_codecs?${historicPageParams(filters)}`);
 }
 
 export interface RunMapResponse {

@@ -18,6 +18,7 @@
   benchmark        -> σελίδα Query Builder / Benchmark
   validation       -> σελίδα Validation (run_map)
   historic         -> σελίδα Historic: BI_VOICE/BI_DATA warehouse snapshot ανά campaign
+  historic_pages   -> σελίδα Historic: GREECE MAP / GRADES / VOICE M->F, M->M / RADIO TECH-CODECS
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,6 +39,7 @@ from routers import (
     data_calls,
     filters,
     historic,
+    historic_pages,
     validation,
 )
 
@@ -73,5 +75,6 @@ for _module in (
     benchmark,
     validation,
     historic,
+    historic_pages,
 ):
     app.include_router(_module.router)
