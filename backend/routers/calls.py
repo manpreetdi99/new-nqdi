@@ -1150,12 +1150,13 @@ def get_capacity_link(
     collection: list[str] | None = Query(default=None),
     location: list[str] | None = Query(default=None),
 ):
-    """Ε1 · Bulk throughput — breakdown του "Capacity DL 10GB"/"Capacity UL 1GB" ανά
-    server ("Link": grx/akamai) — βλ. "θέλω να μου το σπάσεις Link grx και akamai"
-    (2026-08-31). ΔΕΝ αντικαθιστά τις υπάρχουσες "Capacity" γραμμές του CDRCombined
-    (/api/data_calls) — αυτές μένουν όπως ήταν, η βάση των Ε1 compact directional
-    tables (βλ. buildDirectionalDataSections). Αυτό εδώ είναι ένα ΕΠΙΠΛΕΟΝ breakdown,
-    ίδιο query με το ήδη υπάρχον "CAPACITY – DL/UL Throughput (grx+akamai+ookla)"
+    """Ε1 · Bulk throughput — "Capacity DL 10GB"/"Capacity UL 1GB" ΚΑΙ το breakdown τους
+    ανά server ("Link": grx/akamai) — βλ. "θέλω να μου το σπάσεις Link grx και akamai"
+    (2026-08-31). Από 2026-10-06 είναι η ΜΟΝΗ πηγή του Capacity στο Summary (grx+akamai
+    μαζί = το κύριο section): οι "Capacity" γραμμές του CDRCombined (/api/data_calls)
+    έδιναν Sustainable Throughput αντί για το Mean Application Capacity Throughput
+    (ThroughputGet/Put του last block) του reference — βλ. replaceCdrCapacityWithRaw.
+    Ίδιο query με το ήδη υπάρχον "CAPACITY – DL/UL Throughput (grx+akamai+ookla)"
     saved query του QueryMap (βλ. src/components/QueryMap.tsx — CAPACITY TESTS
     UNION branch), εδώ χωρίς το APP TESTS union branch και χωρίς Position/lat-long
     (δεν χρειάζεται χάρτης εδώ, μόνο aggregation ανά operator/link).
@@ -1167,11 +1168,10 @@ def get_capacity_link(
     bytes/sec (ίδιο με το QueryMap's *8.0/1000000.0 -> Mbps) — εδώ *8.0/1000.0 για
     kbps, ίδια μονάδα με το CDRCombined "Capacity_Sustainable Throughput (kbps)".
 
-    Το frontend μετατρέπει αυτά τα rows σε DataCallRow σχήμα (testType="Capacity
-    grx"/"Capacity akamai") ώστε να μπουν στο ίδιο buildDataSections pipeline, σαν
-    ΕΠΙΠΛΕΟΝ sections δίπλα στα κύρια Capacity DL/UL — μόνο στο Full mode (βλ.
-    mapCapacityLinkRowsToDataCallRows στο attachmentC.ts, COMPACT_EXCLUDED_SECTION_LABELS
-    στο SummaryTab.tsx).
+    Το frontend μετατρέπει κάθε row σε ΔΥΟ DataCallRows: testType="Capacity" (κύριο
+    Capacity DL/UL section, grx+akamai μαζί) και testType="Capacity grx"/"Capacity
+    akamai" (breakdown, μόνο στο Full mode) — βλ. mapCapacityLinkRowsToDataCallRows στο
+    attachmentC.ts, COMPACT_EXCLUDED_SECTION_LABELS στο SummaryTab.tsx.
     """
     try:
         conn = get_connection(database)
@@ -1201,7 +1201,12 @@ def get_capacity_link(
             INNER JOIN FileList fl                    ON fl.FileId = s.FileId
             INNER JOIN ResultsCapacityTest rct         ON rct.SessionId = s.SessionId
             INNER JOIN ResultsCapacityTestParameters rctp ON rctp.TestId = rct.TestId
+            INNER JOIN TestInfo ti                     ON ti.TestId = rct.TestId
             WHERE s.Valid = 1
+              -- TestInfo.Valid=1 όπως το "CAPACITY RAW.sql" reference: κόβει τα user-aborted
+              -- tests (ErrorCode 1001, TestInfo.Valid=0) που αλλιώς μετρούσαν σαν failed —
+              -- CYC_TINOS_TOURISTIC AREAS_2026H2: 52 αντί για 51 Total Tests ανά operator.
+              AND ti.Valid = 1
               AND rct.LastBlock = 1
               AND (rctp.Direction LIKE 'get%' OR rctp.Direction LIKE 'put%')
         """
