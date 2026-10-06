@@ -228,13 +228,15 @@ export const COLOR_SCHEMES: Record<string, ColorScheme> = {
     label: "OOKLA DL Throughput (Mbps)",
     suggestCol: "ookla_dl",
     buckets: [
-      { min: 300, max: 100000, color: "#1B5E20", label: "≥ 300 Mbps" },
-      { min: 100, max: 300,   color: "#8BC34A", label: "100–300 Mbps" },
+      { min: 300, max: 100000, color: "#006400", label: "≥ 300 Mbps" },
+      { min: 100, max: 300,   color: "#9AE34B", label: "100–300 Mbps" },
       { min: 50,  max: 100,   color: "#FFEB00", label: "50–100 Mbps" },
       { min: 20,  max: 50,    color: "#FF8A00", label: "20–50 Mbps" },
-      { min: 10,  max: 20,    color: "#FF0000", label: "10–20 Mbps" },
-      { min: 1,   max: 10,    color: "#7A0A00", label: "1–10 Mbps" },
-      { min: 0,   max: 1,     color: "#000000", label: "0–1 Mbps" },
+      { min: 10,  max: 20,    color: "#E00000", label: "10–20 Mbps" },
+      { min: 1,   max: 10,    color: "#A0522D", label: "1–10 Mbps" },
+      { min: 0.001,   max: 1,     color: "#5A3214", label: "0–1 Mbps" },
+      // failed tests: το SQL δίνει dl_mbps = 0 (ISNULL(..., 0)) — το max είναι exclusive, άρα 0 → [0, 0.001)
+      { min: 0,     max: 0.000000001,  color: "#000000", label: "failed" },
     ],
   },
   ookla_ul: {
