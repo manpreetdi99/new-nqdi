@@ -19,6 +19,8 @@
   validation       -> σελίδα Validation (run_map)
   historic         -> σελίδα Historic: BI_VOICE/BI_DATA warehouse snapshot ανά campaign
   historic_pages   -> σελίδα Historic: GREECE MAP / GRADES / VOICE M->F, M->M / RADIO TECH-CODECS
+  historic_data_pages -> σελίδα Historic: DATA (Browsing … Video), DATA/NR maps, NR tech, scanner
+  historic_comparison -> σελίδα Historic: Comparison Voice / Data / GRADES (χρονοσειρές ανά Scope)
 """
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -39,6 +41,8 @@ from routers import (
     data_calls,
     filters,
     historic,
+    historic_comparison,
+    historic_data_pages,
     historic_pages,
     validation,
 )
@@ -76,5 +80,7 @@ for _module in (
     validation,
     historic,
     historic_pages,
+    historic_data_pages,
+    historic_comparison,
 ):
     app.include_router(_module.router)

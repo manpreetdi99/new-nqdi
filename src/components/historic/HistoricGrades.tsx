@@ -3,8 +3,9 @@ import { Bar, BarChart, CartesianGrid, Legend, ReferenceLine, ResponsiveContaine
 import { BarChart3, Gauge, RotateCcw, SlidersHorizontal, Trophy } from "lucide-react";
 
 import { Slider } from "@/components/ui/slider";
-import { fetchHistoricGrades, type HistoricGradeKey, type HistoricGradeRow, type HistoricPageFilters } from "@/lib/api";
+import { fetchHistoricGrades, type HistoricGradeRow, type HistoricPageFilters } from "@/lib/api";
 import { AXIS_STYLE, GRID_STYLE, LEGEND_WRAPPER_STYLE } from "@/lib/chartStyles";
+import { DEFAULT_SLIDERS, SERVICES, aggregate, serviceWeights, type OperatorGrade, type Sliders } from "./gradesModel";
 import { LoadState, OPERATORS, OperatorSwatch, Panel, fmtNum, operatorSpec, useHistoricLoad } from "./historicShared";
 
 /**
@@ -20,61 +21,6 @@ import { LoadState, OPERATORS, OperatorSwatch, Panel, fmtNum, operatorSpec, useH
  *
  * Στα defaults (Voice 40, όλα τα άλλα 50) το αποτέλεσμα == TOTAL_SCORE του warehouse.
  */
-
-interface ServiceSpec {
-  key: HistoricGradeKey;
-  label: string;
-  base: number;
-  group: "voice" | "data";
-}
-
-const SERVICES: ServiceSpec[] = [
-  { key: "gsm", label: "Voice GSM (M→F)", base: 150, group: "voice" },
-  { key: "free", label: "Voice Free (M→M)", base: 250, group: "voice" },
-  { key: "http", label: "HTTP", base: 100, group: "data" },
-  { key: "cap", label: "Capacity", base: 275, group: "data" },
-  { key: "browsing", label: "Browsing", base: 100, group: "data" },
-  { key: "yt", label: "YouTube", base: 100, group: "data" },
-  { key: "ping", label: "Ping", base: 25, group: "data" },
-];
-
-type Sliders = { voice: number } & Record<HistoricGradeKey, number>;
-
-const DEFAULT_SLIDERS: Sliders = { voice: 40, gsm: 50, free: 50, http: 50, cap: 50, browsing: 50, yt: 50, ping: 50 };
-
-/** Μέγιστοι πόντοι ανά υπηρεσία για τα τρέχοντα sliders (Σ = 1000). */
-function serviceWeights(s: Sliders): Record<HistoricGradeKey, number> {
-  const groupSum = (group: "voice" | "data") =>
-    SERVICES.filter((x) => x.group === group).reduce((sum, x) => sum + x.base * s[x.key], 0);
-  const cfVoice = groupSum("voice") ? (10 * s.voice) / groupSum("voice") : 0;
-  const cfData = groupSum("data") ? (10 * (100 - s.voice)) / groupSum("data") : 0;
-  const out = {} as Record<HistoricGradeKey, number>;
-  SERVICES.forEach((x) => {
-    out[x.key] = x.base * s[x.key] * (x.group === "voice" ? cfVoice : cfData);
-  });
-  return out;
-}
-
-interface OperatorGrade {
-  operator: string;
-  total: number;
-  voice: number;
-  data: number;
-  services: Record<HistoricGradeKey, number>;
-}
-
-/** Grade X ανά γραμμή (BLANK SUB_SCORE -> 0, όπως το SUMX του DAX) σταθμισμένο με WEIGHT. */
-function aggregate(rows: HistoricGradeRow[], weights: Record<HistoricGradeKey, number>): OperatorGrade | null {
-  const totalWeight = rows.reduce((s, r) => s + r.weight, 0);
-  if (!rows.length || !totalWeight) return null;
-  const services = {} as Record<HistoricGradeKey, number>;
-  SERVICES.forEach((x) => {
-    services[x.key] = rows.reduce((s, r) => s + r.weight * (r.sub[x.key] ?? 0) * weights[x.key], 0) / totalWeight;
-  });
-  const voice = services.gsm + services.free;
-  const data = services.http + services.cap + services.browsing + services.yt + services.ping;
-  return { operator: rows[0].operator, total: voice + data, voice, data, services };
-}
 
 const shortName = (row: HistoricGradeRow) => `${row.name.split("_")[0]} · ${row.collection}`;
 

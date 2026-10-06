@@ -34,6 +34,20 @@ export const operatorSpec = (key: string): OperatorSpec | undefined => OPERATORS
  * checks PASS (worst adjacent CVD ΔE 8.4, normal-vision 19.3, contrast ≥3:1). */
 export const SERIES_COLORS = ["#3987e5", "#d95926", "#199e70", "#c98500", "#d55181", "#008300", "#9085e9", "#e66767"];
 
+/** Κλίμακα ποιότητας (bins throughput / RSRP): διαποικιλτική κόκκινο (κακό) ↔ γκρι ↔ μπλε (καλό),
+ * πόλοι από τις red/blue ramps του dataviz skill. Validated on --card και σε λευκό: adjacent CVD
+ * ΔE ≥ 14.6, normal-vision ≥ 15.6 — τα bins πάντα συνοδεύονται από label (legend/πίνακα). */
+const QUALITY_7 = ["#a3221f", "#dd5a48", "#f4b8a5", "#8f8d88", "#86b6ef", "#3987e5", "#184f95"];
+
+/** `n` χρώματα από το χειρότερο στο καλύτερο bin (n ≤ 7, συμμετρικά γύρω από το γκρι). */
+export const qualityColors = (n: number): string[] => {
+  if (n >= 7) return QUALITY_7;
+  if (n === 6) return ["#a3221f", "#dd5a48", "#f4b8a5", "#86b6ef", "#3987e5", "#184f95"];
+  if (n === 5) return ["#a3221f", "#dd5a48", "#8f8d88", "#3987e5", "#184f95"];
+  if (n === 4) return ["#a3221f", "#dd5a48", "#3987e5", "#184f95"];
+  return ["#a3221f", "#8f8d88", "#184f95"].slice(0, n);
+};
+
 /** Χρώμα επιφάνειας κάρτας — για τα 2px κενά ανάμεσα σε stacked segments. */
 export const CARD_SURFACE = "hsl(var(--card))";
 
@@ -281,10 +295,13 @@ export const HistoricFilterBar = ({
   options,
   filters,
   onChange,
+  withScope = true,
 }: {
   options: HistoricFilterOptions;
   filters: HistoricPageFilters;
   onChange: (next: HistoricPageFilters) => void;
+  /** false: σελίδες «Comparison» — ο άξονας είναι το Scope, οπότε δεν υπάρχει Scope slicer. */
+  withScope?: boolean;
 }) => {
   const rows = options.collections;
   const selected = filters.collection ? rows.find((c) => c.name === filters.collection) : undefined;
@@ -327,7 +344,7 @@ export const HistoricFilterBar = ({
 
   const fromAll = (v: string) => (v === ALL ? undefined : v);
   /** Clear: όλα "All" και κενό scope — ίδιο με την αρχική κατάσταση της σελίδας. */
-  const isCleared = !filters.area && !filters.category && !base && !filters.scope;
+  const isCleared = !filters.area && !filters.category && !base && (!withScope || !filters.scope);
   const inScope = rows.filter((c) => c.scope === filters.scope);
   const selectedCount = filters.collection ? 1 : inScope.filter((c) => matches(c, filters.area, filters.category)).length;
 
@@ -358,17 +375,19 @@ export const HistoricFilterBar = ({
         widthClass="w-80"
         formatOption={(o) => (o === ALL ? ALL : (baseLabels.get(o) ?? o))}
       />
-      <PartSelect
-        label="Scope"
-        placeholder="Select scope"
-        options={scopes}
-        value={filters.scope}
-        onChange={(scope) => apply(filters.area, filters.category, base || undefined, scope)}
-        widthClass="w-40"
-      />
+      {withScope && (
+        <PartSelect
+          label="Scope"
+          placeholder="Select scope"
+          options={scopes}
+          value={filters.scope}
+          onChange={(scope) => apply(filters.area, filters.category, base || undefined, scope)}
+          widthClass="w-40"
+        />
+      )}
       <button
         type="button"
-        onClick={() => onChange({ scope: "" })}
+        onClick={() => onChange({ scope: withScope ? "" : filters.scope })}
         disabled={isCleared}
         className="flex items-center gap-1.5 rounded-md border border-border bg-background px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-background disabled:hover:text-muted-foreground"
       >
@@ -376,7 +395,9 @@ export const HistoricFilterBar = ({
         Clear filters
       </button>
       <p className="ml-auto pb-2 text-[11px] text-muted-foreground">
-        {filters.scope
+        {!withScope
+          ? `${rows.filter((c) => matches(c, filters.area, filters.category, base || undefined)).length} collections across ${scopes.length} scopes`
+          : filters.scope
           ? `${selectedCount} of ${inScope.length} collections in ${filters.scope}`
           : `${scopes.length} scope${scopes.length === 1 ? "" : "s"} available — pick one`}
       </p>
@@ -481,6 +502,7 @@ export const StackedMixChart = ({
   keys,
   valueLabel = "samples",
   valueIsPercent = false,
+  colors,
 }: {
   rows: HistoricMixRow[];
   /** Σειρά/χρώμα των segments· όσα λείπουν από τα δεδομένα απλώς δεν εμφανίζονται. */
@@ -488,6 +510,8 @@ export const StackedMixChart = ({
   valueLabel?: string;
   /** true όταν οι τιμές είναι ήδη ποσοστά (EVS rates) — δεν δείχνουμε "samples". */
   valueIsPercent?: boolean;
+  /** Χρώμα ανά key (ίδια σειρά με `keys`) — π.χ. qualityColors για bins· default SERIES_COLORS. */
+  colors?: string[];
 }) => {
   const ordered = OPERATORS.filter((op) => rows.some((r) => r.operator === op.key));
   const presentKeys = keys.filter((k) => rows.some((r) => r.parts.some((p) => p.key === k && p.value > 0)));
@@ -547,7 +571,7 @@ export const StackedMixChart = ({
             key={k}
             dataKey={k}
             stackId="mix"
-            fill={SERIES_COLORS[keys.indexOf(k) % SERIES_COLORS.length]}
+            fill={colors ? colors[keys.indexOf(k)] : SERIES_COLORS[keys.indexOf(k) % SERIES_COLORS.length]}
             stroke={CARD_SURFACE}
             strokeWidth={2}
             isAnimationActive={false}
@@ -590,7 +614,7 @@ export const OperatorValueBars = ({
             <div className="relative h-4 flex-1 rounded bg-muted/40" title={value == null ? "—" : format(value)}>
               <div className="h-4 rounded-r" style={{ width: `${pct}%`, backgroundColor: op.color, opacity: 0.9 }} />
             </div>
-            <span className="w-20 shrink-0 text-right font-mono text-xs tabular-nums text-foreground">
+            <span className="w-24 shrink-0 whitespace-nowrap text-right font-mono text-xs tabular-nums text-foreground">
               {value == null ? "—" : format(value)}
             </span>
           </div>
@@ -620,3 +644,73 @@ export const FitToPoints = ({ points }: { points: [number, number][] }) => {
   }, [map, key]);
   return null;
 };
+
+/* ────────────────────────── Μικρά controls / grids ────────────────────────── */
+
+/** Segmented toggle (DL/UL, 50 m/500 m, ανά Scope/μήνα, …). */
+export function Segmented<T extends string | number>({
+  value,
+  options,
+  onChange,
+  label,
+}: {
+  value: T;
+  options: { value: T; label: string }[];
+  onChange: (next: T) => void;
+  label?: string;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      {label && <span className="text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>}
+      <div role="radiogroup" aria-label={label} className="flex rounded-md border border-border bg-background p-0.5">
+        {options.map((o) => (
+          <button
+            key={String(o.value)}
+            type="button"
+            role="radio"
+            aria-checked={o.value === value}
+            onClick={() => onChange(o.value)}
+            className={`rounded px-2.5 py-1 text-xs font-semibold transition-colors ${
+              o.value === value ? "bg-primary/15 text-primary" : "text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** Ένα visual «τιμή ανά operator» του report (column / bar / funnel / donut με μία τιμή). */
+export interface MetricSpec<T> {
+  title: string;
+  subtitle?: string;
+  value: (row: T) => number | null | undefined;
+  format: (v: number) => string;
+  /** π.χ. [0, 100] για ποσοστά· default 0 → max × 1.1. */
+  domain?: [number, number];
+}
+
+/** Grid από OperatorValueBars panels — ένα ανά visual του report. */
+export function MetricBarsGrid<T extends { operator: string }>({
+  metrics,
+  data,
+  icon,
+  columns = 3,
+}: {
+  metrics: MetricSpec<T>[];
+  data: T[];
+  icon?: typeof Database;
+  columns?: 2 | 3;
+}) {
+  return (
+    <div className={`grid grid-cols-1 gap-4 md:grid-cols-2 ${columns === 3 ? "xl:grid-cols-3" : ""}`}>
+      {metrics.map((m) => (
+        <Panel key={m.title} title={m.title} subtitle={m.subtitle} icon={icon}>
+          <OperatorValueBars values={data.map((r) => ({ operator: r.operator, value: m.value(r) ?? null }))} format={m.format} domain={m.domain} />
+        </Panel>
+      ))}
+    </div>
+  );
+}

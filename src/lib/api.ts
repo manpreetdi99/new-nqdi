@@ -1842,6 +1842,266 @@ export async function fetchHistoricDataBandwidth(filters: HistoricPageFilters): 
   return requestJson(`/api/historic/data_bandwidth?${historicPageParams(filters)}`);
 }
 
+/**
+ * Historic — σελίδες DATA / 5G / SCANNER του .pbix (06–20), βλ. backend/routers/historic_data_pages.py.
+ * Ίδιο φίλτρο με τις σελίδες 01–05. Throughput πάντα σε Mbps, χρόνοι στη μονάδα του ονόματος.
+ */
+export interface HistoricBrowsingOperator {
+  operator: string;
+  attempts: number;
+  successes: number;
+  successRate: number | null;
+  avgDurationS: number | null;
+  avgTtfbMs: number | null;
+  avgTtf500Ms: number | null;
+}
+
+export async function fetchHistoricBrowsing(filters: HistoricPageFilters): Promise<{ kepler: HistoricBrowsingOperator[]; live: HistoricBrowsingOperator[] }> {
+  return requestJson(`/api/historic/browsing?${historicPageParams(filters)}`);
+}
+
+export interface HistoricDnsOperator {
+  operator: string;
+  attempts: number;
+  successes: number;
+  successPct: number | null;
+  failedPct: number | null;
+  avgTimeMs: number | null;
+  minTimeMs: number | null;
+  maxTimeMs: number | null;
+}
+
+export async function fetchHistoricDns(filters: HistoricPageFilters, test: string): Promise<{ tests: string[]; operators: HistoricDnsOperator[] }> {
+  return requestJson(`/api/historic/dns?${historicPageParams(filters, test ? { test } : {})}`);
+}
+
+export interface HistoricHttpOperator {
+  operator: string;
+  attempts: number | null;
+  successes: number | null;
+  successRate: number | null;
+  avgThrpMbps: number | null;
+  avgDurationS: number | null;
+  p10Mbps: number | null;
+  p90Mbps: number | null;
+  maxMbps: number | null;
+}
+
+export async function fetchHistoricHttp(filters: HistoricPageFilters): Promise<{ dl: HistoricHttpOperator[]; ul: HistoricHttpOperator[] }> {
+  return requestJson(`/api/historic/http?${historicPageParams(filters)}`);
+}
+
+export interface HistoricPingOperator {
+  operator: string;
+  attempts: number;
+  successes: number;
+  successRate: number | null;
+  rttMs: number | null;
+  rtt5gMs: number | null;
+  rttLteMs: number | null;
+}
+
+export interface HistoricOoklaOperator {
+  operator: string;
+  dlMbps: number | null;
+  dlTests: number;
+  ulMbps: number | null;
+  ulTests: number;
+  latencyMs: number | null;
+  latencyTests: number;
+}
+
+export async function fetchHistoricPingOokla(
+  filters: HistoricPageFilters,
+): Promise<{ pingSmall: HistoricPingOperator[]; pingLarge: HistoricPingOperator[]; ookla: HistoricOoklaOperator[] }> {
+  return requestJson(`/api/historic/ping_ookla?${historicPageParams(filters)}`);
+}
+
+export interface HistoricInteractivityOperator {
+  operator: string;
+  rttMs: number | null;
+  delayMs: number | null;
+  packetLossPct: number | null;
+  thrpKbps: number | null;
+  qoeScore: number | null;
+  successes: number;
+  failures: number;
+  successRate: number | null;
+  packetsLost: number | null;
+  packetsSent: number | null;
+}
+
+export async function fetchHistoricInteractivity(filters: HistoricPageFilters): Promise<{ operators: HistoricInteractivityOperator[] }> {
+  return requestJson(`/api/historic/interactivity?${historicPageParams(filters)}`);
+}
+
+export interface HistoricCapacityOperator {
+  operator: string;
+  dlAttempts: number;
+  dlSuccesses: number;
+  dlSuccessRate: number | null;
+  ulAttempts: number;
+  ulSuccesses: number;
+  ulSuccessRate: number | null;
+  dlAvgMbps: number | null;
+  ulAvgMbps: number | null;
+  dlP10Mbps: number | null;
+  dlP90Mbps: number | null;
+  dlMaxMbps: number | null;
+  ulP10Mbps: number | null;
+  ulP90Mbps: number | null;
+  ulMaxMbps: number | null;
+}
+
+export async function fetchHistoricCapacity(
+  filters: HistoricPageFilters,
+): Promise<{ operators: HistoricCapacityOperator[]; caMix: HistoricMixRow[]; nrBands: HistoricMixRow[] }> {
+  return requestJson(`/api/historic/capacity?${historicPageParams(filters)}`);
+}
+
+export interface HistoricVideoPageOperator {
+  operator: string;
+  attempts: number;
+  successes: number;
+  successRate: number | null;
+  freezingPct: number | null;
+  vmos: number | null;
+  ttfpS: number | null;
+  avgResolution: number | null;
+}
+
+export async function fetchHistoricVideoPage(filters: HistoricPageFilters): Promise<{ operators: HistoricVideoPageOperator[] }> {
+  return requestJson(`/api/historic/video_page?${historicPageParams(filters)}`);
+}
+
+export type HistoricDirection = "dl" | "ul";
+
+export interface HistoricDataMap {
+  /** Throughput bins, από το χειρότερο στο καλύτερο. */
+  bins: string[];
+  operators: {
+    operator: string;
+    tests: number;
+    avgMbps: number | null;
+    maxMbps: number | null;
+    rsrp: number | null;
+    sinr: number | null;
+    rscp: number | null;
+    ecno: number | null;
+    binCounts: number[];
+  }[];
+  techMix: HistoricMixRow[];
+  /** [lat, lon, operator, bin index, Mbps] — ομοιόμορφο δείγμα έως 8.000. */
+  points: [number, number, string, number, number][];
+  totalPoints: number;
+}
+
+export async function fetchHistoricDataMap(filters: HistoricPageFilters, direction: HistoricDirection): Promise<HistoricDataMap> {
+  return requestJson(`/api/historic/data_map?${historicPageParams(filters, { direction })}`);
+}
+
+export async function fetchHistoricBandwidthMix(
+  filters: HistoricPageFilters,
+): Promise<{ rows: { operator: string; bwMhz: number; samples: number; avgThpMbps: number | null }[] }> {
+  return requestJson(`/api/historic/bandwidth_mix?${historicPageParams(filters)}`);
+}
+
+export interface HistoricNrMap {
+  /** RSRP bins, από το καλύτερο στο χειρότερο. */
+  bins: string[];
+  binCounts: { operator: string; counts: number[] }[];
+  channels: { direction: HistoricDirection; group: string; operator: string; avgMbps: number; samples: number }[];
+  /** [lat, lon, operator, bin index, RSRP, SINR, EARFCN group]. */
+  points: [number, number, string, number, number, number | null, string][];
+  totalPoints: number;
+}
+
+export async function fetchHistoricNrMap(filters: HistoricPageFilters): Promise<HistoricNrMap> {
+  return requestJson(`/api/historic/nr_map?${historicPageParams(filters)}`);
+}
+
+export interface HistoricNrTech {
+  techMix: HistoricMixRow[];
+  bandsDl: HistoricMixRow[];
+  bandsUl: HistoricMixRow[];
+  bandList: HistoricMixRow[];
+  bwList: HistoricMixRow[];
+  usageBw: { operator: string; usageBwMhz: number | null; configBwMhz: number | null; samples: number }[];
+}
+
+export async function fetchHistoricNrTech(filters: HistoricPageFilters): Promise<HistoricNrTech> {
+  return requestJson(`/api/historic/nr_tech?${historicPageParams(filters)}`);
+}
+
+export interface HistoricNrScannerMap {
+  /** SS-RSRP bins, από το καλύτερο στο χειρότερο. */
+  bins: string[];
+  operators: {
+    operator: string;
+    binSamples: number[];
+    /** [lat, lon, bin index, Avg SS-RSRP]. */
+    points: [number, number, number, number][];
+    totalPoints: number;
+  }[];
+}
+
+export async function fetchHistoricNrScannerMap(filters: HistoricPageFilters, bin: 50 | 500): Promise<HistoricNrScannerMap> {
+  return requestJson(`/api/historic/nr_scanner_map?${historicPageParams(filters, { bin: String(bin) })}`);
+}
+
+export interface HistoricScannerChannel {
+  operator: string;
+  channel: number;
+  /** Samples ανά κλάση, με τη σειρά του `classes` (Excellent → No coverage). */
+  rsrp: number[];
+  sinr: number[];
+}
+
+export async function fetchHistoricScanner(
+  filters: HistoricPageFilters,
+): Promise<{ classes: string[]; lte: HistoricScannerChannel[]; nr: HistoricScannerChannel[] }> {
+  return requestJson(`/api/historic/scanner?${historicPageParams(filters)}`);
+}
+
+/**
+ * Historic — σελίδες «Comparison» (24–36), βλ. backend/routers/historic_comparison.py. Χωρίς scope:
+ * X = Scope (ή μήνας), φίλτρο Area / Category / Collection (το μεσαίο κομμάτι του ονόματος).
+ */
+export type HistoricComparisonKind = "voice_gsm" | "voice_free" | "data";
+
+export interface HistoricComparisonPoint {
+  /** Scope ("2025H2") ή μήνας ("2025-10"). */
+  key: string;
+  operators: ({ operator: string } & Record<string, number | null>)[];
+}
+
+export interface HistoricComparison {
+  scopes: HistoricComparisonPoint[];
+  months: HistoricComparisonPoint[];
+}
+
+const historicComparisonParams = (filters: HistoricPageFilters, extra: Record<string, string> = {}) => {
+  const params = new URLSearchParams(extra);
+  if (filters.area) params.set("area", filters.area);
+  if (filters.category) params.set("category", filters.category);
+  // collectionBase = "area|collection|category" — στο backend πάει μόνο το collection.
+  const coll = filters.collectionBase?.split("|")[1];
+  if (coll) params.set("coll", coll);
+  return params.toString();
+};
+
+export async function fetchHistoricComparison(kind: HistoricComparisonKind, filters: HistoricPageFilters): Promise<HistoricComparison> {
+  return requestJson(`/api/historic/comparison?${historicComparisonParams(filters, { kind })}`);
+}
+
+/** Μία γραμμή ανά Scope × operator, ίδιο σχήμα με το HistoricGradeRow (`name` = scope). */
+export async function fetchHistoricGradesAll(filters: HistoricPageFilters): Promise<(HistoricGradeRow & { scope: string; collections: number })[]> {
+  const json = await requestJson<{ rows: (HistoricGradeRow & { scope: string; collections: number })[] }>(
+    `/api/historic/grades_all?${historicComparisonParams(filters)}`,
+  );
+  return json.rows;
+}
+
 export interface RunMapResponse {
   output_path: string | null;
   logs: string[];

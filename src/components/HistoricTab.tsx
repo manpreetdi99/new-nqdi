@@ -1,18 +1,29 @@
 import { useEffect, useMemo, useState } from "react";
 import {
+  Activity,
+  Antenna,
   AudioWaveform,
+  ChartLine,
   ChartScatter,
   Database,
+  Gauge,
+  Globe,
   GraduationCap,
   History,
+  Layers,
   Loader2,
   Map as MapIcon,
+  MapPin,
   Phone,
   PhoneCall,
+  Radar,
+  Server,
+  Signal,
   TrendingDown,
   TrendingUp,
   Video,
   Wifi,
+  Zap,
 } from "lucide-react";
 import {
   Bar,
@@ -48,10 +59,21 @@ import {
   type HistoricVoiceRow,
 } from "@/lib/api";
 import { AXIS_STYLE, DEFAULTS, GRID_STYLE, LEGEND_WRAPPER_STYLE } from "@/lib/chartStyles";
+import { HistoricComparison, HistoricComparisonGrades } from "./historic/HistoricComparison";
+import { HistoricDataMap, HistoricNrMap, HistoricNrScannerMap, HistoricNrTech, HistoricScanner } from "./historic/HistoricCoveragePages";
 import HistoricDataBandwidth from "./historic/HistoricDataBandwidth";
 import HistoricGrades from "./historic/HistoricGrades";
 import HistoricGreeceMap from "./historic/HistoricGreeceMap";
 import HistoricRadioCodecs from "./historic/HistoricRadioCodecs";
+import {
+  HistoricBrowsing,
+  HistoricCapacity,
+  HistoricDns,
+  HistoricHttp,
+  HistoricInteractivity,
+  HistoricPingOokla,
+  HistoricVideo,
+} from "./historic/HistoricServicePages";
 import HistoricVoicePage from "./historic/HistoricVoicePage";
 import {
   HistoricFilterBar,
@@ -685,19 +707,86 @@ const ScorecardBarChart = ({ scores }: { scores: HistoricScoreRow[] }) => {
 
 /* ────────────────────────── Historic tab ────────────────────────── */
 
-/** Οι σελίδες του Historic tab: το αρχικό snapshot ενός campaign + οι σελίδες 01–05 και 14 του
- * .pbix (βλ. src/components/historic/ και backend/routers/historic_pages.py). */
-type HistoricPage = "snapshot" | "map" | "grades" | "mtof" | "mtom" | "radio" | "bandwidth";
+/** Οι σελίδες του Historic tab: το αρχικό snapshot ενός campaign + οι σελίδες του .pbix (βλ.
+ * src/components/historic/ και backend/routers/historic_pages.py, historic_data_pages.py,
+ * historic_comparison.py). Οι κρυφές σελίδες MAP BOOKMARK M->F / M->M του report δεν έχουν
+ * δική τους σελίδα — τα Dropped/Failed σημεία τους είναι ήδη στους χάρτες των Voice σελίδων. */
+type HistoricPage =
+  | "snapshot"
+  | "map"
+  | "grades"
+  | "mtof"
+  | "mtom"
+  | "radio"
+  | "browsing"
+  | "dns"
+  | "http"
+  | "ping"
+  | "interactivity"
+  | "capacity"
+  | "video"
+  | "datamap"
+  | "bandwidth"
+  | "nrmap"
+  | "nrtech"
+  | "scannermap"
+  | "scanner"
+  | "cmpVoice"
+  | "cmpData"
+  | "cmpGrades";
 
-const PAGES: { key: HistoricPage; label: string; icon: typeof Database }[] = [
-  { key: "snapshot", label: "Campaign snapshot", icon: History },
-  { key: "map", label: "Greece Map", icon: MapIcon },
-  { key: "grades", label: "Grades", icon: GraduationCap },
-  { key: "mtof", label: "Voice M→F", icon: PhoneCall },
-  { key: "mtom", label: "Voice M→M", icon: Phone },
-  { key: "radio", label: "Radio Tech & Codecs", icon: AudioWaveform },
-  { key: "bandwidth", label: "Data Bandwidth", icon: ChartScatter },
+const PAGE_GROUPS: { label: string; pages: { key: HistoricPage; label: string; icon: typeof Database }[] }[] = [
+  {
+    label: "Overview",
+    pages: [
+      { key: "snapshot", label: "Campaign snapshot", icon: History },
+      { key: "map", label: "Greece Map", icon: MapIcon },
+      { key: "grades", label: "Grades", icon: GraduationCap },
+    ],
+  },
+  {
+    label: "Voice",
+    pages: [
+      { key: "mtof", label: "Voice M→F", icon: PhoneCall },
+      { key: "mtom", label: "Voice M→M", icon: Phone },
+      { key: "radio", label: "Radio Tech & Codecs", icon: AudioWaveform },
+    ],
+  },
+  {
+    label: "Data",
+    pages: [
+      { key: "browsing", label: "Browsing", icon: Globe },
+      { key: "dns", label: "DNS", icon: Server },
+      { key: "http", label: "HTTP", icon: Wifi },
+      { key: "ping", label: "Ping & Ookla", icon: Zap },
+      { key: "interactivity", label: "Interactivity", icon: Activity },
+      { key: "capacity", label: "Capacity", icon: Gauge },
+      { key: "video", label: "Video", icon: Video },
+    ],
+  },
+  {
+    label: "Coverage & 5G",
+    pages: [
+      { key: "datamap", label: "Data Map", icon: MapPin },
+      { key: "bandwidth", label: "Data Bandwidth", icon: ChartScatter },
+      { key: "nrmap", label: "NR Data Map", icon: Signal },
+      { key: "nrtech", label: "NR Data Tech", icon: Layers },
+      { key: "scannermap", label: "NR Scanner Map", icon: Antenna },
+      { key: "scanner", label: "Scanner 4G/5G", icon: Radar },
+    ],
+  },
+  {
+    label: "Comparison",
+    pages: [
+      { key: "cmpVoice", label: "Voice trend", icon: ChartLine },
+      { key: "cmpData", label: "Data trend", icon: ChartLine },
+      { key: "cmpGrades", label: "Grades trend", icon: TrendingUp },
+    ],
+  },
 ];
+
+/** Οι σελίδες «Comparison» έχουν άξονα Scope — δεν χρειάζονται (ούτε δείχνουν) Scope slicer. */
+const COMPARISON_PAGES: HistoricPage[] = ["cmpVoice", "cmpData", "cmpGrades"];
 
 const HistoricTab = () => {
   const [page, setPage] = useState<HistoricPage>("snapshot");
@@ -817,6 +906,7 @@ const HistoricTab = () => {
   // φίλτρο: κενό scope (επιλέγεται τελευταίο)· αν έχει διαλεχτεί campaign στο snapshot, έρχονται
   // ήδη επιλεγμένα το Area και το Collection του.
   const needsFilters = page !== "snapshot";
+  const isComparison = COMPARISON_PAGES.includes(page);
   useEffect(() => {
     if (!needsFilters || filterOptions) return;
     let cancelled = false;
@@ -870,19 +960,25 @@ const HistoricTab = () => {
             />
           </div>
         </div>
-        <nav className="flex flex-wrap gap-1 border-t border-border px-3 py-2">
-          {PAGES.map(({ key, label, icon: Icon }) => (
-            <button
-              key={key}
-              type="button"
-              onClick={() => setPage(key)}
-              className={`flex items-center gap-1.5 rounded-md px-3 py-1.5 text-xs font-semibold transition-colors ${
-                page === key ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
-              }`}
-            >
-              <Icon className="h-3.5 w-3.5" />
-              {label}
-            </button>
+        <nav className="flex flex-wrap gap-x-5 gap-y-2 border-t border-border px-3 py-2">
+          {PAGE_GROUPS.map((group) => (
+            <div key={group.label} className="flex flex-wrap items-center gap-1">
+              <span className="pr-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">{group.label}</span>
+              {group.pages.map(({ key, label, icon: Icon }) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => setPage(key)}
+                  aria-current={page === key ? "page" : undefined}
+                  className={`flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-semibold transition-colors ${
+                    page === key ? "bg-primary/15 text-primary" : "text-muted-foreground hover:bg-muted/40 hover:text-foreground"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {label}
+                </button>
+              ))}
+            </div>
           ))}
         </nav>
       </section>
@@ -901,8 +997,11 @@ const HistoricTab = () => {
           )}
           {filterOptions && pageFilters && (
             <>
-              <HistoricFilterBar options={filterOptions} filters={pageFilters} onChange={setPageFilters} />
-              {!pageFilters.scope && (
+              <HistoricFilterBar options={filterOptions} filters={pageFilters} onChange={setPageFilters} withScope={!isComparison} />
+              {isComparison && page === "cmpVoice" && <HistoricComparison group="voice" filters={pageFilters} />}
+              {isComparison && page === "cmpData" && <HistoricComparison group="data" filters={pageFilters} />}
+              {isComparison && page === "cmpGrades" && <HistoricComparisonGrades filters={pageFilters} />}
+              {!isComparison && !pageFilters.scope && (
                 <div className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-border bg-card py-24 text-center">
                   <History className="h-8 w-8 text-muted-foreground" />
                   <p className="text-sm font-medium text-foreground">Pick a Scope</p>
@@ -916,7 +1015,19 @@ const HistoricTab = () => {
               {pageFilters.scope && page === "mtof" && <HistoricVoicePage kind="mtof" filters={pageFilters} />}
               {pageFilters.scope && page === "mtom" && <HistoricVoicePage kind="mtom" filters={pageFilters} />}
               {pageFilters.scope && page === "radio" && <HistoricRadioCodecs filters={pageFilters} />}
+              {pageFilters.scope && page === "browsing" && <HistoricBrowsing filters={pageFilters} />}
+              {pageFilters.scope && page === "dns" && <HistoricDns filters={pageFilters} />}
+              {pageFilters.scope && page === "http" && <HistoricHttp filters={pageFilters} />}
+              {pageFilters.scope && page === "ping" && <HistoricPingOokla filters={pageFilters} />}
+              {pageFilters.scope && page === "interactivity" && <HistoricInteractivity filters={pageFilters} />}
+              {pageFilters.scope && page === "capacity" && <HistoricCapacity filters={pageFilters} />}
+              {pageFilters.scope && page === "video" && <HistoricVideo filters={pageFilters} />}
+              {pageFilters.scope && page === "datamap" && <HistoricDataMap filters={pageFilters} />}
               {pageFilters.scope && page === "bandwidth" && <HistoricDataBandwidth filters={pageFilters} />}
+              {pageFilters.scope && page === "nrmap" && <HistoricNrMap filters={pageFilters} />}
+              {pageFilters.scope && page === "nrtech" && <HistoricNrTech filters={pageFilters} />}
+              {pageFilters.scope && page === "scannermap" && <HistoricNrScannerMap filters={pageFilters} />}
+              {pageFilters.scope && page === "scanner" && <HistoricScanner filters={pageFilters} />}
             </>
           )}
         </>
