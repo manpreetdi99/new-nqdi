@@ -456,7 +456,7 @@ const cellHigherIsBetter = (cell: Cell): boolean | null => {
 const cellText = (cell: Cell): string => {
   if (cell.kind === "rate") return formatPercent(cell.value);
   if (cell.kind === "count") return cell.value === 0 ? "0" : formatCount(cell.value);
-  if (cell.kind === "countRatio") return `${formatCount(cell.total)} / ${formatCount(cell.part)}`;
+  if (cell.kind === "countRatio") return `${formatCount(cell.part)} / ${formatCount(cell.total)}`;
   if (cell.kind === "value") {
     if (cell.value == null) return "—";
     // "%" κολλάει στην τιμή χωρίς κενό (π.χ. "0.668%") — κάθε άλλο unit έχει κενό πριν.
@@ -745,7 +745,7 @@ const compactDataRows = (stats: DataTestStats, packetSizeBytes?: number | null):
 /**
  * Rows για τα directional (DL/UL merged) compact PS Data tables — βλ.
  * buildDirectionalDataSections. "comapct_data .txt" (2026-08-31): Test Success Rate /
- * Total Tests (προς Successful tests, ένα cell "total / successful" — βλ. Cell
+ * Total Tests (Successful προς Total tests, ένα cell "successful / total" — βλ. Cell
  * "countRatio") / το πρώτο metric του section (π.χ. "Mean sustainable throughput
  * (Mbps)"), ΟΛΑ τα DL rows πρώτα και μετά ΟΛΑ τα UL rows — ΟΧΙ interleaved ανά metric.
  * Χωρίς "Failed Tests" (δεν ζητήθηκε, ίδιο σκεπτικό με το COMPACT_VOICE_ROW_ORDER).
@@ -771,7 +771,7 @@ const directionalDataRows = (stats: DirectionalDataTestStats): KpiRowSpec<Direct
       },
       {
         label: `Total Tests ${direction}`,
-        hint: "Total προς Successful tests",
+        hint: "Successful προς Total tests",
         cell: (s) => ({ kind: "countRatio", total: pick(s).total, part: pick(s).success }),
       },
       {
