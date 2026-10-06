@@ -775,7 +775,9 @@ const directionalDataRows = (stats: DirectionalDataTestStats): KpiRowSpec<Direct
         cell: (s) => ({ kind: "countRatio", total: pick(s).total, part: pick(s).success }),
       },
       {
-        label: `${metricLabel} ${direction}`,
+        // Capacity: το direction είναι ήδη μέσα στο label ("Mean application capacity DL
+        // throughput") — βλ. buildDataMetrics.
+        label: new RegExp(`\\b${direction}\\b`).test(metricLabel) ? metricLabel : `${metricLabel} ${direction}`,
         emphasis: true,
         cell: (s): Cell => {
           const match = pick(s).metrics[0];

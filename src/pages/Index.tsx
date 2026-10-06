@@ -29,6 +29,7 @@ import {
   mapInteractivityRowsToDataCallRows,
   mapOoklaRowsToDataCallRows,
   mapPing1000RowsToDataCallRows,
+  replaceCdrCapacityWithRaw,
 } from "@/lib/attachmentC";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Badge } from "@/components/ui/badge";
@@ -762,11 +763,11 @@ const Index = () => {
         enabled: summaryEnabled && !summaryCompact,
       },
       {
-        // Capacity (grx)/(akamai) breakdown: ρητά Full-only (βλ. σχόλιο στο
-        // COMPACT_EXCLUDED_SECTION_LABELS), άχρηστο fetch σε compact.
+        // Πηγή ΚΑΙ του κύριου Capacity DL/UL (compact + full, βλ. replaceCdrCapacityWithRaw)
+        // ΚΑΙ του (grx)/(akamai) breakdown (Full-only) — άρα χρειάζεται και σε compact.
         queryKey: ["summary", "capacityLink", summaryDatabase, summaryCollectionsKey],
         queryFn: ({ signal }) => fetchCapacityLink(summaryDatabase, summaryCollectionsForQuery, [], { signal }),
-        enabled: summaryEnabled && !summaryCompact,
+        enabled: summaryEnabled,
       },
     ],
   });
@@ -874,10 +875,11 @@ const Index = () => {
   // να αγγίξουμε καθόλου το SummaryTab. excludeCdrPingDuplicates βγάζει τα παλιά "ICMP
   // Ping 40"/"ICMP Ping 800" (CDRCombined) από το summaryDataCallsRows πρώτα — το
   // /api/ping_1000 είναι πλέον η ΜΟΝΗ πηγή και για τα δύο (βλ. mapPing1000RowsToDataCallRows),
-  // αλλιώς θα μετρούσαν διπλά.
+  // αλλιώς θα μετρούσαν διπλά. Ίδιο για το κύριο Capacity: replaceCdrCapacityWithRaw
+  // αντικαθιστά τα CDRCombined "Capacity" rows με τα raw /api/capacity_link (grx+akamai).
   const summaryDataCallsWithOokla = useMemo(
     () => [
-      ...excludeCdrPingDuplicates(summaryDataCallsRows),
+      ...replaceCdrCapacityWithRaw(excludeCdrPingDuplicates(summaryDataCallsRows), summaryCapacityLinkRows),
       ...mapOoklaRowsToDataCallRows(summaryOoklaRows),
       ...mapPing1000RowsToDataCallRows(summaryPing1000Rows),
       ...mapInteractivityRowsToDataCallRows(summaryInteractivityRows),

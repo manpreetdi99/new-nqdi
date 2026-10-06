@@ -136,8 +136,8 @@ describe("SummaryTab", () => {
       expect(screen.getByText("Capacity DL 10GB / Capacity UL 1GB")).toBeInTheDocument();
       expect(screen.getAllByText("Test Success Rate (%) DL").length).toBeGreaterThan(0);
       expect(screen.getAllByText("Test Success Rate (%) UL").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("Mean sustainable throughput (Mbps) DL").length).toBeGreaterThan(0);
-      expect(screen.getAllByText("Mean sustainable throughput (Mbps) UL").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Mean application capacity DL throughput (Mbps)").length).toBeGreaterThan(0);
+      expect(screen.getAllByText("Mean application capacity UL throughput (Mbps)").length).toBeGreaterThan(0);
       expect(screen.getAllByText("400.0").length).toBeGreaterThan(0); // DL throughput
       expect(screen.getAllByText("40.0").length).toBeGreaterThan(0); // UL throughput
       // Total Tests / Successful tests ενώνονται σε ΕΝΑ row: "total / successful" cell.

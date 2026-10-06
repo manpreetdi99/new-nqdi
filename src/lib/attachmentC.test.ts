@@ -23,6 +23,7 @@ import {
   collectOperators,
   isoWeek,
   mapCapacityLinkRowsToDataCallRows,
+  replaceCdrCapacityWithRaw,
   mapDnsRowsToDataCallRows,
   mapInteractivityRowsToDataCallRows,
   mapOoklaRowsToDataCallRows,
@@ -308,8 +309,9 @@ describe("PS data KPIs", () => {
     expect(capacityDl?.total.success).toBe(1);
     expect(capacityDl?.total.failed).toBe(1);
     expect(capacityDl?.total.successRate).toBe(0.5);
-    // Το throughput μετριέται σε Mbps και μπαίνουν και τα failed samples που έγραψαν ρυθμό.
-    expect(capacityDl?.total.metrics[0].value).toBeCloseTo(450, 6);
+    // Το throughput μετριέται σε Mbps, ΜΟΝΟ από τα επιτυχημένα tests (όπως το reference,
+    // "ErrorCode=0") — το failed sample των 500 Mbps δεν μπαίνει στον μέσο όρο.
+    expect(capacityDl?.total.metrics[0].value).toBeCloseTo(400, 6);
 
     const ping = sections.find((section) => section.key === "Ping");
     expect(ping?.total.metrics[0]).toMatchObject({ label: "Mean RTT", unit: "ms", higherIsBetter: false, value: 30 });
@@ -544,6 +546,36 @@ describe("PS data KPIs", () => {
       const grxDl = sections.find((s) => s.key === "Capacity DL 10GB (grx)")!;
       expect(grxDl.total.total).toBe(1);
       expect(grxDl.total.metrics[0].value).toBeCloseTo(140.5, 6);
+    });
+  });
+
+  describe("replaceCdrCapacityWithRaw", () => {
+    const cdrRows = [
+      dataTest({ testType: "Capacity DL", direction: "Downlink", capacityThroughputKbps: 334000 }),
+      dataTest({ testType: "Capacity UL", direction: "Uplink", capacityThroughputKbps: 53000 }),
+      dataTest({ testType: "Ping", direction: null, pingRttAvg: 20 }),
+    ];
+
+    it("swaps CDRCombined Capacity rows for raw grx+akamai rows as the main Capacity DL/UL sections; failed tests count in Total but not in the mean (2026-10-06, TINOS reference)", () => {
+      const rows = replaceCdrCapacityWithRaw(cdrRows, [
+        capacityLinkRow({ direction: "DL", link: "grx", throughputKbps: 300000 }),
+        capacityLinkRow({ direction: "DL", link: "akamai", throughputKbps: 270000, sessionId: "2" }),
+        capacityLinkRow({ direction: "DL", link: "akamai", throughputKbps: 9000, sessionId: "3", success: 0, failed: 1 }),
+        capacityLinkRow({ direction: "UL", link: "grx", throughputKbps: 58000, sessionId: "4" }),
+      ]);
+
+      expect(rows.map((row) => row.testType)).toEqual(["Ping", "Capacity", "Capacity", "Capacity", "Capacity"]);
+
+      const sections = buildDataSections(rows);
+      const dl = sections.find((s) => s.key === "Capacity DL 10GB")!;
+      expect(dl.total).toMatchObject({ total: 3, success: 2, failed: 1 });
+      expect(dl.total.metrics[0]).toMatchObject({ label: "Mean application capacity DL throughput", samples: 2 });
+      expect(dl.total.metrics[0].value).toBeCloseTo(285, 6);
+      expect(sections.find((s) => s.key === "Capacity UL 1GB")!.total.metrics[0].value).toBeCloseTo(58, 6);
+    });
+
+    it("keeps the CDRCombined Capacity rows when there are no raw rows (endpoint failed/empty)", () => {
+      expect(replaceCdrCapacityWithRaw(cdrRows, [])).toBe(cdrRows);
     });
   });
 
