@@ -1054,10 +1054,17 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
   }
 
   if (testType.includes("capacity")) {
-    const capacity = collect((row) => numeric(row.capacityThroughputKbps));
+    // Μόνο επιτυχημένα tests, όπως το reference ("Case when ErrorCode=0 ... else NULL") —
+    // ένα failed test μπορεί να έχει μερική τιμή throughput που τραβάει τον μέσο όρο.
+    const capacity = collect((row) => (classifyDataTest(row) === "success" ? numeric(row.capacityThroughputKbps) : null));
+    // "MEAN APPLICATION CAPACITY DL THROUGHPUT (Mbps)" (2026-10-06) — το direction μπαίνει
+    // ΜΕΣΑ στο label (όχι suffix), γι' αυτό το directionalDataRows (SummaryTab) δεν το
+    // ξανακολλάει στο τέλος όταν υπάρχει ήδη.
+    const rawDirection = (rows[0]?.direction ?? "").trim().toLowerCase();
+    const direction = DIRECTION_LABELS[rawDirection] ?? (rawDirection ? rawDirection.toUpperCase() : "");
     return [
       {
-        label: "Mean sustainable throughput",
+        label: direction ? `Mean application capacity ${direction} throughput` : "Mean application capacity throughput",
         unit: "Mbps",
         decimals: 1,
         higherIsBetter: true,
@@ -1724,34 +1731,55 @@ export const mapOoklaRowsToDataCallRows = (rows: OoklaRow[]): DataCallRow[] =>
  * COMPACT_EXCLUDED_SECTION_LABELS στο SummaryTab.tsx.
  */
 export const mapCapacityLinkRowsToDataCallRows = (rows: CapacityLinkRow[]): DataCallRow[] =>
-  rows.map((row) => ({
-    Location: row.location,
-    SessionId: row.sessionId,
-    TestId: row.testId,
-    callStartTimeStamp: null,
-    testType: `Capacity ${row.link ?? "?"}`,
-    direction: row.direction,
-    status: row.success === 1 ? "Completed" : "Failed",
-    scoringStatus: row.success === 1 ? "success" : "failed",
-    host: row.link,
-    pingRttAvg: null,
-    throughputKbps: null,
-    capacityThroughputKbps: row.throughputKbps,
-    youtubeMos: null,
-    youtubeInterruptions: null,
-    interactivityQoeScore: null,
-    interactivityRtt: null,
-    interactivityPacketsLostRate: null,
-    interactivityPacketDelay: null,
-    technology: null,
-    startTechnology: null,
-    CollectionName: row.collectionName,
-    ASideFileName: row.aSideFileName,
-    isValid: 1,
-    comment: null,
-    latitude: null,
-    longitude: null,
-  }));
+  rows.map((row) => capacityLinkToDataCallRow(row, `Capacity ${row.link ?? "?"}`));
+
+/**
+ * Το κύριο "Capacity DL 10GB"/"Capacity UL 1GB" (grx+akamai μαζί) από το ΙΔΙΟ
+ * /api/capacity_link (ResultsCapacityTest, last block) αντί για το CDRCombined — 2026-10-06,
+ * CYC_TINOS_TOURISTIC AREAS_2026H2: το reference (Attachment C) δείχνει "MEAN APPLICATION
+ * CAPACITY DL THROUGHPUT" = μέσος ThroughputGet των επιτυχημένων tests, ενώ το CDRCombined
+ * έδινε "Capacity_Sustainable Throughput" (άλλη μετρική: 334 αντί για 285 Mbps στην
+ * Cosmote). Οι CDRCombined "Capacity*" γραμμές βγαίνουν ΜΟΝΟ όταν υπάρχουν raw rows — αν το
+ * /api/capacity_link αποτύχει/είναι κενό, μένει το CDRCombined αντί να χαθεί το Capacity.
+ */
+const CDR_CAPACITY_TEST_TYPE = /^capacity\b/i;
+
+export const replaceCdrCapacityWithRaw = (rows: DataCallRow[], capacityLinkRows: CapacityLinkRow[]): DataCallRow[] =>
+  capacityLinkRows.length === 0
+    ? rows
+    : [
+        ...rows.filter((row) => !CDR_CAPACITY_TEST_TYPE.test(row.testType ?? "")),
+        ...capacityLinkRows.map((row) => capacityLinkToDataCallRow(row, "Capacity")),
+      ];
+
+const capacityLinkToDataCallRow = (row: CapacityLinkRow, testType: string): DataCallRow => ({
+  Location: row.location,
+  SessionId: row.sessionId,
+  TestId: row.testId,
+  callStartTimeStamp: null,
+  testType,
+  direction: row.direction,
+  status: row.success === 1 ? "Completed" : "Failed",
+  scoringStatus: row.success === 1 ? "success" : "failed",
+  host: row.link,
+  pingRttAvg: null,
+  throughputKbps: null,
+  capacityThroughputKbps: row.throughputKbps,
+  youtubeMos: null,
+  youtubeInterruptions: null,
+  interactivityQoeScore: null,
+  interactivityRtt: null,
+  interactivityPacketsLostRate: null,
+  interactivityPacketDelay: null,
+  technology: null,
+  startTechnology: null,
+  CollectionName: row.collectionName,
+  ASideFileName: row.aSideFileName,
+  isValid: 1,
+  comment: null,
+  latitude: null,
+  longitude: null,
+});
 
 /**
  * Μετατρέπει τα raw ping-packet rows του /api/ping_1000 (ResultsPingTest — ΟΛΑ τα
