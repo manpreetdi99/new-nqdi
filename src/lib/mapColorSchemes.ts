@@ -144,6 +144,18 @@ export const COLOR_SCHEMES: Record<string, ColorScheme> = {
     ],
     defaultColor: "#808080",
   },
+  call_mode: {
+    type: "category",
+    label: "Call Mode (VoLTE / CS / CSFB / SRVCC)",
+    suggestCol: "CallMode",
+    categories: [
+      { value: "VoLTE", color: "#00c800" },
+      { value: "CSFB",  color: "#ff8000" },
+      { value: "CS",    color: "#0050ff" },
+      { value: "SRVCC", color: "#d400ff" },
+    ],
+    defaultColor: "#808080",
+  },
   cst_duration: {
     type: "range",
     label: "CST – Duration (s)",

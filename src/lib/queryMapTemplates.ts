@@ -602,6 +602,62 @@ WHERE S.Valid = 1
 ORDER BY CA.SessionId DESC`,
   },
   {
+    label: "Call Mode (VoLTE / CS / CSFB / SRVCC)",
+    category: "Calls",
+    mode: "points",
+    valueCol: "CallMode",
+    colorScheme: "call_mode",
+    labelCol: "Location",
+    requiresFilters: true,
+    sql: `SELECT
+  F.ASideLocation AS Location,
+  F.CollectionName,
+  CAST(P.Latitude  AS FLOAT) AS latitude,
+  CAST(P.Longitude AS FLOAT) AS longitude,
+  S.SessionId,
+  C.callDir,
+  C.callStatus,
+  C.callmode    AS CallModeA,
+  C.CallModeB,
+  ST.technology AS testStartMode,
+  CallMode = CASE
+    -- 1) Mode από την πλευρά που καλεί
+    WHEN DM.DirMode IN ('VoLTE','SRVCC','CS','CSFB') THEN DM.DirMode
+    -- 2) Fallback όταν είναι '-' ή NULL: τεχνολογία στην αρχή της κλήσης
+    WHEN ST.technology LIKE '%LTE%'  THEN 'VoLTE'
+    WHEN ST.technology LIKE '%UMTS%' THEN 'CS'
+    WHEN ST.technology LIKE '%GSM%'  THEN 'CS'
+    ELSE NULL
+  END
+FROM Sessions S
+JOIN CallSession C ON C.SessionId = S.SessionId
+JOIN FileList F    ON F.FileId    = S.FileId
+JOIN Position P    ON P.PosId     = S.PosId
+CROSS APPLY (
+  SELECT DirMode = CASE
+    WHEN C.callDir LIKE '%A->B%' THEN C.callmode
+    WHEN C.callDir LIKE '%B->A%' THEN C.CallModeB
+  END
+) DM
+OUTER APPLY (
+  -- πρώτο network της κλήσης (ελάχιστο MsgTime)
+  SELECT TOP (1) N.technology
+  FROM NetworkIdRelation NIR
+  JOIN NetworkInfo N ON N.NetworkId = NIR.NetworkId
+  WHERE NIR.SessionId = S.SessionId
+  ORDER BY NIR.MsgTime
+) ST
+WHERE S.valid = 1
+  AND S.sessionType = 'CALL'
+  AND C.callStatus NOT IN ('System Release')
+  AND C.VoiceCallType IN ('Intrusive')
+  AND P.Latitude  IS NOT NULL
+  AND P.Longitude IS NOT NULL
+  AND F.CollectionName = '{collection}'
+  AND F.ASideLocation  = '{location}'
+ORDER BY S.SessionId`,
+  },
+  {
     label: "CST 11000",
     category: "Calls",
     mode: "points",
