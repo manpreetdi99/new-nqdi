@@ -66,7 +66,9 @@ export const COLOR_SCHEMES: Record<string, ColorScheme> = {
       { min: 20000,  max: 50000,   color: "#FF8A00", label: "20.000–50.000" },
       { min: 5000,   max: 20000,   color: "#0076FF", label: "5.000–20.000" },
       { min: 350,    max: 5000,    color: "#00EEFF", label: "350–5.000" },
-      { min: 0,      max: 350,     color: "#00FF00", label: "0–350" },
+      { min: 0.1,    max: 350,     color: "#00FF00", label: "0–350" },
+      // failed tests: ThroughputGet NULL → ISNULL(..., 0) στο SQL. Η τιμή είναι ROUND(.., 1), άρα > 0 σημαίνει ≥ 0.1
+      { min: 0,      max: 0.1,     color: "#000000", label: "failed" },
     ],
   },
   ul_throughput: {
@@ -79,7 +81,9 @@ export const COLOR_SCHEMES: Record<string, ColorScheme> = {
       { min: 15000,  max: 30000,  color: "#FF0000", label: "15.000–30.000" },
       { min: 5000,   max: 15000,  color: "#FF8A00", label: "5.000–15.000" },
       { min: 350,    max: 5000,   color: "#0076FF", label: "350–5.000" },
-      { min: 0,      max: 350,    color: "#00FF00", label: "0–350" },
+      { min: 0.1,    max: 350,    color: "#00FF00", label: "0–350" },
+      // failed tests: ThroughputPut NULL → ISNULL(..., 0) στο SQL. Η τιμή είναι ROUND(.., 1), άρα > 0 σημαίνει ≥ 0.1
+      { min: 0,      max: 0.1,    color: "#000000", label: "failed" },
     ],
   },
   rxlevsub_gsm: {
@@ -225,7 +229,7 @@ export const COLOR_SCHEMES: Record<string, ColorScheme> = {
   },
   ookla_dl: {
     type: "range",
-    label: "OOKLA DL Throughput (Mbps)",
+    label: "DL Throughput (Mbps)",
     suggestCol: "ookla_dl",
     buckets: [
       { min: 300, max: 100000, color: "#006400", label: "≥ 300 Mbps" },
@@ -241,7 +245,7 @@ export const COLOR_SCHEMES: Record<string, ColorScheme> = {
   },
   ookla_ul: {
     type: "range",
-    label: "OOKLA UL Throughput (Mbps)",
+    label: "UL Throughput (Mbps)",
     suggestCol: "ookla_ul",
     buckets: [
       { min: 100, max: 100000, color: "#1B5E20", label: "≥ 100 Mbps" },
@@ -249,7 +253,9 @@ export const COLOR_SCHEMES: Record<string, ColorScheme> = {
       { min: 20,  max: 50,    color: "#FFEB00", label: "20–50 Mbps" },
       { min: 5,   max: 20,    color: "#FF8A00", label: "5–20 Mbps" },
       { min: 1,   max: 5,     color: "#FF0000", label: "1–5 Mbps" },
-      { min: 0,   max: 1,     color: "#000000", label: "0–1 Mbps" },
+      { min: 0.001, max: 1,   color: "#5A3214", label: "0–1 Mbps" },
+      // failed tests: το SQL δίνει ul_mbps = 0 (ISNULL(..., 0)) — το max είναι exclusive, άρα 0 → [0, 0.001)
+      { min: 0,   max: 0.001, color: "#000000", label: "failed" },
     ],
   },
   ookla_latency: {
@@ -407,6 +413,28 @@ export function computeBucketCounters(
     }
   }
   return counters;
+}
+
+// ── Μέσος όρος για το legend, χωρίς τα σημεία του bucket "failed" ─────────────
+// Μόνο για range schemes που έχουν bucket "failed" (DL/UL throughput). Η μονάδα
+// βγαίνει από την παρένθεση στο τέλος του label, π.χ. "DL Throughput (Mbps)".
+export function computeAvgExcludingFailed(
+  rows: Record<string, CellValue>[],
+  valueCol: string,
+  scheme: ColorScheme,
+): { avg: number; unit: string } | null {
+  if (scheme.type !== "range") return null;
+  const failed = scheme.buckets.find((b) => b.label === "failed");
+  if (!failed) return null;
+  let sum = 0, n = 0;
+  for (const row of rows) {
+    const v = Number(row[valueCol]);
+    if (isNaN(v) || (v >= failed.min && v < failed.max)) continue;
+    sum += v; n++;
+  }
+  if (n === 0) return null;
+  const unit = scheme.label.match(/\(([^)]+)\)\s*$/)?.[1] ?? "";
+  return { avg: sum / n, unit };
 }
 
 // ── Dynamic PCI coloring: the N most-sampled PCI values get distinct colors; ──

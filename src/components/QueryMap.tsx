@@ -34,6 +34,7 @@ import {
   bubbleColor,
   bubbleTierLabel,
   computeBucketCounters,
+  computeAvgExcludingFailed,
   buildDynamicPciCategories,
   type ColorScheme,
   type CategoryScheme,
@@ -822,6 +823,7 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope) {
   // κρατάμε ολόκληρη τη γραμμή του DB ×20.000 markers ×layers ×panels.
   const pointMarkers = useMemo<PointMarkerData[]>(() => {
     if (mode !== "points" || !effValCol || !effLatCol || !effLngCol || filteredRows.length === 0) return [];
+    const linkCol = template?.linkCol;
     const raw = filteredRows.flatMap((row) => {
       const lat = Number(row[effLatCol]), lng = Number(row[effLngCol]);
       if (isNaN(lat) || isNaN(lng) || (lat === 0 && lng === 0)) return [];
@@ -832,11 +834,12 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope) {
         color: colorForValue(currentScheme, val),
         bucketKey: bucketKeyForValue(currentScheme, val),
         label: effLabelCol ? String(row[effLabelCol] ?? "") : "",
+        link: linkCol ? String(row[linkCol] ?? "") : "",
       }];
     });
     // Χωρίς αραίωση εδώ: το αραίωμα γίνεται πλέον ανά viewport (decimateForView)
     return raw;
-  }, [mode, filteredRows, effValCol, effLatCol, effLngCol, effLabelCol, currentScheme]);
+  }, [mode, filteredRows, effValCol, effLatCol, effLngCol, effLabelCol, currentScheme, template]);
 
   // Legend click-to-filter: isolate one or more value buckets/categories
   const visiblePointMarkers = useMemo(() => {
@@ -875,6 +878,12 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope) {
 
   const pointsTotal = [...bucketCounters.values()].reduce((a, b) => a + b, 0);
 
+  // Μέσος όρος των σημείων χωρίς τα failed (μόνο σε schemes με bucket "failed")
+  const pointsAvg = useMemo(() => {
+    if (mode !== "points" || !effValCol || filteredRows.length === 0) return null;
+    return computeAvgExcludingFailed(filteredRows, effValCol, currentScheme);
+  }, [mode, filteredRows, effValCol, currentScheme]);
+
   return {
     tmplIdx, setTmplIdx, sql, setSql, mode, setMode, template,
     quantityCol, labelCol, valueCol, colorSchemeKey,
@@ -889,7 +898,7 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope) {
     filtersReady, selectTemplate, applySync, getState, setState, clearResults,
     runQuery, runRef,
     visibleBubblePoints, bubbleTierCounts, visiblePointMarkers, pointCount, dataBounds,
-    bucketCounters, pointsTotal,
+    bucketCounters, pointsTotal, pointsAvg,
   };
 }
 
@@ -945,6 +954,8 @@ interface PointMarkerData {
   color: string;
   bucketKey: string | null;
   label: string;
+  // Τιμή της στήλης linkCol του template (π.χ. grx / akamai / ookla), αν υπάρχει
+  link: string;
 }
 
 interface BubblePointData {
@@ -1045,6 +1056,7 @@ function pointTooltipHtml(pt: PointMarkerData, ctx: HoverContext): string {
   return `<div class="font-sans text-center space-y-0.5">${head}${label}`
     + `<div class="text-xs"><span class="text-gray-500">${escapeHtml(ctx.valueCol)}:</span> `
     + `<span class="font-mono font-bold" style="color:${escapeHtml(pt.color)}">${escapeHtml(display)}</span></div>`
+    + (pt.link ? `<div class="text-xs"><span class="text-gray-500">Link:</span> <span class="font-semibold">${escapeHtml(pt.link)}</span></div>` : "")
     + `${hint}</div>`;
 }
 
@@ -1294,6 +1306,11 @@ const LayerLegend = ({ L, index, name, showName, focused, dimmed, onToggleFocus 
               })}
           <p className="text-[9px] text-foreground/70 border-t border-border/50 pt-0.5 mt-0.5 font-mono truncate">
             {L.effValCol || "—"} · {L.pointsTotal.toLocaleString()} pts
+            {L.pointsAvg && (
+              <span title="Μέσος όρος χωρίς τα failed">
+                {" · "}avg thr {L.pointsAvg.avg.toLocaleString(undefined, { maximumFractionDigits: 1 })} {L.pointsAvg.unit}
+              </span>
+            )}
           </p>
         </>
       )}

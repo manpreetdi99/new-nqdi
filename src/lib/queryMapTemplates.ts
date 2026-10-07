@@ -142,7 +142,7 @@ ORDER BY flr.MsgTime`,
     sql: `SELECT
   Position.latitude  AS latitude,
   Position.longitude AS longitude,
-  ROUND(CONVERT(float, ResultsCapacityTest.ThroughputGet) * 0.008, 1) AS DLThrpt,
+  ISNULL(ROUND(CONVERT(float, ResultsCapacityTest.ThroughputGet) * 0.008, 1), 0) AS DLThrpt,
   FileList.ASideLocation AS Location,
   FileList.CollectionName
 FROM Sessions
@@ -167,7 +167,7 @@ ORDER BY ResultsCapacityTest.MsgTime`,
     sql: `SELECT
   Position.latitude  AS latitude,
   Position.longitude AS longitude,
-  ROUND(CONVERT(float, ResultsCapacityTest.ThroughputPut) * 0.008, 1) AS ULThrpt,
+  ISNULL(ROUND(CONVERT(float, ResultsCapacityTest.ThroughputPut) * 0.008, 1), 0) AS ULThrpt,
   FileList.ASideLocation AS Location,
   FileList.CollectionName
 FROM Sessions
@@ -219,7 +219,7 @@ WHERE Sessions.Valid = 1
 SELECT
   CAST(pos.Latitude  AS FLOAT) AS latitude,
   CAST(pos.Longitude AS FLOAT) AS longitude,
-  CASE aaf.thp WHEN 0 THEN NULL ELSE aaf.thp END AS ookla_dl,
+  ISNULL(aaf.thp, 0)                              AS ookla_dl,
   fl.ASideLocation                                AS Location,
   fl.CollectionName,
   ni.Technology,
@@ -256,7 +256,6 @@ OUTER APPLY (
 WHERE pos.Latitude    IS NOT NULL
   AND pos.Longitude   IS NOT NULL
   AND s.SessionId     IS NOT NULL
-  AND aaf.thp         IS NOT NULL
   AND fl.CollectionName = '{collection}'
   AND fl.ASideLocation  = '{location}'
 ORDER BY ti.TestId, aaf.ActionId`,
@@ -275,7 +274,7 @@ ORDER BY ti.TestId, aaf.ActionId`,
 SELECT
   CAST(pos.Latitude  AS FLOAT) AS latitude,
   CAST(pos.Longitude AS FLOAT) AS longitude,
-  CASE aaf.thp WHEN 0 THEN NULL ELSE aaf.thp END AS ookla_ul,
+  ISNULL(aaf.thp, 0)                              AS ookla_ul,
   fl.ASideLocation                                AS Location,
   fl.CollectionName,
   ni.Technology,
@@ -312,7 +311,6 @@ OUTER APPLY (
 WHERE pos.Latitude    IS NOT NULL
   AND pos.Longitude   IS NOT NULL
   AND s.SessionId     IS NOT NULL
-  AND aaf.thp         IS NOT NULL
   AND fl.CollectionName = '{collection}'
   AND fl.ASideLocation  = '{location}'
 ORDER BY ti.TestId, aaf.ActionId`,
