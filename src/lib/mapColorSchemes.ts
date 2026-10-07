@@ -418,23 +418,26 @@ export function computeBucketCounters(
 // ── Μέσος όρος για το legend, χωρίς τα σημεία του bucket "failed" ─────────────
 // Μόνο για range schemes που έχουν bucket "failed" (DL/UL throughput). Η μονάδα
 // βγαίνει από την παρένθεση στο τέλος του label, π.χ. "DL Throughput (Mbps)".
+// avg = null όταν δεν υπάρχει κανένα μη-failed σημείο (n = 0).
+export interface AvgExcludingFailed { avg: number | null; unit: string; n: number; failed: number }
+
 export function computeAvgExcludingFailed(
   rows: Record<string, CellValue>[],
   valueCol: string,
   scheme: ColorScheme,
-): { avg: number; unit: string } | null {
+): AvgExcludingFailed | null {
   if (scheme.type !== "range") return null;
-  const failed = scheme.buckets.find((b) => b.label === "failed");
-  if (!failed) return null;
-  let sum = 0, n = 0;
+  const failedBucket = scheme.buckets.find((b) => b.label === "failed");
+  if (!failedBucket) return null;
+  let sum = 0, n = 0, failed = 0;
   for (const row of rows) {
     const v = Number(row[valueCol]);
-    if (isNaN(v) || (v >= failed.min && v < failed.max)) continue;
+    if (isNaN(v)) continue;
+    if (v >= failedBucket.min && v < failedBucket.max) { failed++; continue; }
     sum += v; n++;
   }
-  if (n === 0) return null;
   const unit = scheme.label.match(/\(([^)]+)\)\s*$/)?.[1] ?? "";
-  return { avg: sum / n, unit };
+  return { avg: n > 0 ? sum / n : null, unit, n, failed };
 }
 
 // ── Dynamic PCI coloring: the N most-sampled PCI values get distinct colors; ──

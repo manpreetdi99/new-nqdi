@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback, memo } from "react";
-import { MapContainer, TileLayer, CircleMarker, Tooltip, Pane, useMap } from "react-leaflet";
+import { MapContainer, TileLayer, CircleMarker, Tooltip, Pane, Polygon, Polyline, useMap, useMapEvents } from "react-leaflet";
 import type { CircleMarkerProps } from "react-leaflet";
 import { createElementObject, createPathComponent, extendContext, updateCircle } from "@react-leaflet/core";
 import { CircleMarker as LeafletCircleMarker, Tooltip as LeafletTooltipClass } from "leaflet";
@@ -21,10 +21,13 @@ import {
   Layers,
   ArrowRightLeft,
   Plus,
+  Pentagon,
+  Copy,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { runBenchmarkApi, fetchCollectionNames, fetchLocations } from "@/lib/api";
 import { useUrlStringState } from "@/hooks/use-url-state";
+import { polygonAvg, rowsInAnyPolygon, POLYGON_COLORS, type LatLngTuple, type MapPolygon } from "@/lib/mapPolygons";
 import type { CellValue } from "@/types/benchmark";
 import {
   COLOR_SCHEMES,
@@ -591,7 +594,9 @@ interface LayerState {
   styleTouched: boolean;
 }
 
-function useQueryLayer(init: LayerInit, index: number, scope: LayerScope) {
+// legendArea: όταν ο χάρτης έχει polygons, το legend (πλήθη, %, avg) μετράει
+// μόνο τα σημεία μέσα σε αυτά — null = όλα τα σημεία.
+function useQueryLayer(init: LayerInit, index: number, scope: LayerScope, legendArea: LatLngTuple[][] | null) {
   // Αρχικές τιμές από το URL (ή defaults) — διαβάζονται μία φορά, στο mount
   const initTemplate = TEMPLATES[init.tmplIdx ?? 0] ?? TEMPLATES[0];
   const { db, collection: filterCollection, location: filterLocation } = scope;
@@ -871,18 +876,24 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope) {
     setOutline(preset.outline);
   }, [role, styleTouched]);
 
+  // Οι γραμμές που μετράει το legend: όλες, ή μόνο όσες είναι μέσα στα polygons
+  const legendRows = useMemo(() => {
+    if (!legendArea || legendArea.length === 0 || !effLatCol || !effLngCol) return filteredRows;
+    return rowsInAnyPolygon(filteredRows, effLatCol, effLngCol, legendArea);
+  }, [filteredRows, legendArea, effLatCol, effLngCol]);
+
   const bucketCounters = useMemo(() => {
-    if (mode !== "points" || !effValCol || filteredRows.length === 0) return new Map<string, number>();
-    return computeBucketCounters(filteredRows, effValCol, currentScheme);
-  }, [mode, filteredRows, effValCol, currentScheme]);
+    if (mode !== "points" || !effValCol || legendRows.length === 0) return new Map<string, number>();
+    return computeBucketCounters(legendRows, effValCol, currentScheme);
+  }, [mode, legendRows, effValCol, currentScheme]);
 
   const pointsTotal = [...bucketCounters.values()].reduce((a, b) => a + b, 0);
 
   // Μέσος όρος των σημείων χωρίς τα failed (μόνο σε schemes με bucket "failed")
   const pointsAvg = useMemo(() => {
-    if (mode !== "points" || !effValCol || filteredRows.length === 0) return null;
-    return computeAvgExcludingFailed(filteredRows, effValCol, currentScheme);
-  }, [mode, filteredRows, effValCol, currentScheme]);
+    if (mode !== "points" || !effValCol || legendRows.length === 0) return null;
+    return computeAvgExcludingFailed(legendRows, effValCol, currentScheme);
+  }, [mode, legendRows, effValCol, currentScheme]);
 
   return {
     tmplIdx, setTmplIdx, sql, setSql, mode, setMode, template,
@@ -1306,7 +1317,7 @@ const LayerLegend = ({ L, index, name, showName, focused, dimmed, onToggleFocus 
               })}
           <p className="text-[9px] text-foreground/70 border-t border-border/50 pt-0.5 mt-0.5 font-mono truncate">
             {L.effValCol || "—"} · {L.pointsTotal.toLocaleString()} pts
-            {L.pointsAvg && (
+            {L.pointsAvg?.avg != null && (
               <span title="Μέσος όρος χωρίς τα failed">
                 {" · "}avg thr {L.pointsAvg.avg.toLocaleString(undefined, { maximumFractionDigits: 1 })} {L.pointsAvg.unit}
               </span>
@@ -1405,6 +1416,204 @@ const LayerFilters = ({ L }: { L: QueryLayer }) => (
 );
 
 // ── Single self-contained map panel (1 χάρτης, 1–3 layers) ───────────────────
+// ── Custom polygons ───────────────────────────────────────────────────────────
+// Σχεδίαση: κλικ = νέα κορυφή, διπλό κλικ ή κλικ στην 1η κορυφή = τέλος,
+// Enter = τέλος, Esc = ακύρωση. Ζει μέσα στο <MapContainer>.
+const DRAFT_COLOR = "#2563eb";
+
+function PolygonDrawer({ active, onFinish, onCancel }: {
+  active: boolean;
+  onFinish: (points: LatLngTuple[]) => void;
+  onCancel: () => void;
+}) {
+  const map = useMap();
+  const [pts, setPts] = useState<LatLngTuple[]>([]);
+  const [cursor, setCursor] = useState<LatLngTuple | null>(null);
+  const ptsRef = useRef(pts);
+  ptsRef.current = pts;
+
+  const finish = useCallback(() => {
+    // Το διπλό κλικ φέρνει πρώτα δύο απλά κλικ στο ίδιο σημείο: πετάμε τις
+    // διαδοχικές ίδιες κορυφές πριν κλείσει το polygon.
+    const clean = ptsRef.current.filter((p, i, arr) =>
+      i === 0 || Math.abs(p[0] - arr[i - 1][0]) > 1e-9 || Math.abs(p[1] - arr[i - 1][1]) > 1e-9);
+    setPts([]); setCursor(null);
+    if (clean.length >= 3) onFinish(clean); else onCancel();
+  }, [onFinish, onCancel]);
+
+  useEffect(() => {
+    if (!active) { setPts([]); setCursor(null); return; }
+    const el = map.getContainer();
+    map.doubleClickZoom.disable();
+    el.style.cursor = "crosshair";
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") { setPts([]); setCursor(null); onCancel(); }
+      else if (e.key === "Enter") finish();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => {
+      map.doubleClickZoom.enable();
+      el.style.cursor = "";
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [active, map, finish, onCancel]);
+
+  useMapEvents({
+    click(e) { if (active) setPts((p) => [...p, [e.latlng.lat, e.latlng.lng]]); },
+    dblclick() { if (active) finish(); },
+    mousemove(e) { if (active && ptsRef.current.length > 0) setCursor([e.latlng.lat, e.latlng.lng]); },
+  });
+
+  if (!active || pts.length === 0) return null;
+  return (
+    <>
+      <Polyline positions={cursor ? [...pts, cursor] : pts} interactive={false}
+        pathOptions={{ color: DRAFT_COLOR, weight: 2, dashArray: "5 4" }} />
+      {pts.map((p, i) => (
+        <CircleMarker key={i} center={p} radius={i === 0 ? 6 : 4}
+          // Κλικ στην 1η κορυφή κλείνει το polygon — χωρίς να φτάσει στον χάρτη
+          bubblingMouseEvents={false}
+          interactive={i === 0 && pts.length >= 3}
+          eventHandlers={i === 0 ? { click: finish } : undefined}
+          pathOptions={{ color: DRAFT_COLOR, weight: 2, fillColor: "#ffffff", fillOpacity: 1 }} />
+      ))}
+    </>
+  );
+}
+
+interface PolygonLayerStat {
+  layer: number;
+  avg: number | null;
+  unit: string;
+  n: number;
+  failed: number;
+}
+
+const fmtAvg = (s: PolygonLayerStat) =>
+  s.avg == null ? "—" : `${s.avg.toLocaleString(undefined, { maximumFractionDigits: 1 })} ${s.unit}`;
+
+/** Τα polygons του χάρτη, με ετικέτα avg στο κέντρο του καθενός. */
+const PolygonShapes = ({ polygons, stats, multiLayer }: {
+  polygons: MapPolygon[];
+  stats: Map<number, PolygonLayerStat[]>;
+  multiLayer: boolean;
+}) => (
+  <>
+    {polygons.map((pg) => {
+      const st = stats.get(pg.id) ?? [];
+      return (
+        <Polygon key={pg.id} positions={pg.points} interactive={false}
+          pathOptions={{ color: pg.color, weight: 2, fillColor: pg.color, fillOpacity: 0.08 }}>
+          <Tooltip permanent direction="center" opacity={0.9}>
+            <div className="text-[10px] leading-tight text-center">
+              <div className="font-bold" style={{ color: pg.color }}>{pg.name}</div>
+              {st.map((s) => (
+                <div key={s.layer} className="font-mono">
+                  {multiLayer ? `L${s.layer + 1} ` : ""}{fmtAvg(s)}
+                </div>
+              ))}
+            </div>
+          </Tooltip>
+        </Polygon>
+      );
+    })}
+  </>
+);
+
+/** Πάνω στο legend: σε ποια περιοχή αναφέρονται τα πλήθη / % / avg. */
+const LegendAreaChip = ({ polygons, all, onToggle }: {
+  polygons: MapPolygon[]; all: boolean; onToggle: () => void;
+}) => (
+  <button type="button" onClick={onToggle}
+    title={all ? "Κλικ για legend μόνο με τα σημεία μέσα στα polygons" : "Κλικ για legend σε όλο τον χάρτη"}
+    className="w-full flex items-center gap-1 mb-1 rounded px-1 py-0.5 text-[9px] text-left bg-primary/10 hover:bg-primary/20 transition-colors">
+    <Pentagon className="h-2.5 w-2.5 shrink-0 text-primary" />
+    {all
+      ? <span className="text-foreground/80">Όλος ο χάρτης</span>
+      : <span className="truncate">
+          <span className="text-foreground/80">Μέσα σε </span>
+          {polygons.map((pg, i) => (
+            <span key={pg.id} className="font-semibold" style={{ color: pg.color }}>{i > 0 ? ", " : ""}{pg.name}</span>
+          ))}
+        </span>}
+  </button>
+);
+
+/** Λίστα polygons του χάρτη: avg throughput ανά layer, αφαίρεση, εφαρμογή σε όλους. */
+const PolygonPanel = ({ polygons, stats, multiLayer, drawing, panelCount, legendScope, onFocusLegend, onToggleDraw, onRemove, onApplyAll }: {
+  polygons: MapPolygon[];
+  stats: Map<number, PolygonLayerStat[]>;
+  multiLayer: boolean;
+  drawing: boolean;
+  panelCount: number;
+  legendScope: "polygons" | "all" | number;
+  onFocusLegend: (id: number) => void;
+  onToggleDraw: () => void;
+  onRemove: (id: number) => void;
+  onApplyAll: (id: number) => void;
+}) => (
+  <div className="absolute top-2 right-2 z-[1000] flex flex-col items-end gap-1 max-w-[230px]">
+    <button type="button" onClick={onToggleDraw}
+      title={drawing
+        ? "Ακύρωση σχεδίασης (Esc)"
+        : "Σχεδίαση polygon: κλικ για κορυφές · διπλό κλικ, Enter ή κλικ στην 1η κορυφή για τέλος"}
+      className={`flex items-center gap-1 rounded border px-2 py-1 text-[10px] shadow-md backdrop-blur-sm transition-all ${drawing
+        ? "bg-primary text-primary-foreground border-primary"
+        : "bg-muted/80 border-border/50 text-foreground hover:border-primary/50"}`}>
+      <Pentagon className="h-3 w-3" />
+      {drawing ? "Ακύρωση" : "Polygon"}
+    </button>
+    {drawing && (
+      <p className="rounded bg-muted/80 backdrop-blur-sm border border-border/50 px-1.5 py-1 text-[9px] text-foreground/80 shadow-md">
+        Κλικ για κορυφές · διπλό κλικ / Enter για τέλος · Esc ακύρωση
+      </p>
+    )}
+    {polygons.length > 0 && (
+      <div className="rounded-md bg-muted/80 backdrop-blur-sm border border-border/50 p-1.5 shadow-md space-y-1 w-full max-h-[260px] overflow-y-auto">
+        {polygons.map((pg) => {
+          const st = stats.get(pg.id) ?? [];
+          return (
+            <div key={pg.id} className="text-[10px]">
+              <div className="flex items-center gap-1">
+                <span className="h-2.5 w-2.5 rounded-sm shrink-0 border" style={{ borderColor: pg.color, background: `${pg.color}33` }} />
+                <button type="button" onClick={() => onFocusLegend(pg.id)}
+                  title={legendScope === pg.id
+                    ? "Κλικ για legend σε όλα τα polygons"
+                    : "Κλικ για legend μόνο με τα σημεία αυτού του polygon"}
+                  className={`font-semibold flex-1 truncate text-left rounded px-0.5 hover:bg-primary/10 ${legendScope === pg.id ? "ring-1 ring-inset ring-primary/50 bg-primary/10" : ""}`}
+                  style={{ color: pg.color }}>
+                  {pg.name}
+                </button>
+                {panelCount > 1 && pg.panels.length < panelCount && (
+                  <button type="button" onClick={() => onApplyAll(pg.id)}
+                    title="Εφαρμογή του polygon σε όλους τους χάρτες"
+                    className="p-0.5 rounded text-muted-foreground hover:text-primary">
+                    <Copy className="h-3 w-3" />
+                  </button>
+                )}
+                <button type="button" onClick={() => onRemove(pg.id)}
+                  title="Αφαίρεση του polygon από αυτόν τον χάρτη"
+                  className="p-0.5 rounded text-muted-foreground hover:text-destructive">
+                  <X className="h-3 w-3" />
+                </button>
+              </div>
+              {st.length === 0
+                ? <p className="text-[9px] text-muted-foreground pl-3.5">χωρίς throughput layer</p>
+                : st.map((s) => (
+                  <p key={s.layer} className="font-mono text-[9px] text-foreground/80 pl-3.5"
+                    title="Μέσος όρος χωρίς τα failed">
+                    {multiLayer ? `L${s.layer + 1} · ` : ""}avg {fmtAvg(s)}
+                    <span className="text-muted-foreground"> · {s.n + s.failed} pts{s.failed > 0 ? ` · ${s.failed} failed` : ""}</span>
+                  </p>
+                ))}
+            </div>
+          );
+        })}
+      </div>
+    )}
+  </div>
+);
+
 interface SingleMapPanelProps {
   databases: string[];
   defaultDatabase?: string;
@@ -1418,9 +1627,19 @@ interface SingleMapPanelProps {
   initialPanel?: PanelInit;
   /** Αναφέρει τη serialized κατάσταση του panel στο URL state του γονιού. */
   onPersist?: (serialized: string) => void;
+  /** Custom polygons που εφαρμόζονται σε αυτόν τον χάρτη (κοινή λίστα στον γονιό) */
+  polygons?: MapPolygon[];
+  panelCount?: number;
+  onAddPolygon?: (points: LatLngTuple[]) => void;
+  onRemovePolygon?: (id: number) => void;
+  onApplyPolygonAll?: (id: number) => void;
 }
 
-const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label, onRemove, syncTarget, onSyncRequest, runTrigger, initialPanel, onPersist }: SingleMapPanelProps) => {
+const NOOP = () => {};
+const NO_POLYGONS: MapPolygon[] = [];
+
+const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label, onRemove, syncTarget, onSyncRequest, runTrigger, initialPanel, onPersist,
+  polygons = NO_POLYGONS, panelCount = 1, onAddPolygon, onRemovePolygon, onApplyPolygonAll }: SingleMapPanelProps) => {
   // Το URL state διαβάζεται ΜΟΝΟ στο mount: μετά κερδίζει ό,τι κάνει ο χρήστης
   const seed = useRef(initialPanel?.layers ?? []).current;
   const seedScope = useRef(initialPanel?.scope).current;
@@ -1454,9 +1673,27 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
   const scope = useMemo<LayerScope>(() => ({ db, collection, location }), [db, collection, location]);
 
   // Fixed number of hook calls; only the first `layerCount` are active
-  const layer0 = useQueryLayer(seed[0] ?? {}, 0, scope);
-  const layer1 = useQueryLayer(seed[1] ?? {}, 1, scope);
-  const layer2 = useQueryLayer(seed[2] ?? {}, 2, scope);
+  // ── Εύρος του legend όταν υπάρχουν polygons ──────────────────────────────
+  // "polygons" = ένωση όλων των polygons του χάρτη (default), "all" = όλος ο
+  // χάρτης, αριθμός = ένα συγκεκριμένο polygon (κλικ στο όνομά του).
+  const [legendScope, setLegendScope] = useState<"polygons" | "all" | number>("polygons");
+  const scopedPolygons = useMemo(() => {
+    if (legendScope === "all") return [];
+    if (typeof legendScope === "number") {
+      const one = polygons.filter((pg) => pg.id === legendScope);
+      if (one.length > 0) return one;
+    }
+    return polygons;
+  }, [polygons, legendScope]);
+  // Σταθερό reference όσο δεν αλλάζει η γεωμετρία: ο γονιός ξαναφτιάχνει τη
+  // λίστα polygons σε κάθε render, αλλά τα layers δεν πρέπει να ξαναμετρούν.
+  const legendKey = scopedPolygons.map((pg) => `${pg.id}:${pg.points.length}`).join(",");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  const legendArea = useMemo(() => (scopedPolygons.length > 0 ? scopedPolygons.map((pg) => pg.points) : null), [legendKey]);
+
+  const layer0 = useQueryLayer(seed[0] ?? {}, 0, scope, legendArea);
+  const layer1 = useQueryLayer(seed[1] ?? {}, 1, scope, legendArea);
+  const layer2 = useQueryLayer(seed[2] ?? {}, 2, scope, legendArea);
   const allLayers = [layer0, layer1, layer2];
 
   // Αλλαγή scope ⇒ τα αποτελέσματα όλων των layers αφορούν άλλα δεδομένα
@@ -1579,6 +1816,36 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
   persistRef.current = onPersist;
   useEffect(() => { persistRef.current?.(persisted); }, [persisted]);
   const anyRows = layers.some((l) => l.rows.length > 0);
+
+  // ── Custom polygons: σχεδίαση + avg throughput (χωρίς failed) ανά layer ────
+  const [drawing, setDrawing] = useState(false);
+  const stopDrawing = useCallback(() => setDrawing(false), []);
+  const addPolygonRef = useRef(onAddPolygon);
+  addPolygonRef.current = onAddPolygon;
+  const finishPolygon = useCallback((pts: LatLngTuple[]) => {
+    addPolygonRef.current?.(pts);
+    setDrawing(false);
+    // Νέο polygon ⇒ το legend γυρίζει σε «μέσα στα polygons»
+    setLegendScope("polygons");
+  }, []);
+
+  const polygonStats = useMemo(() => {
+    const m = new Map<number, PolygonLayerStat[]>();
+    for (const pg of polygons) {
+      const list: PolygonLayerStat[] = [];
+      layers.forEach((lyr, i) => {
+        if (!lyr.visible || lyr.mode !== "points" || !lyr.effValCol || !lyr.effLatCol || !lyr.effLngCol) return;
+        const s = polygonAvg(lyr.filteredRows, lyr.effLatCol, lyr.effLngCol, lyr.effValCol, lyr.currentScheme, pg.points);
+        if (s) list.push({ layer: i, ...s });
+      });
+      m.set(pg.id, list);
+    }
+    return m;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [polygons, layerCount,
+      layer0.visible, layer0.mode, layer0.filteredRows, layer0.effValCol, layer0.effLatCol, layer0.effLngCol, layer0.currentScheme,
+      layer1.visible, layer1.mode, layer1.filteredRows, layer1.effValCol, layer1.effLatCol, layer1.effLngCol, layer1.currentScheme,
+      layer2.visible, layer2.mode, layer2.filteredRows, layer2.effValCol, layer2.effLatCol, layer2.effLngCol, layer2.currentScheme]);
 
   // Τα ενεργά φίλτρα παρουσιάζονται και καθαρίζονται για όλα τα layers μαζί
   const selectionCount = layers.reduce(
@@ -1943,15 +2210,33 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                 name={layerName(lyr, i)} showName={multiLayer}
                 valueCol={lyr.effValCol} qtyCol={lyr.effQtyCol} labelCol={lyr.effLabelCol}
                 latCol={lyr.effLatCol} lngCol={lyr.effLngCol}
-                selectedGroup={lyr.selectedGroup} onToggleGroup={lyr.toggleGroup} />
+                selectedGroup={lyr.selectedGroup}
+                // Στη σχεδίαση polygon το κλικ σε σημείο είναι κορυφή, όχι φίλτρο ομάδας
+                onToggleGroup={drawing ? NOOP : lyr.toggleGroup} />
             </Pane>
           ))}
           <PaneStack order={stackOrder} />
+          <PolygonShapes polygons={polygons} stats={polygonStats} multiLayer={multiLayer} />
+          <PolygonDrawer active={drawing} onFinish={finishPolygon} onCancel={stopDrawing} />
         </MapContainer>
+
+        {onAddPolygon && (
+          <PolygonPanel polygons={polygons} stats={polygonStats} multiLayer={multiLayer}
+            drawing={drawing} panelCount={panelCount}
+            onToggleDraw={() => setDrawing((d) => !d)}
+            legendScope={legendScope}
+            onFocusLegend={(id) => setLegendScope((s) => (s === id ? "polygons" : id))}
+            onRemove={(id) => onRemovePolygon?.(id)}
+            onApplyAll={(id) => onApplyPolygonAll?.(id)} />
+        )}
 
         {/* Legend overlay — ένα block ανά ορατό layer (on/off ανά layer, status row) */}
         {shownPoints > 0 && (
           <div className="absolute bottom-2 right-2 bg-muted/70 backdrop-blur-sm border border-border/50 rounded-md p-2 space-y-0.5 z-[1000] shadow-md max-h-[368px] overflow-y-auto min-w-[161px]">
+            {polygons.length > 0 && (
+              <LegendAreaChip polygons={scopedPolygons} all={legendScope === "all"}
+                onToggle={() => setLegendScope((s) => (s === "all" ? "polygons" : "all"))} />
+            )}
             {layers.map((lyr, i) => (lyr.visible && lyr.pointCount > 0) && (
               <LayerLegend key={i} L={lyr} index={i} name={layerName(lyr, i)} showName={multiLayer}
                 focused={focusedLayer === i}
@@ -2030,10 +2315,39 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
     setPanels((prev) => (prev.length >= MAX_PANELS ? prev : [...prev, nextPanelId.current++]));
   };
 
+  // ── Custom polygons: μία λίστα για όλους τους χάρτες· κάθε polygon ξέρει σε
+  // ποια panels εφαρμόζεται, ώστε να σχεδιάζεται μία φορά και να μεταφέρεται.
+  const [polygons, setPolygons] = useState<MapPolygon[]>([]);
+  const nextPolygonId = useRef(1);
+
+  const addPolygon = (panelId: number, points: LatLngTuple[]) => {
+    const id = nextPolygonId.current++;
+    setPolygons((prev) => [...prev, {
+      id, name: `P${id}`, color: POLYGON_COLORS[(id - 1) % POLYGON_COLORS.length], points, panels: [panelId],
+    }]);
+  };
+
+  // Αφαίρεση από ένα panel· όταν δεν μείνει σε κανένα χάρτη, διαγράφεται
+  const removePolygonFromPanel = (polygonId: number, panelId: number) => {
+    setPolygons((prev) => prev.flatMap((pg) => {
+      if (pg.id !== polygonId) return [pg];
+      const rest = pg.panels.filter((p) => p !== panelId);
+      return rest.length > 0 ? [{ ...pg, panels: rest }] : [];
+    }));
+  };
+
+  const applyPolygonToAll = (polygonId: number) => {
+    setPolygons((prev) => prev.map((pg) => (pg.id === polygonId ? { ...pg, panels: [...panels] } : pg)));
+  };
+
   const removePanel = (id: number) => {
     setPanels((prev) => (prev.length <= 1 ? prev : prev.filter((p) => p !== id)));
     snapshots.current.delete(id);
     persistPanels();
+    setPolygons((prev) => prev.flatMap((pg) => {
+      const rest = pg.panels.filter((p) => p !== id);
+      return rest.length > 0 ? [{ ...pg, panels: rest }] : [];
+    }));
     setSyncTargets((prev) => {
       if (!(id in prev)) return prev;
       const next = { ...prev };
@@ -2113,6 +2427,11 @@ const QueryMap = ({ databases, defaultDatabase = "" }: QueryMapProps) => {
             syncTarget={idx > 0 ? syncTargets[id] ?? null : undefined}
             runTrigger={runAllTrigger}
             initialPanel={seedPanels[id]}
+            polygons={polygons.filter((pg) => pg.panels.includes(id))}
+            panelCount={panels.length}
+            onAddPolygon={(pts) => addPolygon(id, pts)}
+            onRemovePolygon={(pgId) => removePolygonFromPanel(pgId, id)}
+            onApplyPolygonAll={applyPolygonToAll}
             onPersist={(serialized) => { snapshots.current.set(id, serialized); persistPanels(); }}
           />
         ))}
