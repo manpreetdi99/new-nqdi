@@ -1,5 +1,5 @@
 import { useState, useMemo, useEffect, useRef, useCallback, memo } from "react";
-import { MapContainer, TileLayer, CircleMarker, Tooltip, Pane, Polygon, Polyline, useMap, useMapEvents } from "react-leaflet";
+import { MapContainer, TileLayer, CircleMarker, Tooltip, Pane, Polygon, Polyline, Rectangle, useMap, useMapEvents } from "react-leaflet";
 import type { CircleMarkerProps } from "react-leaflet";
 import { createElementObject, createPathComponent, extendContext, updateCircle } from "@react-leaflet/core";
 import { CircleMarker as LeafletCircleMarker, Tooltip as LeafletTooltipClass } from "leaflet";
@@ -28,6 +28,7 @@ import { Button } from "@/components/ui/button";
 import { runBenchmarkApi, fetchCollectionNames, fetchLocations } from "@/lib/api";
 import { useUrlStringState } from "@/hooks/use-url-state";
 import { polygonAvg, rowsInAnyPolygon, POLYGON_COLORS, type LatLngTuple, type MapPolygon } from "@/lib/mapPolygons";
+import { buildBins, countBinsByBucket, type BinCell } from "@/lib/mapBins";
 import type { CellValue } from "@/types/benchmark";
 import {
   COLOR_SCHEMES,
@@ -210,6 +211,7 @@ interface LayerSync {
   colorSchemeKey: string;
   labelCol: string;
   quantityCol: string;
+  binLevel: string;
 }
 
 interface SyncPayload {
@@ -463,6 +465,8 @@ interface LayerInit {
   outline?: boolean;
   /** true μόνο όταν ο χρήστης άλλαξε ο ίδιος το στυλ αυτού του layer. */
   styleTouched?: boolean;
+  /** Επίπεδο binning (π.χ. "Z9"), "" = σημεία. Μόνο σε templates με binLevels. */
+  binLevel?: string;
 }
 
 const FIELD_SEP = "~";
@@ -496,6 +500,7 @@ function serializeLayerInit(l: Required<LayerInit>): string {
     l.opacity.toFixed(2),
     l.outline ? "1" : "0",
     l.styleTouched ? "1" : "0",
+    encField(l.binLevel),
   ].join(FIELD_SEP);
 }
 
@@ -506,8 +511,10 @@ function parseLayerInit(raw: string): LayerInit | null {
   const shape = f[1] as MarkerShape;
   const radius = Number(f[2]);
   const weight = Number(f[3]);
+  const safeIdx = tmplIdx >= 0 && tmplIdx < TEMPLATES.length ? tmplIdx : 0;
+  const binLevel = f[9] === undefined ? undefined : safeDecode(f[9]);
   return {
-    tmplIdx: tmplIdx >= 0 && tmplIdx < TEMPLATES.length ? tmplIdx : 0,
+    tmplIdx: safeIdx,
     shape: SHAPE_OPTIONS.some((o) => o.value === shape) ? shape : undefined,
     radius: Number.isFinite(radius) ? clamp(radius, 2, 14) : undefined,
     weight: Number.isFinite(weight) ? clamp(weight, 0, 6) : undefined,
@@ -516,6 +523,8 @@ function parseLayerInit(raw: string): LayerInit | null {
     opacity: f[6] && Number.isFinite(Number(f[6])) ? clamp(Number(f[6]), 0.2, 1) : undefined,
     outline: f[7] === undefined ? undefined : f[7] === "1",
     styleTouched: f[8] === "1",
+    // "" = σημεία· άγνωστο επίπεδο (π.χ. άλλαξε το template) ⇒ default του template
+    binLevel: binLevel === "" || (binLevel && TEMPLATES[safeIdx].binLevels?.includes(binLevel)) ? binLevel : undefined,
   };
 }
 
@@ -527,7 +536,7 @@ interface PanelInit {
 /**
  * `?qmap=` → ένα PanelInit ανά panel. Μορφή:
  *   panel := db~collection~location ; layer ; layer …
- *   layer := tmplIdx~shape~radius~weight~mode~visible~opacity~outline
+ *   layer := tmplIdx~shape~radius~weight~mode~visible~opacity~outline~styleTouched~binLevel
  * Άκυρα κομμάτια αγνοούνται — ένα χειρόγραφο URL δεν σπάει το UI.
  *
  * Συμβατότητα: στην πρώτη έκδοση το db/collection/location ζούσαν ΜΕΣΑ σε κάθε
@@ -592,6 +601,7 @@ interface LayerState {
   opacity: number;
   outline: boolean;
   styleTouched: boolean;
+  binLevel: string;
 }
 
 // legendArea: όταν ο χάρτης έχει polygons, το legend (πλήθη, %, avg) μετράει
@@ -632,6 +642,8 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope, legend
   // τρέχον στυλ, κάθε reload θα έμοιαζε με «χειροκίνητη» ρύθμιση και το auto
   // styling δεν θα ξανάπαιζε ποτέ στον πρώτο χάρτη (αυτόν που έχει seed).
   const [styleTouched, setStyleTouched] = useState(init.styleTouched ?? false);
+  // Binning: "" = σημεία, αλλιώς επίπεδο DmnBinRegion (Z9 / Z8 / Z7) του template
+  const [binLevel, setBinLevel] = useState(init.binLevel ?? initTemplate.binLevels?.[0] ?? "");
   const markStyleTouched = useCallback(() => setStyleTouched(true), []);
 
   // Σταθερό callback: περνά σαν prop στο memoized LayerMarkers
@@ -710,6 +722,7 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope, legend
     setQuantityCol(t.quantityCol ?? ""); setValueCol(t.valueCol ?? "");
     setLabelCol(t.labelCol); setLatCol(""); setLngCol("");
     if (t.colorScheme) setColorSchemeKey(t.colorScheme);
+    setBinLevel(t.binLevels?.[0] ?? "");
     clearResults();
   };
 
@@ -722,6 +735,7 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope, legend
     setColorSchemeKey(s.colorSchemeKey);
     setLabelCol(s.labelCol);
     setQuantityCol(s.quantityCol);
+    setBinLevel(s.binLevel);
     setLatCol(""); setLngCol("");
     setVisible(true);
     clearResults();
@@ -731,7 +745,7 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope, legend
     tmplIdx, sql, mode, quantityCol, labelCol, latCol, lngCol, valueCol,
     colorSchemeKey, columns, rows, executionTime, error,
     filterNRARFCN, filterLink,
-    selectedGroup, selectedBuckets, visible, shape, radius, weight, opacity, outline, styleTouched,
+    selectedGroup, selectedBuckets, visible, shape, radius, weight, opacity, outline, styleTouched, binLevel,
   });
 
   const setState = (s: LayerState) => {
@@ -745,6 +759,7 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope, legend
     setVisible(s.visible);
     setShape(s.shape); setRadius(s.radius); setWeight(s.weight);
     setOpacity(s.opacity); setOutline(s.outline); setStyleTouched(s.styleTouched);
+    setBinLevel(s.binLevel);
   };
 
   const runQuery = async () => {
@@ -826,8 +841,12 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope, legend
 
   // Χωρίς το `row`: το tooltip των σημείων δείχνει μόνο label + τιμή, οπότε δεν
   // κρατάμε ολόκληρη τη γραμμή του DB ×20.000 markers ×layers ×panels.
+  // Binning ενεργό μόνο σε points mode και μόνο με επίπεδο που δίνει το template
+  const activeBinLevel = mode === "points" && binLevel && template?.binLevels?.includes(binLevel) ? binLevel : "";
+  const binned = activeBinLevel !== "";
+
   const pointMarkers = useMemo<PointMarkerData[]>(() => {
-    if (mode !== "points" || !effValCol || !effLatCol || !effLngCol || filteredRows.length === 0) return [];
+    if (binned || mode !== "points" || !effValCol || !effLatCol || !effLngCol || filteredRows.length === 0) return [];
     const linkCol = template?.linkCol;
     const raw = filteredRows.flatMap((row) => {
       const lat = Number(row[effLatCol]), lng = Number(row[effLngCol]);
@@ -844,7 +863,17 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope, legend
     });
     // Χωρίς αραίωση εδώ: το αραίωμα γίνεται πλέον ανά viewport (decimateForView)
     return raw;
-  }, [mode, filteredRows, effValCol, effLatCol, effLngCol, effLabelCol, currentScheme, template]);
+  }, [binned, mode, filteredRows, effValCol, effLatCol, effLngCol, effLabelCol, currentScheme, template]);
+
+  const bins = useMemo<BinCell[]>(
+    () => (binned ? buildBins(filteredRows, activeBinLevel, effValCol, currentScheme) : []),
+    [binned, filteredRows, activeBinLevel, effValCol, currentScheme],
+  );
+
+  const visibleBins = useMemo(() => {
+    if (selectedBuckets.size === 0) return bins;
+    return bins.filter((b) => b.bucketKey !== null && selectedBuckets.has(b.bucketKey));
+  }, [bins, selectedBuckets]);
 
   // Legend click-to-filter: isolate one or more value buckets/categories
   const visiblePointMarkers = useMemo(() => {
@@ -853,7 +882,7 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope, legend
   }, [pointMarkers, selectedBuckets]);
 
   // Ό,τι δείχνει ο χάρτης αυτή τη στιγμή (πριν το per-viewport αραίωμα)
-  const shownPoints = mode === "bubble" ? visibleBubblePoints : visiblePointMarkers;
+  const shownPoints = mode === "bubble" ? visibleBubblePoints : binned ? visibleBins : visiblePointMarkers;
   const pointCount = shownPoints.length;
   // Bounds αντί για πίνακα σημείων: το MapBounds θέλει μόνο το πλαίσιο, και έτσι
   // δεν φτιάχνεται πίνακας 20.000 αντικειμένων σε κάθε render.
@@ -884,8 +913,13 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope, legend
 
   const bucketCounters = useMemo(() => {
     if (mode !== "points" || !effValCol || legendRows.length === 0) return new Map<string, number>();
+    // Με binning το legend μετράει bins (με polygons: τα bins από τα δείγματα μέσα σε αυτά)
+    if (binned) {
+      const legendBins = legendRows === filteredRows ? bins : buildBins(legendRows, activeBinLevel, effValCol, currentScheme);
+      return countBinsByBucket(legendBins, currentScheme);
+    }
     return computeBucketCounters(legendRows, effValCol, currentScheme);
-  }, [mode, legendRows, effValCol, currentScheme]);
+  }, [mode, legendRows, effValCol, currentScheme, binned, bins, filteredRows, activeBinLevel]);
 
   const pointsTotal = [...bucketCounters.values()].reduce((a, b) => a + b, 0);
 
@@ -904,6 +938,7 @@ function useQueryLayer(init: LayerInit, index: number, scope: LayerScope, legend
     visible, setVisible,
     shape, setShape, radius, setRadius, weight, setWeight,
     opacity, setOpacity, outline, setOutline, markStyleTouched, styleTouched, role, dataPointCount,
+    binLevel, setBinLevel, binned, visibleBins,
     effLatCol, effLngCol, effQtyCol, effValCol, effLabelCol,
     filteredRows, currentScheme, availableNRARFCNs, availableLinks,
     filtersReady, selectTemplate, applySync, getState, setState, clearResults,
@@ -983,6 +1018,8 @@ interface LayerMarkersProps {
   mode: MapMode;
   bubblePoints: BubblePointData[];
   pointMarkers: PointMarkerData[];
+  /** Μη κενό ⇒ το layer ζωγραφίζεται ως bins (ορθογώνια) αντί για σημεία */
+  bins: BinCell[];
   shape: MarkerShape;
   radius: number;
   weight: number;
@@ -1043,6 +1080,7 @@ const escapeHtml = (v: unknown) => String(v ?? "").replace(/[&<>"]/g, (c) => HTM
 
 interface HoverContext {
   points: PointMarkerData[];
+  bins: BinCell[];
   valueCol: string;
   name: string;
   showName: boolean;
@@ -1071,11 +1109,28 @@ function pointTooltipHtml(pt: PointMarkerData, ctx: HoverContext): string {
     + `${hint}</div>`;
 }
 
+function binTooltipHtml(bin: BinCell, ctx: HoverContext): string {
+  const display = typeof bin.val === "number" ? bin.val.toFixed(1) : String(bin.val);
+  const head = ctx.showName
+    ? `<div class="text-[9px] font-semibold uppercase tracking-wide" style="color:${escapeHtml(ctx.accent)}">${escapeHtml(ctx.name)}</div>`
+    : "";
+  const label = typeof bin.val === "number" ? `avg ${escapeHtml(ctx.valueCol)}` : escapeHtml(ctx.valueCol);
+  // Category: όλες οι τιμές του bin, π.χ. "n78 12 · n1 3"
+  const breakdown = bin.breakdown.length > 1
+    ? `<div class="text-[10px] text-gray-500">${bin.breakdown.map(([k, n]) => `${escapeHtml(k)} ${n}`).join(" · ")}</div>`
+    : "";
+  return `<div class="font-sans text-center space-y-0.5">${head}`
+    + `<div class="text-xs"><span class="text-gray-500">${label}:</span> `
+    + `<span class="font-mono font-bold" style="color:${escapeHtml(bin.color)}">${escapeHtml(display)}</span></div>`
+    + breakdown
+    + `<div class="text-[10px] text-gray-500">${bin.samples.toLocaleString()} samples</div></div>`;
+}
+
 // Memo: ο γονιός ξαναγίνεται render σε κάθε πληκτρολόγηση στο SQL, σε κάθε hover
 // στο legend κ.λπ. Με primitive props + memoized πίνακες σημείων, οι δεκάδες
 // χιλιάδες markers δεν ξαναπερνούν καθόλου όταν δεν άλλαξαν τα δεδομένα τους.
 const LayerMarkers = memo(function LayerMarkers({
-  visible, mode, bubblePoints, pointMarkers,
+  visible, mode, bubblePoints, pointMarkers, bins,
   shape, radius, weight, opacity, outline, dimmed, accent, isBase,
   name, showName, valueCol, qtyCol, labelCol, latCol, lngCol,
   selectedGroup, onToggleGroup,
@@ -1087,8 +1142,8 @@ const LayerMarkers = memo(function LayerMarkers({
 
   // Ό,τι διαβάζουν τα κοινά handlers ζει σε ref, ώστε τα handlers να μένουν
   // σταθερά — αλλιώς 20.000 markers θα ξανα-δένονταν σε κάθε αλλαγή state.
-  const hoverRef = useRef<HoverContext>({ points: pointMarkers, valueCol, name, showName, accent, selectedGroup, onToggleGroup });
-  hoverRef.current = { points: pointMarkers, valueCol, name, showName, accent, selectedGroup, onToggleGroup };
+  const hoverRef = useRef<HoverContext>({ points: pointMarkers, bins, valueCol, name, showName, accent, selectedGroup, onToggleGroup });
+  hoverRef.current = { points: pointMarkers, bins, valueCol, name, showName, accent, selectedGroup, onToggleGroup };
 
   const tooltip = useMemo(() => new LeafletTooltipClass({ direction: "top", offset: [0, -6], opacity: 0.95 }), []);
   useEffect(() => () => { map.closeTooltip(tooltip); }, [map, tooltip]);
@@ -1116,6 +1171,36 @@ const LayerMarkers = memo(function LayerMarkers({
       },
     };
   }, [map, tooltip]);
+
+  const binHandlers = useMemo<LeafletEventHandlerFnMap>(() => ({
+    mouseover(e) {
+      const idx = (e.target as { options?: { idx?: number } })?.options?.idx;
+      const bin = idx === undefined ? null : hoverRef.current.bins[idx];
+      if (!bin) return;
+      tooltip.setLatLng([bin.bounds[1][0], bin.lng]).setContent(binTooltipHtml(bin, hoverRef.current));
+      map.openTooltip(tooltip);
+    },
+    mouseout() {
+      map.closeTooltip(tooltip);
+    },
+  }), [map, tooltip]);
+
+  // Bins: γέμισμα στο χρώμα της τιμής, λεπτό λευκό περίγραμμα αν είναι ενεργό το outline
+  const binStyleByColor = useMemo(() => {
+    const m = new Map<string, PathOptions>();
+    for (const bin of bins) {
+      if (m.has(bin.color)) continue;
+      m.set(bin.color, {
+        fillColor: bin.color,
+        fillOpacity: opacity * dim,
+        color: outline ? OUTLINE_COLOR : bin.color,
+        opacity: dim,
+        weight: outline ? 0.6 : 0,
+        stroke: outline,
+      });
+    }
+    return m;
+  }, [bins, opacity, dim, outline]);
 
   // Ένα pathOptions ΑΝΑ ΧΡΩΜΑ (όχι ανά σημείο): σταθερό reference ⇒ η
   // react-leaflet δεν ξανακαλεί setStyle() σε κάθε marker σε κάθε render.
@@ -1154,7 +1239,36 @@ const LayerMarkers = memo(function LayerMarkers({
     [pointMarkers, map, radius, viewTick],
   );
 
+  // Μόνο τα bins που τέμνουν το viewport (με περιθώριο)
+  const renderedBins = useMemo(() => {
+    if (bins.length === 0) return [];
+    const b = map.getBounds().pad(0.25);
+    const south = b.getSouth(), north = b.getNorth(), west = b.getWest(), east = b.getEast();
+    const out: number[] = [];
+    for (let i = 0; i < bins.length && out.length < MAX_RENDER_POINTS; i++) {
+      const [[s, w], [n, e]] = bins[i].bounds;
+      if (n < south || s > north || e < west || w > east) continue;
+      out.push(i);
+    }
+    return out;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bins, map, viewTick]);
+
   if (!visible) return null;
+
+  if (mode === "points" && bins.length > 0) {
+    return (
+      <>
+        {renderedBins.map((idx) => {
+          const bin = bins[idx];
+          return (
+            <Rectangle key={idx} bounds={bin.bounds} pathOptions={binStyleByColor.get(bin.color)}
+              eventHandlers={binHandlers} {...{ idx }} />
+          );
+        })}
+      </>
+    );
+  }
 
   if (mode === "bubble") {
     return (
@@ -1316,7 +1430,7 @@ const LayerLegend = ({ L, index, name, showName, focused, dimmed, onToggleFocus 
                 );
               })}
           <p className="text-[9px] text-foreground/70 border-t border-border/50 pt-0.5 mt-0.5 font-mono truncate">
-            {L.effValCol || "—"} · {L.pointsTotal.toLocaleString()} pts
+            {L.effValCol || "—"} · {L.pointsTotal.toLocaleString()} {L.binned ? `bins ${L.binLevel}` : "pts"}
             {L.pointsAvg?.avg != null && (
               <span title="Μέσος όρος χωρίς τα failed">
                 {" · "}avg thr {L.pointsAvg.avg.toLocaleString(undefined, { maximumFractionDigits: 1 })} {L.pointsAvg.unit}
@@ -1369,6 +1483,23 @@ const ScopeFilters = ({ collection, location, collections, locations, onCollecti
 // ── Φίλτρα που εξαρτώνται από το template του ενεργού layer ──────────────────
 const LayerFilters = ({ L }: { L: QueryLayer }) => (
   <>
+    {/* Binning — μόνο σε templates που δίνουν bins (DmnBinRegion) */}
+    {L.template?.binLevels && L.mode === "points" && (
+      <div>
+        <label className="text-[10px] text-muted-foreground block mb-0.5">Binning</label>
+        <select
+          value={L.binLevel}
+          onChange={(e) => { L.setBinLevel(e.target.value); L.setSelectedBuckets(new Set()); }}
+          className="w-full bg-background border border-border rounded px-2 py-1 text-xs"
+        >
+          {L.template.binLevels.map((v) => (
+            <option key={v} value={v}>Bins {v}</option>
+          ))}
+          <option value="">Σημεία (χωρίς binning)</option>
+        </select>
+      </div>
+    )}
+
     {/* NRARFCN filter — εμφανίζεται μόνο για 5G templates */}
     {L.template?.nrarfcnCol && (
       <div>
@@ -1808,7 +1939,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
     ...layers.map((l) => serializeLayerInit({
       tmplIdx: l.tmplIdx, shape: l.shape, radius: l.radius, weight: l.weight,
       mode: l.mode, visible: l.visible, opacity: l.opacity, outline: l.outline,
-      styleTouched: l.styleTouched,
+      styleTouched: l.styleTouched, binLevel: l.binLevel,
     })),
   ].join(LAYER_SEP);
 
@@ -2001,6 +2132,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                   layers: layers.map((lyr) => ({
                     tmplIdx: lyr.tmplIdx, sql: lyr.sql, mode: lyr.mode, valueCol: lyr.valueCol,
                     colorSchemeKey: lyr.colorSchemeKey, labelCol: lyr.labelCol, quantityCol: lyr.quantityCol,
+                    binLevel: lyr.binLevel,
                   })),
                 },
                 collections,
@@ -2120,7 +2252,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
               </label>
             ))}
             <span className={L.pointCount === 0 ? "text-destructive" : "text-primary"}>
-              {L.pointCount} pts
+              {L.pointCount} {L.binned ? "bins" : "pts"}
             </span>
             <span>/ {L.filteredRows.length !== L.rows.length ? `${L.filteredRows.length} filtered /` : ""} {L.rows.length} rows</span>
             {L.executionTime != null && <span className="ml-auto">{L.executionTime.toFixed(0)} ms</span>}
@@ -2203,6 +2335,7 @@ const SingleMapPanel = ({ databases, defaultDatabase = "", panelIndex = 0, label
                 mode={lyr.mode}
                 bubblePoints={lyr.visibleBubblePoints}
                 pointMarkers={lyr.visiblePointMarkers}
+                bins={lyr.visibleBins}
                 shape={lyr.shape} radius={lyr.radius} weight={lyr.weight}
                 opacity={lyr.opacity} outline={lyr.outline}
                 dimmed={focusedLayer !== null && focusedLayer !== i}

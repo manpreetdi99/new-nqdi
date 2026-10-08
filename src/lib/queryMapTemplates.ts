@@ -18,6 +18,11 @@ export interface QueryTemplate {
   requiresFilters?: boolean;
   nrarfcnCol?: string;
   linkCol?: string;
+  /**
+   * Επίπεδα DmnBinRegion που δίνει το query (π.χ. ["Z9", "Z8", "Z7"]), με στήλες
+   * `<level>_MinLat/_MaxLat/_MinLon/_MaxLon`. Το πρώτο είναι το default.
+   */
+  binLevels?: string[];
 }
 
 export const TEMPLATES: QueryTemplate[] = [
@@ -962,6 +967,71 @@ WHERE fl.Valid = 1
 GROUP BY nr.SessionId, nr.PosId, nr.NRARFCN,
          pos.latitude, pos.longitude,
          fl.CollectionName, fl.ASideLocation, NRcarrier.CarrierIndexName
+ORDER BY nr.PosId`,
+  },
+  {
+    // NR band ανά bin (DmnBinRegion Z9 / Z8 / Z7): κάθε bin χρωματίζεται με το
+    // συχνότερο band των δειγμάτων του. Band από τις DL περιοχές NR-ARFCN του
+    // 3GPP 38.101-1 (n1: 2110–2170 MHz, n78: 3300–3800 MHz, n28: 758–803 MHz).
+    label: "5G Phone – NR Band (n1 / n78 / n28)",
+    category: "5G",
+    mode: "points",
+    valueCol: "NR_Band",
+    colorScheme: "nr5g_band",
+    labelCol: "ASideLocation",
+    requiresFilters: true,
+    nrarfcnCol: "NRARFCN",
+    binLevels: ["Z9", "Z8", "Z7"],
+    sql: `SELECT
+  nr.SessionId,
+  nr.PosId,
+  nr.NRARFCN,
+  CASE
+    WHEN nr.NRARFCN BETWEEN 422000 AND 434000 THEN 'n1'
+    WHEN nr.NRARFCN BETWEEN 620000 AND 653333 THEN 'n78'
+    WHEN nr.NRARFCN BETWEEN 151600 AND 160600 THEN 'n28'
+    ELSE 'Other'
+  END           AS NR_Band,
+  nr.FullDate,
+  AVG(nr.RSRP)  AS [SS-RSRP],
+  AVG(nr.RSRQ)  AS [SS-RSRQ],
+  AVG(nr.SINR)  AS [SS-SINR],
+  CAST(pos.latitude  AS FLOAT) AS latitude,
+  CAST(pos.longitude AS FLOAT) AS longitude,
+  fl.CollectionName,
+  fl.ASideLocation,
+  NRcarrier.CarrierIndexName,
+  nr.DmnIdBinRegionZ9,
+  binZ9.MinLatitude  AS Z9_MinLat,
+  binZ9.MaxLatitude  AS Z9_MaxLat,
+  binZ9.MinLongitude AS Z9_MinLon,
+  binZ9.MaxLongitude AS Z9_MaxLon,
+  nr.DmnIdBinRegionZ8,
+  binZ8.MinLatitude  AS Z8_MinLat,
+  binZ8.MaxLatitude  AS Z8_MaxLat,
+  binZ8.MinLongitude AS Z8_MinLon,
+  binZ8.MaxLongitude AS Z8_MaxLon,
+  nr.DmnIdBinRegionZ7,
+  binZ7.MinLatitude  AS Z7_MinLat,
+  binZ7.MaxLatitude  AS Z7_MaxLat,
+  binZ7.MinLongitude AS Z7_MinLon,
+  binZ7.MaxLongitude AS Z7_MaxLon
+FROM [dbo].[FactNR5GRadio] nr
+LEFT JOIN Position           pos       ON pos.PosId   = nr.PosId
+LEFT JOIN FileList           fl        ON fl.FileId   = nr.FileId
+LEFT JOIN DmnNR5GCarrierInfo NRcarrier ON NRcarrier.DmnId = nr.DmnIdNR5GCarrierInfo
+LEFT JOIN [dbo].[DmnBinRegion] binZ9 ON binZ9.DmnId = nr.DmnIdBinRegionZ9
+LEFT JOIN [dbo].[DmnBinRegion] binZ8 ON binZ8.DmnId = nr.DmnIdBinRegionZ8
+LEFT JOIN [dbo].[DmnBinRegion] binZ7 ON binZ7.DmnId = nr.DmnIdBinRegionZ7
+WHERE fl.Valid = 1
+  AND fl.CollectionName = '{collection}'
+  AND fl.ASideLocation  = '{location}'
+GROUP BY nr.SessionId, nr.PosId, nr.FullDate, nr.NRARFCN,
+         pos.latitude, pos.longitude,
+         fl.CollectionName, fl.ASideLocation, NRcarrier.CarrierIndexName,
+         nr.DmnIdBinRegionZ9, binZ9.MinLatitude, binZ9.MaxLatitude, binZ9.MinLongitude, binZ9.MaxLongitude,
+         nr.DmnIdBinRegionZ8, binZ8.MinLatitude, binZ8.MaxLatitude, binZ8.MinLongitude, binZ8.MaxLongitude,
+         nr.DmnIdBinRegionZ7, binZ7.MinLatitude, binZ7.MaxLatitude, binZ7.MinLongitude, binZ7.MaxLongitude
 ORDER BY nr.PosId`,
   },
   {

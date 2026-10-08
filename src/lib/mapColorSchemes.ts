@@ -286,6 +286,17 @@ export const COLOR_SCHEMES: Record<string, ColorScheme> = {
       { min: -156, max: -110, color: "#ff0000", label: "-156 to -110" },
     ],
   },
+  nr5g_band: {
+    type: "category",
+    label: "5G NR Band (NR-ARFCN)",
+    suggestCol: "NR_Band",
+    categories: [
+      { value: "n1",  color: "#0050ff" },
+      { value: "n78", color: "#ff0000" },
+      { value: "n28", color: "#00c800" },
+    ],
+    defaultColor: "#808080",
+  },
   lte_rsrq: {
     type: "range",
     label: "LTE Scanner RSRQ (dB)",
