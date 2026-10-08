@@ -167,6 +167,19 @@ describe("SummaryTab edge cases", () => {
       fireEvent.click(screen.getByRole("checkbox", { name: "Valid calls" }));
       expect(screen.getByText("2 data tests")).toBeInTheDocument();
     });
+
+    it("drops invalid tests (TestInfo.Valid=0) and HTTPS tests without URL, like the A-LEVEL queries", () => {
+      render(
+        <SummaryTab
+          allCallsRows={[]}
+          dataCallsRows={[dataTest({}), dataTest({ testValid: 0 }), dataTest({ browserUrlMissing: 1 })]}
+        />,
+      );
+
+      expect(screen.getByText("1 data tests")).toBeInTheDocument();
+      fireEvent.click(screen.getByRole("checkbox", { name: "Valid calls" }));
+      expect(screen.getByText("3 data tests")).toBeInTheDocument();
+    });
   });
 
   describe("Location / operator resolution", () => {

@@ -571,7 +571,7 @@ const SummaryGuide = () => (
           ],
           ["E3 · Browser engines", "Kepler, Kepler +30s Pause, Newton", "Mean throughput (Mbps)"],
           ["E4 · HTTPS sites", "9 web sites (google, amazon, ebay, youtube …)", "Mean throughput (Mbps)"],
-          ["E5 · Video streaming", "YouTube Service / 4K / Live", "Mean video MOS, mean interruptions"],
+          ["E5 · Video streaming", "YouTube Service / 4K / Live", "Mean video MOS, first delay, IP throughput (mean / max), freezing %"],
         ]}
       />
       <P>

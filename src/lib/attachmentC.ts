@@ -113,14 +113,18 @@ export type CustomCallModeKey = "volte" | "cs";
 
 /**
  * VoLTE Call / CS call — ίδιο "CustomCallMode" CASE με το A-LEVEL "LQCallData.sql"
- * reference query, απλοποιημένο όπως το volteSetupTime/csSetupTime (βλ.
- * backend/routers/calls.py): εδώ είναι ένα row ανά κλήση (CallAnalysis), όχι A/B-side
- * ζευγάρι σαν CallSession.CallMode/CallModeB, οπότε αρκεί το callMode/technology της
- * γραμμής χωρίς το callDir. null όταν η κλήση δεν πληροί κανένα κριτήριο.
+ * reference query. Το backend το στέλνει έτοιμο (customCallMode, βλ.
+ * backend/routers/calls.py) γιατί σε B->A κλήση η reference κοιτάει το
+ * CallSession.CallModeB, όχι το A-side callMode — με μόνο το callMode έφευγαν κλήσεις
+ * στον λάθος κουβά (π.χ. B->A CSFB/CallModeB=VoLTE -> "CS" αντί για "VoLTE").
+ * Fallback στο callMode/technology μόνο όταν λείπει το πεδίο (παλιότερο API).
+ * null όταν η κλήση δεν πληροί κανένα κριτήριο.
  */
 export const classifyCustomCallMode = (
-  row: Pick<AllCallsRow, "callMode" | "technology">,
+  row: Pick<AllCallsRow, "callMode" | "technology" | "customCallMode">,
 ): CustomCallModeKey | null => {
+  if (row.customCallMode !== undefined) return row.customCallMode;
+
   const mode = (row.callMode ?? "").trim();
   const tech = (row.technology ?? "").toLowerCase();
 
@@ -517,6 +521,11 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
       else if (outcome === "failed") customCounts[customMode].failed++;
     }
 
+    // Κλήσεις που το A-LEVEL "LQStatisticData.sql" αφήνει έξω (System Release, FREE χωρίς
+    // KPI 11012/10108 — βλ. AllCallsRow.lqStatsEligible) δεν μετράνε σε POLQA samples /
+    // Low Speech Quality (< 2.2).
+    const lqEligible = row.lqStatsEligible !== 0;
+
     const mos = numeric(row.Avg_mos);
     if (mos != null && mos > 0) {
       mosValues.push(mos);
@@ -524,10 +533,12 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
       // το backend (>15% κακά/silence δείγματα ανά session, ίδιο με το A-LEVEL
       // LQStatisticData.sql reference query) — ακριβέστερο από το να συγκρίνεις απλά τον
       // ήδη-μέσο-όρο Avg_mos με το threshold. Fallback στο avg-based κριτήριο μόνο όταν
-      // το backend δεν στέλνει καθόλου badCall (π.χ. παλιότερο API response).
-      if (row.badCall === 1 || row.badCall === 0) {
-        if (row.badCall === 1) lowQualityCalls++;
-      } else if (mos < LOW_QUALITY_MOS) {
+      // το backend δεν στέλνει καθόλου το πεδίο (παλιότερο API response). badCall=null
+      // σημαίνει "κανένα έγκυρο δείγμα" (π.χ. Failed κλήση με Avg_mos=1.0 από άκυρα
+      // δείγματα) — η reference τότε δίνει BadCall NULL, άρα ΔΕΝ μετράει.
+      if (row.badCall !== undefined) {
+        if (row.badCall === 1 && lqEligible) lowQualityCalls++;
+      } else if (mos < LOW_QUALITY_MOS && lqEligible) {
         lowQualityCalls++;
       }
     }
@@ -543,8 +554,10 @@ export const buildVoiceStats = (rows: AllCallsRow[]): VoiceStats => {
     }
 
     // Raw per-session UL/DL δείγματα από το backend (TestInfo.direction) — βλ. σχόλιο στο VoiceStats.
-    addToAgg(mosUlAgg, numeric(row.mosUlAvg), numeric(row.mosUlSamples), numeric(row.mosUlMin), numeric(row.mosUlMax));
-    addToAgg(mosDlAgg, numeric(row.mosDlAvg), numeric(row.mosDlSamples), numeric(row.mosDlMin), numeric(row.mosDlMax));
+    if (lqEligible) {
+      addToAgg(mosUlAgg, numeric(row.mosUlAvg), numeric(row.mosUlSamples), numeric(row.mosUlMin), numeric(row.mosUlMax));
+      addToAgg(mosDlAgg, numeric(row.mosDlAvg), numeric(row.mosDlSamples), numeric(row.mosDlMin), numeric(row.mosDlMax));
+    }
 
     const setup = numeric(row.setupTime);
     if (setup != null && setup > 0) setupAll.push(setup);
@@ -943,13 +956,13 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
    * `allowZero`: το 0 σημαίνει "δεν υπάρχει τιμή" σχεδόν παντού, αλλά ένα
    * PacketsLostRate=0 (τέλειο τεστ) είναι έγκυρο και πρέπει να μετρήσει στον μέσο όρο.
    */
-  const collect = (pick: (row: DataCallRow) => number | null, allowZero = false): Sample => {
+  const collect = (pick: (row: DataCallRow) => number | null, allowZero = false, source: DataCallRow[] = rows): Sample => {
     let weightedSum = 0;
     let samples = 0;
     let min: number | null = null;
     let max: number | null = null;
 
-    for (const row of rows) {
+    for (const row of source) {
       const value = pick(row);
       if (value == null || (allowZero ? value < 0 : value <= 0)) continue;
 
@@ -969,7 +982,10 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
   // resolution time, βλ. mapDnsRowsToDataCallRows. Ίδιο σχήμα μετρικής (ένα "Mean X σε
   // ms"), διαφορετική ετικέτα.
   if (testType.includes("dns")) {
-    const duration = collect((row) => numeric(row.pingRttAvg));
+    // Μόνο τα Successful, όπως το A-LEVEL "DNS RAW.sql" pivot (Avg [ms] της γραμμής
+    // Successful) — τα Failed έχουν timeouts δεκάδων δευτερολέπτων που ανέβαζαν τον
+    // μέσο όρο έως και x4.
+    const duration = collect((row) => (classifyDataTest(row) === "success" ? numeric(row.pingRttAvg) : null));
     return [
       {
         label: "Mean DNS Resolution Time",
@@ -988,12 +1004,17 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
   }
 
   if (testType.includes("interactivity")) {
-    const throughput = collect((row) => numeric(row.throughputKbps));
-    const rtt = collect((row) => numeric(row.interactivityRtt));
-    // PacketsLostRate=0 (τέλειο τεστ, καθόλου απώλειες) είναι έγκυρη τιμή, όχι "λείπει".
+    // Όλα με allowZero: το A-LEVEL INTERACTIVITY pivot ("Average of ...") μετράει κάθε
+    // μη-κενή τιμή, και το 0 (π.χ. PacketDelay=0 σε test με QoE=0, ή PacketsLostRate=0
+    // σε τέλειο test) είναι έγκυρη τιμή — μόνο το null σημαίνει "λείπει". Χωρίς αυτό το
+    // PacketDelay της Nova στο DOD_KARPATHOS έβγαινε 15.79 αντί 15.13.
+    const throughput = collect((row) => numeric(row.throughputKbps), true);
+    const rtt = collect((row) => numeric(row.interactivityRtt), true);
     const packetsLostRate = collect((row) => numeric(row.interactivityPacketsLostRate), true);
-    const packetDelay = collect((row) => numeric(row.interactivityPacketDelay));
-    const qoe = collect((row) => numeric(row.interactivityQoeScore));
+    const packetDelay = collect((row) => numeric(row.interactivityPacketDelay), true);
+    // QoEScore=0 είναι έγκυρη (κακή) βαθμολογία — το A-LEVEL "Average of QoEScore"
+    // pivot τη μετράει· χωρίς allowZero ο μέσος όρος έβγαινε 6-13% ψηλότερος.
+    const qoe = collect((row) => numeric(row.interactivityQoeScore), true);
 
     return [
       {
@@ -1037,18 +1058,94 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
   // "HTTPS Browser (youtube)" είναι απλό browsing (E4), όχι video streaming — πέφτει στο
   // default throughput όπως τα υπόλοιπα sites.
   if (testType.includes("youtube") && !testType.includes("browser")) {
-    const mos = collect((row) => numeric(row.youtubeMos));
-    // 0 interruptions είναι έγκυρη τιμή (τέλειο playback), γι' αυτό allowZero.
-    const interruptions = collect((row) => numeric(row.youtubeInterruptions), true);
+    // Τα streams που μετράει το Attachment C (βλ. youtubeStreams) — MOS / first delay /
+    // freezing βγαίνουν μόνο από αυτά, με VQ = vResultsVideoStreamAvg.TestQualityAvg.
+    // Παλιότερο API χωρίς youtubeStreamLevel -> όλα τα rows με το CDR MOS.
+    const hasStreams = rows.some((row) => row.youtubeStreamLevel !== undefined);
+    const streams = hasStreams ? youtubeStreams(rows) : rows;
+    const mos = hasStreams
+      ? collect((row) => numeric(row.youtubeVq), false, streams)
+      : collect((row) => numeric(row.youtubeMos));
+    const mosMetric: DataMetric = {
+      label: "Mean video MOS",
+      unit: "",
+      decimals: 2,
+      higherIsBetter: true,
+      value: mos.avg,
+      samples: mos.samples,
+    };
+
+    // Παλιότερο API χωρίς τα πεδία του Attachment C -> μόνο MOS + interruptions (CDR).
+    if (!rows.some((row) => row.youtubeFreezingPct !== undefined)) {
+      // 0 interruptions είναι έγκυρη τιμή (τέλειο playback), γι' αυτό allowZero.
+      const interruptions = collect((row) => numeric(row.youtubeInterruptions), true);
+      return [
+        mosMetric,
+        {
+          label: "Mean interruptions",
+          unit: "",
+          decimals: 2,
+          higherIsBetter: false,
+          value: interruptions.avg,
+          samples: interruptions.samples,
+        },
+      ];
+    }
+
+    // Γραμμές του Attachment C ("YOUTUBE RAW.sql" / "YT_IP LAYER RAW.sql"). Freezing 0% =
+    // τέλειο playback, έγκυρη τιμή (allowZero).
+    const firstDelay = collect((row) => numeric(row.youtubeFirstDelaySec), false, streams);
+    const freezing = collect((row) => numeric(row.youtubeFreezingPct), true, streams);
+
+    // IP throughput: μέσος όρος ΑΝΑ ΔΕΙΓΜΑ (Σ άθροισμα / Σ πλήθος), όχι μέσος όρος των
+    // per-test μέσων — ίδιο με το "Average of Throughput" pivot του Excel. Μετράνε και
+    // τα failed tests, όπως εκεί.
+    let ipSum = 0;
+    let ipSamples = 0;
+    let ipMax: number | null = null;
+    for (const row of rows) {
+      const sum = numeric(row.youtubeIpThrSumKbps);
+      const count = numeric(row.youtubeIpThrSamples);
+      if (sum == null || count == null || count <= 0) continue;
+      ipSum += sum;
+      ipSamples += count;
+      const max = numeric(row.youtubeIpThrMaxKbps);
+      if (max != null && (ipMax == null || max > ipMax)) ipMax = max;
+    }
+
     return [
-      { label: "Mean video MOS", unit: "", decimals: 2, higherIsBetter: true, value: mos.avg, samples: mos.samples },
+      mosMetric,
       {
-        label: "Mean interruptions",
-        unit: "",
+        label: "Mean first delay",
+        unit: "s",
         decimals: 2,
         higherIsBetter: false,
-        value: interruptions.avg,
-        samples: interruptions.samples,
+        value: firstDelay.avg,
+        samples: firstDelay.samples,
+      },
+      {
+        label: "Mean IP throughput",
+        unit: "Mbps",
+        decimals: 2,
+        higherIsBetter: true,
+        value: ipSamples > 0 ? ipSum / ipSamples / 1000 : null,
+        samples: ipSamples,
+      },
+      {
+        label: "Max IP throughput",
+        unit: "Mbps",
+        decimals: 2,
+        higherIsBetter: true,
+        value: ipMax == null ? null : ipMax / 1000,
+        samples: ipSamples,
+      },
+      {
+        label: "Mean freezing",
+        unit: "%",
+        decimals: 2,
+        higherIsBetter: false,
+        value: freezing.avg,
+        samples: freezing.samples,
       },
     ];
   }
@@ -1074,7 +1171,10 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
     ];
   }
 
-  const throughput = collect((row) => numeric(row.throughputKbps));
+  // refThroughputKbps = πηγή του A-LEVEL (HTTP Transfer / HTTP Browser) — βλ. api.ts.
+  const throughput = collect((row) =>
+    numeric(row.refThroughputKbps !== undefined ? row.refThroughputKbps : row.throughputKbps),
+  );
   return [
     {
       label: "Mean application throughput",
@@ -1087,7 +1187,56 @@ const buildDataMetrics = (rows: DataCallRow[]): DataMetric[] => {
   ];
 };
 
+/**
+ * Τα YouTube tests που μετράει το Attachment C: streams με αποτέλεσμα VQ
+ * (youtubeStreamLevel=2 — τα inner joins του "YOUTUBE RAW.sql"). Ένα test που απέτυχε
+ * πριν παίξει video, ή stream χωρίς VQ08 αποτέλεσμα, δεν μετράει καθόλου — όπως στο
+ * Excel. Εξαίρεση: όταν μια location δεν έχει ΚΑΝΕΝΑ stream με VQ08 (π.χ. DOD_KOS Nova
+ * Data, όπου η reference δεν βγάζει τίποτα και το A-LEVEL συμπληρώθηκε με το χέρι),
+ * μετράνε όλα τα streams της (level 1) αντί να βγει άδειο section. Ανά location ώστε η
+ * στήλη Total (όλοι οι operators μαζί) να κάνει την ίδια επιλογή με κάθε operator.
+ */
+const youtubeStreams = (rows: DataCallRow[]): DataCallRow[] => {
+  const byLocation = new Map<string, DataCallRow[]>();
+  for (const row of rows) {
+    const key = row.Location ?? "";
+    const bucket = byLocation.get(key);
+    if (bucket) bucket.push(row);
+    else byLocation.set(key, [row]);
+  }
+
+  const out: DataCallRow[] = [];
+  for (const locationRows of byLocation.values()) {
+    const withVq = locationRows.filter((row) => row.youtubeStreamLevel === 2);
+    out.push(...(withVq.length > 0 ? withVq : locationRows.filter((row) => (row.youtubeStreamLevel ?? 0) >= 1)));
+  }
+  return out;
+};
+
+const isYoutubeStreamingSection = (rows: DataCallRow[]): boolean => {
+  const testType = (rows[0]?.testType ?? "").toLowerCase();
+  return (
+    testType.includes("youtube") &&
+    !testType.includes("browser") &&
+    rows.some((row) => row.youtubeStreamLevel !== undefined)
+  );
+};
+
 const buildDataTestStats = (rows: DataCallRow[]): DataTestStats => {
+  // YouTube: Total = streams του Attachment C ("Number of youtube sessions"), Successful =
+  // stream status "ok" (Stream Success Rate) — όχι τα CDR tests. Βλ. youtubeStreams.
+  if (isYoutubeStreamingSection(rows)) {
+    const streams = youtubeStreams(rows);
+    const ok = streams.filter((row) => row.youtubeStreamOk === 1).length;
+    return {
+      total: streams.length,
+      success: ok,
+      failed: streams.length - ok,
+      successRate: ratio(ok, streams.length),
+      metrics: buildDataMetrics(rows),
+    };
+  }
+
   let total = 0;
   let success = 0;
   let failed = 0;
