@@ -282,18 +282,22 @@ def list_calls(
             CREATE CLUSTERED INDEX IX_nettech ON #nettech(SessionId);
 
             -- Setup-time KPI durations για MOC/MTC/VoLTE/CS setup time παρακάτω —
-            -- vResultsKPI (υπάρχει σ' αυτό το schema, βλ. σχόλια στα CASE) φιλτραρισμένο σε
-            -- ErrorCode=0, MIN ανά KPIID (μπορεί να υπάρχουν πολλαπλές γραμμές/session).
-            -- KpiCsDuration παίρνει KPIID 10100 (πραγματική πηγή του "CS" setup σ' αυτά τα
-            -- δεδομένα) με fallback στο 10108 (το KPIId της reference query, σπάνιο εδώ).
+            -- vResultsKPI (υπάρχει σ' αυτό το schema, βλ. σχόλια στα CASE), ErrorCode=0,
+            -- MIN ανά KPIID (μπορεί να υπάρχουν πολλαπλές γραμμές/session).
+            -- KpiCsDuration: KPIID 10108 ή 11013, ακριβώς όπως το CallSetupTimeCS του A-LEVEL
+            -- "LQCallData.sql" — το 10100 που διαβαζόταν πριν έδινε 0.3-0.6s μικρότερο setup
+            -- σε κάποιες CS κλήσεις (DOD_KARPATHOS/KALIMNOS 2026H2).
+            -- HasLqKpi: η κλήση έχει KPIID 11012/10108 (οποιοδήποτε ErrorCode) — το
+            -- "LQStatisticData.sql" (POLQA samples / BadCall του FREE table) κάνει INNER JOIN
+            -- σ' αυτά, οπότε κλήσεις χωρίς κανένα από τα δύο δεν μετράνε εκεί.
             SELECT VK.SessionID AS SessionId,
-                MIN(CASE WHEN VK.KPIID = 10100 THEN VK.Duration * 0.001 END)           AS Kpi10100Duration,
-                MIN(CASE WHEN VK.KPIID = 11013 THEN VK.Duration * 0.001 END)           AS Kpi11013Duration,
-                MIN(CASE WHEN VK.KPIID IN (10100, 10108) THEN VK.Duration * 0.001 END) AS KpiCsDuration
+                MIN(CASE WHEN VK.ErrorCode = 0 AND VK.KPIID = 10100 THEN VK.Duration * 0.001 END)          AS Kpi10100Duration,
+                MIN(CASE WHEN VK.ErrorCode = 0 AND VK.KPIID = 11013 THEN VK.Duration * 0.001 END)          AS Kpi11013Duration,
+                MIN(CASE WHEN VK.ErrorCode = 0 AND VK.KPIID IN (10108, 11013) THEN VK.Duration * 0.001 END) AS KpiCsDuration,
+                MAX(CASE WHEN VK.KPIID IN (11012, 10108) THEN 1 ELSE 0 END)                                 AS HasLqKpi
             INTO #vkpi
             FROM vResultsKPI VK
-            WHERE VK.ErrorCode = 0
-              AND VK.KPIID IN (10100, 10108, 11013)
+            WHERE VK.KPIID IN (10100, 10108, 11012, 11013)
               AND EXISTS (SELECT 1 FROM #scope s WHERE s.SessionId = VK.SessionID)
             GROUP BY VK.SessionID;
             CREATE CLUSTERED INDEX IX_vkpi ON #vkpi(SessionId);
@@ -465,22 +469,28 @@ def list_calls(
                 -- VoLTE/CS Call setup time: ίδιο κριτήριο με το A-LEVEL "LQCallData.sql"
                 -- reference query's CallSetupTimeVoLTE/CallSetupTimeCS — απευθείας
                 -- vResultsKPI.Duration, ΟΧΙ CA.setupTime (ίδιο πρόβλημα με το MOC/MTC
-                -- παραπάνω). Real-data check στο ίδιο dataset: VoLTE/SRVCC rows έχουν
-                -- ErrorCode=0 στο KPIID=11013 (η reference's KPIId), ενώ CS/CSFB rows δεν
-                -- έχουν σχεδόν καθόλου KPIID=10108 (η reference's KPIId για CS) — αντ' αυτού
-                -- έχουν KPIID=10100 (το ΙΔΙΟ KPI με το MOC/MTC), οπότε το CS setup διαβάζει
-                -- από εκεί (10108 μένει σαν fallback για τις σπάνιες γραμμές που το έχουν).
-                -- Callstatus in Completed/Dropped όπως στη reference. Ένα row ανά κλήση εδώ
-                -- (όχι A/B-side ζευγάρι σαν CallSession.CallMode/CallModeB), οπότε αρκεί το
-                -- CA.CallMode.
+                -- παραπάνω): VoLTE από KPIID 11013, CS από KPIID 10108/11013 (βλ. #vkpi).
+                -- Callstatus in Completed/Dropped όπως στη reference. VoLTE vs CS κρίνεται
+                -- από το CMODE.CustomCallMode (βλ. CROSS APPLY παρακάτω) — ΟΧΙ από το
+                -- σκέτο CA.callmode: σε B->A κλήση η reference κοιτάει το CallModeB.
                 CASE
-                    WHEN CA.callStatus IN ('Completed', 'Dropped') AND CA.callmode IN ('VoLTE', 'SRVCC')
+                    WHEN CA.callStatus IN ('Completed', 'Dropped') AND CMODE.CustomCallMode = 'volte'
                     THEN VKPI.Kpi11013Duration ELSE NULL
                 END AS volteSetupTime,
                 CASE
-                    WHEN CA.callStatus IN ('Completed', 'Dropped') AND CA.callmode IN ('CSFB', 'CS')
+                    WHEN CA.callStatus IN ('Completed', 'Dropped') AND CMODE.CustomCallMode = 'cs'
                     THEN VKPI.KpiCsDuration ELSE NULL
                 END AS csSetupTime,
+                CMODE.CustomCallMode AS customCallMode,
+                -- Μετράει η κλήση στα POLQA samples / Low Speech Quality (BadCall) του
+                -- Attachment C; Το "LQStatisticData(GSM).sql" αφήνει έξω τις System Release
+                -- κλήσεις, και στο FREE table (INNER JOIN σε KPI 11012/10108) όσες δεν έχουν
+                -- κανένα από τα δύο KPIs. Το GSM query κάνει LEFT JOIN, άρα εκεί δεν κόβει.
+                CASE
+                    WHEN CA.callStatus = 'System Release' THEN 0
+                    WHEN DF.ASideLocation LIKE '%Free%' AND ISNULL(VKPI.HasLqKpi, 0) = 0 THEN 0
+                    ELSE 1
+                END AS lqStatsEligible,
                 CODEC.CodecEvsCount AS codecEvsCount,
                 CODEC.CodecEvsWbCount AS codecEvsWbCount,
                 CODEC.CodecAmrUmtsCount AS codecAmrUmtsCount,
@@ -522,6 +532,32 @@ def list_calls(
             LEFT JOIN #codec CODEC        ON CODEC.SessionId = CA.SessionId
             LEFT JOIN #badcall BADCALL    ON BADCALL.SessionId = CA.SessionId
             LEFT JOIN #badquality BADQUALITY ON BADQUALITY.SessionId = CA.SessionId
+            LEFT JOIN CallSession CSN     ON CSN.SessionId = CA.SessionId
+            -- "CustomCallMode" (VoLTE Call / CS call) — ίδιο CASE με το A-LEVEL
+            -- "LQCallData.sql" reference query: σε A->B κλήση μετράει το CallMode, σε
+            -- B->A το CallModeB (το mode της πλευράς που καλεί). Π.χ. B->A κλήση με
+            -- CallMode='CS' αλλά CallModeB='VoLTE' είναι VoLTE Call στο Attachment C.
+            -- Χωρίς CallSession row πέφτουμε στο CA.callmode (παλιά συμπεριφορά).
+            CROSS APPLY (
+                SELECT
+                    CASE
+                        WHEN CSN.SessionId IS NULL THEN CA.callmode
+                        WHEN CSN.callDir LIKE 'A->B' THEN CSN.CallMode
+                        WHEN CSN.callDir LIKE 'B->A' THEN CSN.CallModeB
+                        ELSE NULL
+                    END AS Mode,
+                    COALESCE(CSN.CallTechnology, CA.technology) AS Tech
+            ) CMODE_SRC
+            CROSS APPLY (
+                SELECT CASE
+                    WHEN CMODE_SRC.Mode IN ('VoLTE', 'SRVCC') THEN 'volte'
+                    WHEN CMODE_SRC.Mode IN ('CSFB', 'CS') THEN 'cs'
+                    WHEN CMODE_SRC.Mode = '-' AND CMODE_SRC.Tech LIKE '%lte%' THEN 'volte'
+                    WHEN CMODE_SRC.Mode = '-' AND (CMODE_SRC.Tech LIKE '%UMTS%' OR CMODE_SRC.Tech LIKE '%GSM%') THEN 'cs'
+                    WHEN CMODE_SRC.Mode LIKE '%unknown%' AND CMODE_SRC.Tech LIKE '%5g%' THEN 'volte'
+                    ELSE NULL
+                END AS CustomCallMode
+            ) CMODE
             ORDER BY callStartTimeStamp
         """
 
@@ -660,11 +696,17 @@ def get_cell_band_count(
         conn = get_connection(database)
         cursor = conn.cursor()
 
+        # Κάθε CID μετράει ΜΙΑ φορά ανά location, στο band όπου έχει τις περισσότερες θέσεις.
+        # Το A-LEVEL pivot ("Cell IDs" sheet) έχει μία γραμμή ανά CID, οπότε ένα CID που
+        # εμφανίζεται και ως GSM 900 και ως GSM 1800 (π.χ. 2-3 θέσεις στο ένα band) δεν
+        # διπλομετράει — με COUNT(DISTINCT CID) ανά band το DOD_KOS έβγαινε +1/+3 cells.
         query = """
+            WITH PerBand AS (
             SELECT
                 FileList.ASideLocation AS location,
                 NetworkInfo.Technology AS technology,
-                COUNT(DISTINCT NetworkInfo.CID) AS cellCount
+                NetworkInfo.CID AS cid,
+                COUNT(*) AS positions
             FROM
                 Sessions AS Sessions, Position, FileList,
                 NetworkIdRelation nr1, NetworkIdRelation nr2,
@@ -689,7 +731,19 @@ def get_cell_band_count(
             query += f" AND FileList.CollectionName IN ({placeholders})"
             params.extend(selected_collections)
 
-        query += " GROUP BY FileList.ASideLocation, NetworkInfo.Technology"
+        query += """
+            GROUP BY FileList.ASideLocation, NetworkInfo.Technology, NetworkInfo.CID
+            ),
+            Ranked AS (
+                SELECT location, technology,
+                       ROW_NUMBER() OVER (PARTITION BY location, cid ORDER BY positions DESC, technology) AS rn
+                FROM PerBand
+            )
+            SELECT location, technology, COUNT(*) AS cellCount
+            FROM Ranked
+            WHERE rn = 1
+            GROUP BY location, technology
+        """
 
         cursor.execute(query, tuple(params))
 

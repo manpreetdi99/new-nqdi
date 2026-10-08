@@ -17,6 +17,78 @@ def list_data_calls(
         conn = get_connection(database)
         cursor = conn.cursor()
 
+        # Οι A-LEVEL πηγές ανά TestId (HTTP Transfer / Browser throughput, HTTPS URL, YouTube
+        # streams, IP throughput) υλοποιούνται ΠΡΩΤΑ σε #temp με clustered index και το κύριο
+        # SELECT κάνει απλό LEFT JOIN. Σαν derived tables μέσα στο ίδιο SELECT ο optimizer
+        # τα ξαναυπολόγιζε (views vResultsKPI / vResultsVideoStreamAvg): ~10s για όλη την
+        # DOD_26H2 αντί για ~1s που κοστίζουν μόνα τους. Ίδιο pattern με το /api/calls.
+        cursor.execute("""
+            SET NOCOUNT ON;
+
+            -- HTTP Transfer: "HTTPS TRANSFER RAW.sql" — Throughput*0.008, lastBlock=1, ErrorCode=0.
+            SELECT H.TestId,
+                   AVG(CASE WHEN H.ErrorCode = 0 THEN CONVERT(float, H.Throughput) * 0.008 END) AS Thr
+            INTO #ht
+            FROM ResultsHTTPTransferTest H
+            WHERE H.lastBlock = 1
+            GROUP BY H.TestId;
+            CREATE CLUSTERED INDEX IX_ht ON #ht(TestId);
+
+            -- HTTP Browser (Kepler/Newton): "HTTP BROWSING p2 RAW.sql" — KPI 30407 Value1*8*0.001.
+            SELECT K.TestId,
+                   AVG(CASE WHEN K.KPIStatus = 'Successful' THEN CONVERT(float, K.Value1) * 8 * 0.001 END) AS Thr
+            INTO #kb
+            FROM vResultsKPI K
+            WHERE K.KPIID = 30407
+            GROUP BY K.TestId;
+            CREATE CLUSTERED INDEX IX_kb ON #kb(TestId);
+
+            -- HTTPS Browser URL του KPI 20404 ("HTTPSBrowserData.sql": Value5 IS NOT NULL).
+            SELECT K.TestId, MAX(K.Value5) AS Url
+            INTO #bu
+            FROM vResultsKPI K
+            WHERE K.KPIID = 20404
+            GROUP BY K.TestId;
+            CREATE CLUSTERED INDEX IX_bu ON #bu(TestId);
+
+            -- Video streams ("YOUTUBE RAW.sql"): VQ (TestQualityAvg), stream status (ok),
+            -- Freezing % (FreezingPercent), First Delay (TimeToFirstPicture, αλλιώς
+            -- TimeToFirstPicturePlayer). HasVq = υπάρχουν και οι γραμμές ResultsVQ08StreamAvg /
+            -- ResultsVideoStream που η reference απαιτεί (inner join) — ποια streams
+            -- μετράνε το αποφασίζει το Summary (βλ. youtubeStreamLevel, attachmentC.ts).
+            SELECT V.TestId,
+                   AVG(V.TestQualityAvg)  AS VqAvg,
+                   MAX(CASE WHEN V.Status LIKE '%ok%' THEN 1 ELSE 0 END) AS StreamOk,
+                   AVG(V.FreezingPercent) AS FreezingPct,
+                   AVG(CASE WHEN T.TimeToFirstPicture IS NOT NULL THEN T.TimeToFirstPicture * 0.001
+                            ELSE T.TimeToFirstPicturePlayer * 0.001 END) AS FirstDelaySec,
+                   MAX(CASE WHEN Q.TestId IS NOT NULL AND RVS.TestId IS NOT NULL THEN 1 ELSE 0 END) AS HasVq
+            INTO #yv
+            FROM vResultsVideoStreamAvg V
+            JOIN TestInfo TIV                     ON TIV.TestId = V.TestId AND TIV.Valid = 1
+            LEFT JOIN ResultsVQ08StreamAvg Q      ON Q.TestId   = V.TestId
+            LEFT JOIN ResultsVideoStream RVS      ON RVS.TestId = V.TestId
+            LEFT JOIN ResultsVideoStreamTCPData T ON T.TestId   = V.TestId
+            GROUP BY V.TestId;
+            CREATE CLUSTERED INDEX IX_yv ON #yv(TestId);
+
+            -- Downlink IP throughput δείγματα ("YT_IP LAYER RAW.sql"): άθροισμα/πλήθος/max
+            -- ανά test, ώστε ο μέσος όρος στο Summary να είναι ανά δείγμα όπως στο Excel.
+            SELECT F.TestId,
+                   SUM(F.ThroughputKbps)   AS ThrSum,
+                   COUNT(F.ThroughputKbps) AS ThrCnt,
+                   MAX(F.ThroughputKbps)   AS ThrMax
+            INTO #yip
+            FROM FactIPThroughput F
+            JOIN TestInfo TIY   ON TIY.TestId = F.TestId AND TIY.Valid = 1
+                               AND TIY.TestName IN ('YouTube Service', 'YouTube Service_Live', 'YouTube Service_4K')
+            JOIN Position PY    ON PY.PosId = F.PosId
+            JOIN NetworkInfo NY ON NY.NetworkId = F.NetworkId
+            WHERE F.direction = 'Downlink'
+            GROUP BY F.TestId;
+            CREATE CLUSTERED INDEX IX_yip ON #yip(TestId);
+        """)
+
         query = """
             SELECT
                 FL.ASideLocation                                    AS Location,
@@ -35,13 +107,46 @@ def list_data_calls(
                 CC.[Ping_RTT Avg (ms)]                              AS pingRttAvg,
                 CC.[Transfer Throughput (kbps)]                     AS throughputKbps,
                 CC.[Capacity_Sustainable Throughput (kbps)]         AS capacityThroughputKbps,
+                -- Throughput με την πηγή του A-LEVEL Attachment C (Summary tab) — το
+                -- CC.[Transfer Throughput] βγαίνει 1-40% ψηλότερο για αυτά τα tests:
+                --   HTTP Transfer: "HTTPS TRANSFER RAW.sql" — ResultsHTTPTransferTest
+                --     .Throughput*0.008, lastBlock=1, μόνο ErrorCode=0.
+                --   HTTP Browser (Kepler/Kepler_2/Newton): "HTTP BROWSING p2 RAW.sql" —
+                --     KPI 30407 Value1*8*0.001, μόνο KPIStatus='Successful'.
+                -- Άλλα tests (HTTPS sites, Ookla κλπ.) δεν έχουν τέτοια γραμμή ->
+                -- CC.[Transfer Throughput], που εκεί ταιριάζει ήδη με το Excel.
+                CASE
+                    WHEN HT.TestId IS NOT NULL THEN HT.Thr
+                    WHEN KB.TestId IS NOT NULL THEN KB.Thr
+                    ELSE CC.[Transfer Throughput (kbps)]
+                END                                                 AS refThroughputKbps,
                 CC.[YouTube_Avg. Video MOS]                         AS youtubeMos,
                 CC.[YouTube_Number of Interuptions]                 AS youtubeInterruptions,
+                -- YouTube KPIs του A-LEVEL Attachment C ("YOUTUBE RAW.sql" /
+                -- "YT_IP LAYER RAW.sql"), ανά test — βλ. YV / YIP παρακάτω.
+                YV.FreezingPct                                      AS youtubeFreezingPct,
+                YV.FirstDelaySec                                    AS youtubeFirstDelaySec,
+                YV.VqAvg                                            AS youtubeVq,
+                YV.StreamOk                                         AS youtubeStreamOk,
+                -- 2 = stream με αποτέλεσμα VQ (vResultsVideoStreamAvg + ResultsVQ08StreamAvg +
+                -- ResultsVideoStream, ακριβώς οι inner joins του "YOUTUBE RAW.sql"), 1 = stream
+                -- χωρίς VQ08/ResultsVideoStream, 0 = κανένα stream (π.χ. failed πριν παίξει).
+                CASE WHEN YV.TestId IS NULL THEN 0 WHEN YV.HasVq = 1 THEN 2 ELSE 1 END AS youtubeStreamLevel,
+                YIP.ThrSum                                          AS youtubeIpThrSumKbps,
+                YIP.ThrCnt                                          AS youtubeIpThrSamples,
+                YIP.ThrMax                                          AS youtubeIpThrMaxKbps,
                 CC.Technology                                       AS technology,
                 CC.[Start Technology]                               AS startTechnology,
                 FL.CollectionName,
                 FL.ASideFileName,
                 S.Valid                                             AS isValid,
+                -- TestInfo.Valid: όλα τα A-LEVEL data queries κρατούν μόνο TestInfo.Valid=1 —
+                -- ένα invalid test μέσα σε valid session μετρούσε σαν επιπλέον failed test.
+                TI.Valid                                            AS testValid,
+                -- 1 = HTTPS Browser test του οποίου το KPI 20404 δεν έχει URL (Value5 NULL,
+                -- π.χ. failed πριν ανοίξει σελίδα). Το A-LEVEL "HTTPSBrowserData.sql" έχει
+                -- "Value5 IS NOT NULL", άρα δεν το μετράει καθόλου — το Summary το κρύβει.
+                CASE WHEN BU.TestId IS NOT NULL AND BU.Url IS NULL THEN 1 ELSE 0 END AS browserUrlMissing,
                 CAST(COALESCE(AC.Comment, S.InvalidReason) AS varchar(1000)) AS comment,
                 P.Latitude                                          AS latitude,
                 P.Longitude                                         AS longitude
@@ -52,6 +157,11 @@ def list_data_calls(
             LEFT JOIN Position P     ON P.PosId      = TI.PosId
             LEFT JOIN AnalysisCommentSessionsBridge ACSB ON ACSB.sessionID = CC.SessionId
             LEFT JOIN AnalysisComment AC                 ON AC.commentID   = ACSB.commentId
+            LEFT JOIN #ht  HT  ON HT.TestId  = CC.TestId
+            LEFT JOIN #kb  KB  ON KB.TestId  = CC.TestId
+            LEFT JOIN #bu  BU  ON BU.TestId  = CC.TestId
+            LEFT JOIN #yv  YV  ON YV.TestId  = CC.TestId
+            LEFT JOIN #yip YIP ON YIP.TestId = CC.TestId
             WHERE (S.Valid = 1 OR S.Valid = 0 OR S.Valid IS NULL)
               AND FL.ASideLocation NOT LIKE '%Free%'
               AND FL.ASideLocation NOT LIKE '%Voice%'

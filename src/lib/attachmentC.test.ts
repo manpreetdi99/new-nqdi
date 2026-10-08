@@ -221,6 +221,21 @@ describe("voice KPIs", () => {
     expect(stats.mos.max).toBe(4.6);
   });
 
+  it("follows LQStatisticData.sql for Low Speech Quality and POLQA samples", () => {
+    const stats = buildVoiceStats([
+      call({ Avg_mos: 2.0, badCall: 1, mosUlAvg: 2, mosUlSamples: 4, mosDlAvg: 2, mosDlSamples: 4 }),
+      // badCall=null = κανένα έγκυρο δείγμα (π.χ. Failed με Avg_mos=1.0) -> ΔΕΝ μετράει,
+      // παρότι Avg_mos < 2.2.
+      call({ status: "Failed", Avg_mos: 1.0, badCall: null }),
+      // Εκτός reference (FREE χωρίς KPI 11012/10108): ούτε BadCall ούτε POLQA samples.
+      call({ Avg_mos: 1.0, badCall: 1, lqStatsEligible: 0, mosUlAvg: 1, mosUlSamples: 1, mosDlAvg: 1, mosDlSamples: 1 }),
+    ]);
+
+    expect(stats.lowQualityCalls).toBe(1);
+    expect(stats.mosUl).toMatchObject({ avg: 2, samples: 4 });
+    expect(stats.mosDl).toMatchObject({ avg: 2, samples: 4 });
+  });
+
   it("aggregates raw UL/DL MOS samples from the backend per-session stats, weighted by sample count", () => {
     // Κάθε γραμμή είναι μία κλήση (session) με ήδη υπολογισμένα avg/min/max/samples
     // από το backend πάνω σε raw ResultsLQ08Avg δείγματα — όχι ένα Avg_mos ανά κλήση.
@@ -276,6 +291,13 @@ describe("custom call mode (VoLTE / CS) split — FREE table LQCallExtend_1PT", 
     // '-' callMode with no matching technology, or nothing at all -> unclassified.
     expect(classifyCustomCallMode({ callMode: "-", technology: "5G NR" })).toBeNull();
     expect(classifyCustomCallMode({ callMode: null, technology: null })).toBeNull();
+  });
+
+  it("prefers the backend customCallMode (B->A uses CallModeB) over the A-side callMode", () => {
+    // B->A κλήση: A-side CSFB, αλλά CallModeB=VoLTE -> VoLTE Call στο LQCallData.sql.
+    expect(classifyCustomCallMode({ callMode: "CSFB", technology: "GSM/LTE", customCallMode: "volte" })).toBe("volte");
+    expect(classifyCustomCallMode({ callMode: "VoLTE", technology: "LTE", customCallMode: "cs" })).toBe("cs");
+    expect(classifyCustomCallMode({ callMode: "VoLTE", technology: "LTE", customCallMode: null })).toBeNull();
   });
 
   it("splits attempts/dropped/unsuccessful by VoLTE vs CS call, same base as classifyCallStatus", () => {
@@ -756,7 +778,87 @@ describe("PS data KPIs", () => {
     );
   });
 
-  it("reports YouTube MOS and interruptions", () => {
+  it("reports the Attachment C YouTube rows: MOS, first delay, per-sample IP throughput, max, freezing %", () => {
+    const [youtube] = buildDataSections([
+      dataTest({
+        testType: "YouTube Service_4K",
+        direction: null,
+        youtubeMos: 4.0,
+        youtubeFirstDelaySec: 0.5,
+        youtubeFreezingPct: 0,
+        youtubeIpThrSumKbps: 30000, // 3 δείγματα, μέσος 10 000 kbps
+        youtubeIpThrSamples: 3,
+        youtubeIpThrMaxKbps: 20000,
+      }),
+      dataTest({
+        testType: "YouTube Service_4K",
+        direction: null,
+        youtubeMos: 4.4,
+        youtubeFirstDelaySec: 0.7,
+        youtubeFreezingPct: 4,
+        youtubeIpThrSumKbps: 40000, // 1 δείγμα
+        youtubeIpThrSamples: 1,
+        youtubeIpThrMaxKbps: 40000,
+      }),
+      // Failed test: χωρίς stream (MOS/delay/freezing null), αλλά με IP δείγματα — μετράνε.
+      dataTest({
+        testType: "YouTube Service_4K",
+        direction: null,
+        scoringStatus: "F",
+        youtubeFreezingPct: null,
+        youtubeFirstDelaySec: null,
+        youtubeIpThrSumKbps: 10000,
+        youtubeIpThrSamples: 1,
+        youtubeIpThrMaxKbps: 10000,
+      }),
+    ]);
+
+    const metric = (label: string) => youtube.total.metrics.find((m) => m.label === label);
+    expect(youtube.total.metrics.map((m) => m.label)).toEqual([
+      "Mean video MOS",
+      "Mean first delay",
+      "Mean IP throughput",
+      "Max IP throughput",
+      "Mean freezing",
+    ]);
+    expect(metric("Mean video MOS")?.value).toBeCloseTo(4.2, 6);
+    expect(metric("Mean first delay")?.value).toBeCloseTo(0.6, 6);
+    // (30 000 + 40 000 + 10 000) / 5 δείγματα = 16 000 kbps = 16 Mbps — όχι ο μέσος των per-test μέσων.
+    expect(metric("Mean IP throughput")).toMatchObject({ samples: 5 });
+    expect(metric("Mean IP throughput")?.value).toBeCloseTo(16, 6);
+    expect(metric("Max IP throughput")?.value).toBeCloseTo(40, 6);
+    expect(metric("Mean freezing")).toMatchObject({ samples: 2 });
+    expect(metric("Mean freezing")?.value).toBeCloseTo(2, 6);
+  });
+
+  it("counts YouTube like the Attachment C: only streams with a VQ result, success = stream ok", () => {
+    const yt = (overrides: Partial<DataCallRow>) =>
+      dataTest({ testType: "YouTube Service", direction: null, youtubeFreezingPct: 0, youtubeFirstDelaySec: 0.5, ...overrides });
+    const [youtube] = buildDataSections([
+      // Cosmote: 2 streams με VQ, 1 stream χωρίς VQ08 (εκτός), 1 failed χωρίς stream (εκτός,
+      // αλλά τα IP δείγματά του μετράνε).
+      yt({ Location: "Cosmote Data", youtubeStreamLevel: 2, youtubeStreamOk: 1, youtubeVq: 4, youtubeIpThrSumKbps: 1000, youtubeIpThrSamples: 1, youtubeIpThrMaxKbps: 1000 }),
+      yt({ Location: "Cosmote Data", youtubeStreamLevel: 2, youtubeStreamOk: 1, youtubeVq: 4.4 }),
+      yt({ Location: "Cosmote Data", youtubeStreamLevel: 1, youtubeStreamOk: 1, youtubeVq: 1, youtubeFirstDelaySec: 9 }),
+      yt({ Location: "Cosmote Data", scoringStatus: "F", youtubeStreamLevel: 0, youtubeVq: null, youtubeFreezingPct: null, youtubeFirstDelaySec: null, youtubeIpThrSumKbps: 3000, youtubeIpThrSamples: 1, youtubeIpThrMaxKbps: 3000 }),
+      // Nova: κανένα stream με VQ08 -> μετράνε όλα τα streams της (level 1).
+      yt({ Location: "Nova Data", youtubeStreamLevel: 1, youtubeStreamOk: 1, youtubeVq: 4.2 }),
+      yt({ Location: "Nova Data", youtubeStreamLevel: 1, youtubeStreamOk: 0, youtubeVq: 3.8 }),
+    ]);
+
+    const cosmote = youtube.byOperator.get("COSMOTE")!;
+    expect(cosmote).toMatchObject({ total: 2, success: 2, failed: 0, successRate: 1 });
+    const metric = (label: string) => cosmote.metrics.find((m) => m.label === label);
+    expect(metric("Mean video MOS")?.value).toBeCloseTo(4.2, 6);
+    expect(metric("Mean first delay")?.value).toBeCloseTo(0.5, 6);
+    expect(metric("Mean IP throughput")?.value).toBeCloseTo(2, 6); // (1000 + 3000) / 2 kbps
+
+    const nova = youtube.byOperator.get("NOVA")!;
+    expect(nova).toMatchObject({ total: 2, success: 1, failed: 1 });
+    expect(nova.metrics[0].value).toBeCloseTo(4, 6);
+  });
+
+  it("falls back to YouTube MOS and interruptions when the API has no Attachment C fields", () => {
     const [youtube] = buildDataSections([
       dataTest({ testType: "YouTube Video Streaming", direction: null, youtubeMos: 4.0, youtubeInterruptions: 0 }),
       dataTest({ testType: "YouTube Video Streaming", direction: null, youtubeMos: 4.4, youtubeInterruptions: 2 }),
@@ -808,21 +910,68 @@ describe("PS data KPIs", () => {
     expect(section.total.metrics[0].samples).toBe(50);
   });
 
-  it("feeds DNS rows through buildDataSections into its own 'DNS' section, weighted-averaging across (location, status) groups", () => {
-    // 3 δείγματα με avg=20ms + 1 δείγμα με avg=100ms -> weighted mean = (3×20 + 1×100) / 4 = 40.
+  it("feeds DNS rows through buildDataSections into its own 'DNS' section, weighted-averaging the Successful groups only", () => {
+    // Success: 3 δείγματα avg=20ms + 2 δείγματα avg=50ms -> (3×20 + 2×50) / 5 = 32.
+    // Το Failed group (timeout 30s) ΔΕΝ μπαίνει στον μέσο όρο — όπως το A-LEVEL "DNS RAW.sql".
     const rows = mapDnsRowsToDataCallRows([
       dnsRow({ status: "Success", count: 3, avg: 20 }),
-      dnsRow({ status: "Failed", count: 1, avg: 100 }),
+      dnsRow({ status: "Success", count: 2, avg: 50 }),
+      dnsRow({ status: "Failed", count: 1, avg: 30000 }),
     ]);
 
     const sections = buildDataSections(rows);
     expect(sections.map((s) => s.key)).toEqual(["DNS Resolution"]);
 
     const dns = sections[0];
-    expect(dns.total.total).toBe(4);
-    expect(dns.total.success).toBe(3);
+    expect(dns.total.total).toBe(6);
+    expect(dns.total.success).toBe(5);
     expect(dns.total.failed).toBe(1);
-    expect(dns.total.metrics[0]).toMatchObject({ label: "Mean DNS Resolution Time", unit: "ms", value: 40 });
+    expect(dns.total.metrics[0]).toMatchObject({ label: "Mean DNS Resolution Time", unit: "ms", value: 32, samples: 5 });
+  });
+
+  it("uses refThroughputKbps (A-LEVEL source) over throughputKbps when the API sends it", () => {
+    const sections = buildDataSections([
+      dataTest({ testType: "HTTP Browser (Kepler)", direction: null, throughputKbps: 4000, refThroughputKbps: 3000 }),
+      dataTest({ testType: "HTTP Browser (Kepler)", direction: null, throughputKbps: 6000, refThroughputKbps: 5000 }),
+      // Failed test: ref null -> δεν μετράει, ακόμα κι αν το CDR throughput έχει τιμή.
+      dataTest({
+        testType: "HTTP Browser (Kepler)",
+        direction: null,
+        scoringStatus: "F",
+        throughputKbps: 9000,
+        refThroughputKbps: null,
+      }),
+      // Χωρίς το πεδίο (π.χ. mapped rows) -> fallback στο throughputKbps.
+      dataTest({ testType: "HTTPS Browser (alpha)", direction: null, throughputKbps: 2000 }),
+    ]);
+
+    const kepler = sections.find((section) => section.key === "HTTP Browser (Kepler)");
+    expect(kepler?.total.metrics[0]).toMatchObject({ value: 4, samples: 2 });
+    const alpha = sections.find((section) => section.key === "HTTPS Browser (alpha)");
+    expect(alpha?.total.metrics[0]).toMatchObject({ value: 2, samples: 1 });
+  });
+
+  it("counts eGaming RTT / PacketDelay = 0 in the average, like the A-LEVEL pivot", () => {
+    const sections = buildDataSections([
+      dataTest({ testType: "Interactivity", direction: null, interactivityPacketDelay: 20, interactivityRtt: 30 }),
+      dataTest({ testType: "Interactivity", direction: null, interactivityPacketDelay: 0, interactivityRtt: 0 }),
+    ]);
+
+    const metric = (label: string) => sections[0].total.metrics.find((m) => m.label === label);
+    expect(metric("eGaming Average of PacketDelay")).toMatchObject({ value: 10, samples: 2 });
+    expect(metric("eGaming Average of RTT")).toMatchObject({ value: 15, samples: 2 });
+  });
+
+  it("counts eGaming QoEScore = 0 in the average, like the A-LEVEL pivot", () => {
+    const sections = buildDataSections([
+      dataTest({ testType: "Interactivity", direction: null, interactivityQoeScore: 0.8 }),
+      dataTest({ testType: "Interactivity", direction: null, interactivityQoeScore: 0 }),
+      dataTest({ testType: "Interactivity", direction: null, interactivityQoeScore: null }),
+    ]);
+
+    const qoe = sections[0].total.metrics.find((metric) => metric.label === "eGaming Avg QoEScore");
+    expect(qoe).toMatchObject({ samples: 2 });
+    expect(qoe?.value).toBeCloseTo(40, 6);
   });
 
   it("groups every HTTPS site test into Ε4 regardless of raw format (URL / 'Browser (site)' / bare domain)", () => {

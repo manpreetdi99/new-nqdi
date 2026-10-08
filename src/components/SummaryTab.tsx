@@ -1251,7 +1251,12 @@ const SummaryTab = ({
     [allCallsRows, onlyValidCalls],
   );
   const validDataCallsRows = useMemo(
-    () => (onlyValidCalls ? dataCallsRows.filter((row) => row.isValid !== 0) : dataCallsRows),
+    // testValid=0: άκυρο test (TestInfo.Valid) μέσα σε valid session — τα A-LEVEL queries το πετάνε.
+    // browserUrlMissing=1: HTTPS Browser test χωρίς URL στο KPI 20404 — εκτός A-LEVEL κι αυτό.
+    () =>
+      onlyValidCalls
+        ? dataCallsRows.filter((row) => row.isValid !== 0 && row.testValid !== 0 && row.browserUrlMissing !== 1)
+        : dataCallsRows,
     [dataCallsRows, onlyValidCalls],
   );
 
