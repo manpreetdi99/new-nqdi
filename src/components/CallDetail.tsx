@@ -13,7 +13,7 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { useToast } from "@/components/ui/use-toast";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchNr5gValues, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchNr5gScannerBest, fetchNr5gScannerRaw, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchNr5gContextSignal, fetchNr5gContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchCallSrvccDetail, fetchCallCsfbDetail, fetchTechnologyTimeline, fetchTechnologyPeriods, fetchVoiceCodec, fetchMarkers, fetchCallNeighbors, type TechnologyPeriodRow, type CallNeighbors, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type SrvccDetailResponse, type SrvccEventRow, type CsfbDetailResponse, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow, type Nr5gCell } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchNr5gValues, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchNr5gScannerBest, fetchNr5gScannerRaw, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchNr5gContextSignal, fetchNr5gContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchCallSrvccDetail, fetchCallCsfbDetail, fetchTechnologyTimeline, fetchTechnologyPeriods, fetchVoiceCodec, fetchMarkers, fetchCallNeighbors, fetchMosTestDetail, type TechnologyPeriodRow, type CallNeighbors, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type SrvccDetailResponse, type SrvccEventRow, type CsfbDetailResponse, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow, type MosTestRow, type Nr5gCell } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { technologyColor } from "@/lib/chartStyles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -349,6 +349,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
   const [voiceCodec, setVoiceCodec] = useState<VoiceCodecRow[]>([]);
   // User-placed annotations during the session, merged into the TraceLog panel as timeline events
   const [markers, setMarkers] = useState<MarkerRow[]>([]);
+  const [mosTests, setMosTests] = useState<MosTestRow[]>([]);
   // Prev/Next call SessionIds για τα κουμπιά πλοήγησης (null → δεν υπάρχει → disabled)
   const [neighbors, setNeighbors] = useState<CallNeighbors | null>(null);
   const [loadErrors, setLoadErrors] = useState<string[]>([]);
@@ -458,6 +459,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
   // source/target), ενώ τις περισσότερες φορές αρκεί η μία γραμμή με την έκβαση.
   const [srvccOpen, setSrvccOpen] = useLocalStorage<boolean>("call-detail-srvcc-open", false);
   const [csfbOpen, setCsfbOpen] = useLocalStorage<boolean>("call-detail-csfb-open", false);
+  // MOS ανά test: κλειστό by default — ο πίνακας codecs & LTE ανά TestId ανοίγει με κλικ.
+  const [mosTestsOpen, setMosTestsOpen] = useLocalStorage<boolean>("call-detail-mos-tests-open", false);
   const hoverIso = (iso: string | null | undefined) => {
     const t = toTimestamp(iso);
     setHoveredTime(Number.isFinite(t) ? t : null);
@@ -739,6 +742,18 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
     })();
     return () => { cancelled = true; };
   }, [csfbDetail, wantsGsmLeg, database, call.callId]);
+
+  // MOS ανά test: POLQA TestId x FactSpeechCodecs (codec ανά κατεύθυνση) + μέσες τιμές LTE του test.
+  // Χωριστό fetch από το loadRadio, ώστε να μην το καθυστερεί.
+  useEffect(() => {
+    setMosTests([]);
+    if (!call.callId || !database) return;
+    let cancelled = false;
+    fetchMosTestDetail(database, String(call.callId))
+      .then((res) => { if (!cancelled) setMosTests(res.mosTests || []); })
+      .catch(() => { if (!cancelled) setMosTests([]); });
+    return () => { cancelled = true; };
+  }, [database, call.callId]);
 
   // Prev/Next call: ρωτάμε το backend ποιο SessionId είναι η προηγούμενη/επόμενη κλήση
   // (στόχος ±2, σειριακός έλεγχος και του ±1) — null σημαίνει δεν υπάρχει → disabled κουμπί
@@ -3243,6 +3258,105 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
           Το διάγραμμα σήματος και το Session Overview που βρίσκονταν εδώ έχουν ενωθεί με το
           κύριο διάγραμμα της κάρτας (CallSignalChart) πάνω σε έναν κοινό άξονα χρόνου· εδώ
           μένει ο πίνακας των αλλαγών, που δεν έχει νόημα ως καμπύλη. */}
+      {/* ── MOS ανά test ── Speech-Wideband POLQA x FactSpeechCodecs: ένα row ανά codec (DL/UL,
+          Active, Duration <> 0) κάθε MOS TestId· τα στοιχεία του test (MOS, Status, μέσες τιμές LTE
+          μέσα στο ίδιο TestId) εμφανίζονται μία φορά ανά test με rowSpan. */}
+      {mosTests.length > 0 && (() => {
+        const groupSize = new Map<number, number>();
+        for (const r of mosTests) groupSize.set(r.TestId, (groupSize.get(r.TestId) ?? 0) + 1);
+        const fmt = (v: number | null, d: number) => (v != null ? Number(v).toFixed(d) : "—");
+        const pct = (v: number | null) => (v != null ? `${(Number(v) * 100).toFixed(1)}%` : "—");
+        return (
+        <div className="bg-card border border-border rounded-lg p-3 space-y-2">
+          <button
+            type="button"
+            onClick={() => setMosTestsOpen(!mosTestsOpen)}
+            aria-expanded={mosTestsOpen}
+            className="min-w-0 text-left"
+          >
+            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
+              <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${mosTestsOpen ? "rotate-90" : ""}`} />
+              MOS ανά test <span className="text-[10px] font-normal text-muted-foreground">({groupSize.size} tests — codecs &amp; LTE μέσα στο ίδιο TestId)</span>
+            </h3>
+          </button>
+          {mosTestsOpen && (
+          <div className="overflow-x-auto max-h-[320px] overflow-y-auto rounded border border-border/50">
+            <table className="w-full text-xs text-center">
+              <thead className="sticky top-0 bg-muted border-b border-border z-10">
+                <tr>
+                  <th className="px-2 py-1 font-semibold">TestId</th>
+                  <th className="px-2 py-1 font-semibold" title="TestInfo.direction · A->B = UL, B->A = DL">Direction</th>
+                  <th className="px-2 py-1 font-semibold">Ώρα</th>
+                  <th className="px-2 py-1 font-semibold" title="vResultsLQAvgP863SWBSimpleCodec.LQWBP863float">MOS</th>
+                  <th className="px-2 py-1 font-semibold" title="DmnTest.Status">Status</th>
+                  <th className="px-2 py-1 font-semibold" title="FactSpeechCodecs.CodecDirection — με έντονα ο codec της κατεύθυνσης του MOS">Codec Dir</th>
+                  <th className="px-2 py-1 font-semibold">Codec</th>
+                  <th className="px-2 py-1 font-semibold">Rate (kbps)</th>
+                  <th className="px-2 py-1 font-semibold">Duration (s)</th>
+                  <th className="px-2 py-1 font-semibold" title="FactSpeechCodecs.CodecRatePerTestRatio">% test</th>
+                  <th className="px-2 py-1 font-semibold">EARFCN</th>
+                  <th className="px-2 py-1 font-semibold">PCI</th>
+                  <th className="px-2 py-1 font-semibold" title="AVG vJointLTEMeasurementReport.RSRP μέσα στο TestId">RSRP</th>
+                  <th className="px-2 py-1 font-semibold">RSRQ</th>
+                  <th className="px-2 py-1 font-semibold">SINR</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-border/50">
+                {mosTests.map((row, i) => {
+                  const first = i === 0 || mosTests[i - 1].TestId !== row.TestId;
+                  const span = groupSize.get(row.TestId) ?? 1;
+                  const mos = row.MOS != null ? Number(row.MOS) : null;
+                  const mosColor = mos == null ? "text-muted-foreground/40" : mos < 3 ? "text-destructive" : mos < 3.5 ? "text-warning" : "text-primary";
+                  const rsrpAbs = row.RSRP != null ? Math.abs(Number(row.RSRP)) : null;
+                  const rsrpColor = rsrpAbs == null ? "text-muted-foreground/40" : rsrpAbs >= 120 ? "text-destructive" : rsrpAbs >= 115 ? "text-warning" : "text-primary";
+                  const rsrqAbs = row.RSRQ != null ? Math.abs(Number(row.RSRQ)) : null;
+                  const rsrqColor = rsrqAbs == null ? "text-muted-foreground/40" : rsrqAbs >= 18 ? "text-destructive" : rsrqAbs >= 16 ? "text-warning" : "text-primary";
+                  // ο codec της κατεύθυνσης του MOS (A->B = UL, B->A = DL) τονίζεται
+                  const isMosDir = (row.Direction === "A->B" && row.CodecDirection === "UL") || (row.Direction === "B->A" && row.CodecDirection === "DL");
+                  const testCell = "px-2 py-0.5 font-mono align-middle";
+                  return (
+                    <tr
+                      key={`${row.TestId}-${i}`}
+                      className={`hover:bg-muted/40 ${first && i > 0 ? "border-t-2 border-border" : ""}`}
+                      onMouseEnter={() => { if (row.FullDate) hoverIso(row.FullDate); }}
+                      onMouseLeave={() => setHoveredTime(null)}
+                    >
+                      {first && <>
+                        <td rowSpan={span} className={testCell}>{row.TestId}</td>
+                        <td rowSpan={span} className={testCell}>
+                          {row.Direction ?? "—"}
+                          {row.Direction === "A->B" && <span className="ml-1 text-[10px] text-muted-foreground">UL</span>}
+                          {row.Direction === "B->A" && <span className="ml-1 text-[10px] text-muted-foreground">DL</span>}
+                        </td>
+                        <td rowSpan={span} className={testCell}>
+                          {row.FullDate ? new Date(row.FullDate).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}
+                        </td>
+                        <td rowSpan={span} className={`${testCell} font-bold ${mosColor}`}>{mos != null ? mos.toFixed(2) : "—"}</td>
+                        <td rowSpan={span} className="px-2 py-0.5 align-middle">{row.Status ?? "—"}</td>
+                      </>}
+                      <td className={`px-2 py-0.5 font-mono ${isMosDir ? "font-bold text-foreground" : "text-muted-foreground"}`}>{row.CodecDirection ?? "—"}</td>
+                      <td className={`px-2 py-0.5 ${isMosDir ? "font-bold text-foreground" : ""}`}>{row.CodecName ?? "—"}</td>
+                      <td className="px-2 py-0.5 font-mono">{fmt(row.CodecRate, 2)}</td>
+                      <td className="px-2 py-0.5 font-mono">{row.Duration != null ? (Number(row.Duration) / 1000).toFixed(2) : "—"}</td>
+                      <td className="px-2 py-0.5 font-mono">{pct(row.CodecRatePerTestRatio)}</td>
+                      {first && <>
+                        <td rowSpan={span} className={testCell}>{row.EARFCN ?? "—"}</td>
+                        <td rowSpan={span} className={testCell}>{row.PCI ?? "—"}</td>
+                        <td rowSpan={span} className={`${testCell} font-bold ${rsrpColor}`}>{fmt(row.RSRP, 1)}</td>
+                        <td rowSpan={span} className={`${testCell} font-bold ${rsrqColor}`}>{fmt(row.RSRQ, 1)}</td>
+                        <td rowSpan={span} className={testCell}>{fmt(row.SINR, 1)}</td>
+                      </>}
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          )}
+        </div>
+        );
+      })()}
+
       {mergedTechnology.length > 0 && (
         <div className="bg-card border border-border rounded-lg p-3 space-y-3">
           <h3 className="text-sm font-semibold text-foreground">

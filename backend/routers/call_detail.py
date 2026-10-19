@@ -1169,6 +1169,65 @@ def get_voice_codec(
         raise HTTPException(status_code=500, detail=str(e))
 
 
+@router.get("/api/mos_test_detail")
+def get_mos_test_detail(
+    database: str = Query(..., min_length=1),
+    session_id: str = Query(..., min_length=1)
+):
+    """MOS ανά test της κλήσης: Speech-Wideband POLQA (vResultsLQAvgP863SWBSimpleCodec)
+    x FactSpeechCodecs (ένα row ανά codec / κατεύθυνση codec που ήταν Active με Duration <> 0)
+    + μέσες τιμές LTE (vJointLTEMeasurementReport) μόνο μέσα στο ίδιο TestId.
+    LTE NULL = κανένα LTE δείγμα μέσα στο test."""
+    try:
+        conn = get_connection(database)
+        cursor = conn.cursor()
+        cursor.execute("""
+            SELECT DISTINCT
+                TestInfo.TestId,
+                TestInfo.direction AS Direction,
+                FactSpeechCodecs.FullDate,
+                ROUND(vResultsLQAvgP863SWBSimpleCodec.LQWBP863float, 2) AS MOS,
+                DmnTest.Status,
+                FactSpeechCodecs.CodecName,
+                FactSpeechCodecs.CodecRate,
+                FactSpeechCodecs.CodecDirection,
+                FactSpeechCodecs.Duration,
+                FactSpeechCodecs.DirectionStatus,
+                FactSpeechCodecs.CodecPerTestRatio,
+                FactSpeechCodecs.CodecRatePerTestRatio,
+                FactSpeechCodecs.CodecRateUsageRank,
+                LTE.EARFCN,
+                LTE.PCI,
+                ROUND(LTE.RSRP, 2) AS RSRP,
+                ROUND(LTE.RSRQ, 2) AS RSRQ,
+                ROUND(LTE.SINR, 2) AS SINR
+            FROM TestInfo
+            OUTER APPLY (
+                SELECT
+                    MAX(m.EARFCN) AS EARFCN,
+                    MAX(m.PhyCellId) AS PCI,
+                    AVG(ROUND(CONVERT(float, m.RSRP), 3)) AS RSRP,
+                    AVG(ROUND(CONVERT(float, m.RSRQ), 3)) AS RSRQ,
+                    AVG(ROUND(CONVERT(float, m.SINR0), 3)) AS SINR
+                FROM vJointLTEMeasurementReport AS m
+                WHERE m.TestID = TestInfo.TestId
+            ) AS LTE
+            JOIN vResultsLQAvgP863SWBSimpleCodec ON vResultsLQAvgP863SWBSimpleCodec.TestId = TestInfo.TestId
+            JOIN DmnTest ON DmnTest.TestId = TestInfo.TestId
+            JOIN FactSpeechCodecs ON FactSpeechCodecs.TestId = TestInfo.TestId
+            WHERE typeoftest = 'Speech-Wideband POLQA'
+              AND TestInfo.SessionId = TRY_CONVERT(BIGINT, ?)
+              AND FactSpeechCodecs.DirectionStatus LIKE 'Active%'
+              AND FactSpeechCodecs.Duration <> 0
+            ORDER BY TestInfo.TestId, FactSpeechCodecs.CodecDirection, FactSpeechCodecs.CodecRateUsageRank
+        """, (session_id,))
+        data = _rows(cursor)
+        conn.close()
+        return {"mosTests": data}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
 @router.get("/api/technology_timeline")
 def get_technology_timeline(
     database: str = Query(..., min_length=1),

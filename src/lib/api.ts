@@ -226,11 +226,23 @@ export interface AllCallsRow {
    * "LQCallData.sql" reference query's CallSetupTimeVoLTE/CallSetupTimeCS:
    * vResultsKPI.Duration (KPIID 11013 για VoLTE, 10100 για CS στα δεδομένα που
    * ελέγχθηκαν — το 10108 της reference είναι σχεδόν άδειο εδώ), ErrorCode=0,
-   * Callstatus in Completed/Dropped, callMode σε VoLTE/SRVCC ή CSFB/CS (βλ. CASE στο
+   * Callstatus in Completed/Dropped, VoLTE vs CS κατά customCallMode (βλ. CASE στο
    * backend/routers/calls.py). null όταν η κλήση δεν πληροί τα κριτήρια.
    */
   volteSetupTime?: number | null;
   csSetupTime?: number | null;
+  /**
+   * "CustomCallMode" του A-LEVEL "LQCallData.sql": A->B κλήση κρίνεται από το
+   * CallSession.CallMode, B->A από το CallModeB. Ορίζει το VoLTE/CS split του FREE
+   * table — βλ. classifyCustomCallMode. undefined σε παλιότερο API response.
+   */
+  customCallMode?: "volte" | "cs" | null;
+  /**
+   * 0 = η κλήση δεν μετράει στα POLQA samples / Low Speech Quality του Attachment C
+   * ("LQStatisticData.sql": System Release, ή FREE κλήση χωρίς KPI 11012/10108 — βλ.
+   * backend/routers/calls.py). undefined σε παλιότερο API response.
+   */
+  lqStatsEligible?: number | null;
   /**
    * Per-session test counts by codec bucket — ίδιο bucketing με το A-LEVEL
    * "CallCodecTypeUsageGSM.sql" reference query (βλ. CODEC OUTER APPLY στο
@@ -648,9 +660,49 @@ export interface DataCallRow {
   host: string | null;
   pingRttAvg: number | null;
   throughputKbps: number | null;
+  /**
+   * TestInfo.Valid του test (0 = άκυρο test μέσα σε valid session). Το Summary το
+   * πετάει μαζί με τα isValid=0, όπως τα A-LEVEL queries (TestInfo.Valid=1).
+   * undefined σε rows που δεν έρχονται από το /api/data_calls.
+   */
+  testValid?: number | null;
+  /**
+   * 1 = HTTPS Browser test με KPI 20404 χωρίς URL (Value5 NULL). Το A-LEVEL
+   * "HTTPSBrowserData.sql" (Value5 IS NOT NULL) δεν το μετράει, οπότε το Summary το
+   * κρύβει μαζί με τα άκυρα tests. undefined εκτός /api/data_calls.
+   */
+  browserUrlMissing?: number | null;
+  /**
+   * Throughput με την πηγή του A-LEVEL Attachment C: HTTP Transfer από
+   * ResultsHTTPTransferTest, HTTP Browser (Kepler/Newton) από KPI 30407, αλλιώς ίδιο
+   * με το throughputKbps (βλ. backend/routers/data_calls.py). Το Summary tab το
+   * προτιμά. undefined σε rows που δεν έρχονται από το /api/data_calls.
+   */
+  refThroughputKbps?: number | null;
   capacityThroughputKbps: number | null;
   youtubeMos: number | null;
   youtubeInterruptions: number | null;
+  /**
+   * YouTube KPIs με την πηγή του A-LEVEL Attachment C (βλ. backend/routers/data_calls.py):
+   * Freezing % (vResultsVideoStreamAvg.FreezingPercent, 0-100), First Delay σε s
+   * (TimeToFirstPicture), και τα Downlink IP throughput δείγματα του test (FactIPThroughput)
+   * ως άθροισμα/πλήθος/max — ο μέσος όρος βγαίνει ανά δείγμα, όχι ανά test.
+   * undefined σε rows που δεν έρχονται από το /api/data_calls.
+   */
+  youtubeFreezingPct?: number | null;
+  youtubeFirstDelaySec?: number | null;
+  /** vResultsVideoStreamAvg.TestQualityAvg — το "MEAN VQ" του Attachment C. */
+  youtubeVq?: number | null;
+  /** 1 = stream status "ok" (Stream Success Rate του A-LEVEL), 0 = όχι. */
+  youtubeStreamOk?: number | null;
+  /**
+   * 2 = stream με αποτέλεσμα VQ (όπως το μετράει το "YOUTUBE RAW.sql"), 1 = stream χωρίς
+   * VQ08 αποτέλεσμα, 0 = κανένα stream. Ορίζει ποια tests μετράνε στο YouTube section.
+   */
+  youtubeStreamLevel?: number | null;
+  youtubeIpThrSumKbps?: number | null;
+  youtubeIpThrSamples?: number | null;
+  youtubeIpThrMaxKbps?: number | null;
   /** FactInteractivity.QoEScore — μόνο για testType="Interactivity", βλ. mapInteractivityRowsToDataCallRows. */
   interactivityQoeScore: number | null;
   /** RTTMedian — μόνο για testType="Interactivity". */
@@ -1508,6 +1560,38 @@ export async function fetchVoiceCodec(
 ): Promise<{ voiceCodec: VoiceCodecRow[] }> {
   const params = new URLSearchParams({ database, session_id });
   return requestJson(`/api/voice_codec?${params.toString()}`);
+}
+
+/** Ένα row ανά TestId x codec (FactSpeechCodecs, Active, Duration <> 0) — τα πεδία του test
+ *  (MOS, Status, LTE) επαναλαμβάνονται σε κάθε codec row του ίδιου TestId. */
+export interface MosTestRow {
+  TestId: number;
+  Direction: string | null; // "A->B" (UL) or "B->A" (DL) — κατεύθυνση του MOS sample
+  FullDate: string | null;
+  MOS: number | null; // vResultsLQAvgP863SWBSimpleCodec.LQWBP863float
+  Status: string | null; // DmnTest.Status
+  CodecName: string | null;
+  CodecRate: number | null; // kbps
+  CodecDirection: string | null; // "DL" / "UL"
+  Duration: number | null; // ms
+  DirectionStatus: string | null;
+  CodecPerTestRatio: number | null; // 0..1
+  CodecRatePerTestRatio: number | null; // 0..1
+  CodecRateUsageRank: number | null;
+  // μέσες τιμές vJointLTEMeasurementReport μέσα στο test — null = κανένα LTE δείγμα
+  EARFCN: number | null;
+  PCI: number | null;
+  RSRP: number | null;
+  RSRQ: number | null;
+  SINR: number | null;
+}
+
+export async function fetchMosTestDetail(
+  database: string,
+  session_id: string
+): Promise<{ mosTests: MosTestRow[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/mos_test_detail?${params.toString()}`);
 }
 
 export interface MarkerRow {
