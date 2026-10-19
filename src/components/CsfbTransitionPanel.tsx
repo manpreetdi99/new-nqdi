@@ -395,16 +395,16 @@ export function CsfbTransitionPanel({
                     formatter={(value: number | string, name: string) => [value != null ? Number(value).toFixed(1) : "—", name]}
                   />
 
-                  <Line yAxisId="strength" type="monotone" dataKey="LTE_RSRP" stroke="#22c55e" strokeWidth={2} connectNulls={false}
+                  <Line isAnimationActive={false} yAxisId="strength" type="monotone" dataKey="LTE_RSRP" stroke="#22c55e" strokeWidth={2} connectNulls={false}
                     dot={showDots ? { r: 1.5, fill: "#22c55e" } : false} activeDot={false} name="LTE RSRP" />
-                  <Line yAxisId="strength" type="monotone" dataKey="GSM_RxLev" stroke="#fbbf24" strokeWidth={2} connectNulls={false}
+                  <Line isAnimationActive={false} yAxisId="strength" type="monotone" dataKey="GSM_RxLev" stroke="#fbbf24" strokeWidth={2} connectNulls={false}
                     dot={showDots ? { r: 1.5, fill: "#fbbf24" } : false} activeDot={false} name="GSM RxLev" />
                   {showQuality && (
-                    <Line yAxisId="db" type="monotone" dataKey="LTE_RSRQ" stroke="#38bdf8" strokeWidth={1.5} strokeDasharray="4 2"
+                    <Line isAnimationActive={false} yAxisId="db" type="monotone" dataKey="LTE_RSRQ" stroke="#38bdf8" strokeWidth={1.5} strokeDasharray="4 2"
                       dot={false} activeDot={false} name="LTE RSRQ" />
                   )}
                   {showQuality && (
-                    <Line yAxisId="rxqual" type="monotone" dataKey="GSM_RxQual" stroke="#e2e8f0" strokeWidth={1.5} strokeDasharray="4 2"
+                    <Line isAnimationActive={false} yAxisId="rxqual" type="monotone" dataKey="GSM_RxQual" stroke="#e2e8f0" strokeWidth={1.5} strokeDasharray="4 2"
                       dot={false} activeDot={false} name="GSM RxQual" />
                   )}
                 </LineChart>

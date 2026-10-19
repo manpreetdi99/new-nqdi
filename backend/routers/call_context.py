@@ -691,8 +691,11 @@ def get_call_context_technology(
     session_id: str = Query(..., min_length=1),
     window_sec: int = Query(default=10, ge=5, le=300)
 ):
-    """Technology change events in a ±window_sec window around the call.
-    Technology links via FileId so idle/data sessions before & after are included."""
+    """Technology change events in a ±window_sec window around the call, for BOTH sides.
+    Technology links via FileId so idle/data sessions before & after are included. Each side
+    (device) has its own FileId — the call's own row and its A/B counterpart in CallAnalysis
+    (same pairing as /api/technology_periods). Every row carries `Side` (the device side, A/B)
+    and `IsCallSide` (1 = the file of the requested call, i.e. the page's "A-side")."""
     try:
         conn = get_connection(database)
         cursor = conn.cursor()
@@ -705,7 +708,11 @@ def get_call_context_technology(
                         CA.callEndTimeStamp,
                         DATEADD(MILLISECOND, ISNULL(CA.callDuration, 0), COALESCE(CA.callStartTimeStamp, S.startTime, SB.startTime))
                     ) AS end_time,
-                    CA.FileId
+                    CA.FileId,
+                    COALESCE(CA.Side, 'A') AS Side,
+                    -- Ρίζα του ζευγαριού: το A-side SessionId (από B-side row, μέσω SessionIdA)
+                    CASE WHEN CA.Side = 'B' AND CA.SessionIdA IS NOT NULL THEN CA.SessionIdA
+                         ELSE CA.SessionId END AS ASessionId
                 FROM CallAnalysis CA
                 LEFT JOIN Sessions  S  ON S.SessionId  = CA.SessionId
                 LEFT JOIN SessionsB SB ON SB.SessionId = CA.SessionId
@@ -719,6 +726,17 @@ def get_call_context_technology(
                     ci.end_time,
                     ci.FileId
                 FROM call_info ci
+            ),
+            -- Τα αρχεία και των δύο πλευρών: η ίδια η κλήση + το A/B ζευγάρι της
+            side_files AS (
+                SELECT ci.FileId, ci.Side FROM call_info ci
+                UNION
+                SELECT CA.FileId, COALESCE(CA.Side, 'A')
+                FROM CallAnalysis CA
+                INNER JOIN call_info ci
+                    ON CA.SessionId = ci.ASessionId
+                    OR (CA.SessionIdA = ci.ASessionId AND CA.Side = 'B')
+                WHERE CA.FileId IS NOT NULL
             )
             SELECT
                 t.MsgTime,
@@ -733,14 +751,17 @@ def get_call_context_technology(
                 t.NR5GULCarriers,
                 p.Latitude,
                 p.Longitude,
+                sf.Side,
+                CASE WHEN sf.FileId = w.FileId THEN 1 ELSE 0 END AS IsCallSide,
                 CASE
                     WHEN t.MsgTime < w.start_time THEN 'before'
                     WHEN t.MsgTime > w.end_time   THEN 'after'
                     ELSE 'during'
                 END AS phase
             FROM win w
+            INNER JOIN side_files sf ON 1 = 1
             INNER JOIN Technology t
-                ON  t.FileId  = w.FileId
+                ON  t.FileId  = sf.FileId
                 AND t.MsgTime BETWEEN w.window_start AND w.window_end
             LEFT JOIN Position p
                 ON  p.PosId = t.PosId

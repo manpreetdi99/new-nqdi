@@ -218,11 +218,11 @@ function renderCallMarker(point: { lat: number; lng: number; call: CallRecord },
     <CircleMarker
       key={point.call.callId}
       center={[point.lat, point.lng]}
-      radius={6}
-      pathOptions={{ fillColor, fillOpacity: 0.7, color, weight: 2 }}
+      radius={4}
+      pathOptions={{ fillColor, fillOpacity: 1, color, weight: 1.5 }}
       eventHandlers={{ click: () => onSelectCall(point.call) }}
     >
-      <Tooltip direction="top" offset={[0, -10]} opacity={0.95}>
+      <Tooltip direction="top" offset={[0, -6]} opacity={0.95}>
         <div className="font-sans space-y-0.5 text-center">
           <div className="font-bold text-sm">#{point.call.callId}</div>
           {point.call.region && (
@@ -244,10 +244,10 @@ function renderDataMarker(point: { lat: number; lng: number; item: DataSessionIt
     <CircleMarker
       key={`data-${point.item.sessionId}`}
       center={[point.lat, point.lng]}
-      radius={7}
-      pathOptions={{ fillColor: fill, fillOpacity: 0.85, color: stroke, weight: 2, dashArray: "4 2" }}
+      radius={5}
+      pathOptions={{ fillColor: fill, fillOpacity: 1, color: stroke, weight: 1.5, dashArray: "3 1.5" }}
     >
-      <Tooltip direction="top" offset={[0, -10]} opacity={0.95}>
+      <Tooltip direction="top" offset={[0, -7]} opacity={0.95}>
         <div className="font-sans space-y-0.5 text-center">
           <div className="font-bold text-sm">Data #{point.item.sessionId}</div>
           {point.item.first?.Location && (

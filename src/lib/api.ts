@@ -1109,13 +1109,34 @@ export interface LteScannerStat {
   avgRSSI: number | null;
 }
 
+/**
+ * Επέκταση ενός τμήματος serving cell πριν/μετά, σε δευτερόλεπτα — ώστε το scanner να
+ * καλύπτει και το ±Ns context του διαγράμματος (μόνο στο πρώτο/τελευταίο τμήμα της κλήσης).
+ */
+export interface ScannerSegmentPad {
+  padBeforeSec?: number;
+  padAfterSec?: number;
+}
+
+const scannerSegmentParams = (
+  database: string, cell: Record<string, string>, start: string, end: string, pad?: ScannerSegmentPad,
+) => new URLSearchParams({
+  database, ...cell, start, end,
+  pad_before_sec: String(pad?.padBeforeSec ?? 0),
+  pad_after_sec: String(pad?.padAfterSec ?? 0),
+});
+
+/** Η serving 5G κυψέλη: CID όταν υπάρχει, αλλιώς NR-ARFCN + PCI (το PCI μόνο του δεν αρκεί). */
+export type Nr5gCell = { cid: string } | { arfcn: number; pci: number };
+
 export async function fetchLteScannerRaw(
   database: string,
   cgi: string,
   start: string,
-  end: string
+  end: string,
+  pad?: ScannerSegmentPad
 ): Promise<any[]> {
-  const params = new URLSearchParams({ database, cgi, start, end });
+  const params = scannerSegmentParams(database, { cgi }, start, end, pad);
   return requestJson(`/api/lte_scanner_raw?${params.toString()}`);
 }
 
@@ -1131,26 +1152,58 @@ export async function fetchGsmScannerRaw(
   database: string,
   cgi: string,
   start: string,
-  end: string
+  end: string,
+  pad?: ScannerSegmentPad
 ): Promise<any[]> {
-  const params = new URLSearchParams({ database, cgi, start, end });
+  const params = scannerSegmentParams(database, { cgi }, start, end, pad);
   return requestJson(`/api/gsm_scanner_raw?${params.toString()}`);
 }
 
 export async function fetchGsmScannerBest(
   database: string,
-  session_id: string
+  session_id: string,
+  /** ±N δευτερόλεπτα γύρω από την κλήση (0 = μόνο η κλήση) */
+  windowSec = 0
 ): Promise<any[]> {
-  const params = new URLSearchParams({ database, session_id });
+  const params = new URLSearchParams({ database, session_id, window_sec: String(windowSec) });
   return requestJson(`/api/gsm_scanner_best?${params.toString()}`);
 }
 
 export async function fetchLteScannerBest(
   database: string,
-  session_id: string
+  session_id: string,
+  /** ±N δευτερόλεπτα γύρω από την κλήση (0 = μόνο η κλήση) */
+  windowSec = 0
 ): Promise<any[]> {
-  const params = new URLSearchParams({ database, session_id });
+  const params = new URLSearchParams({ database, session_id, window_sec: String(windowSec) });
   return requestJson(`/api/lte_scanner_best?${params.toString()}`);
+}
+
+/** Κοινό 5G scanner: FactNR5GScannerBeam για το serving CID του κινητού στο [start, end], ισχυρότερο beam ανά χρονική στιγμή. */
+export async function fetchNr5gScannerRaw(
+  database: string,
+  cell: Nr5gCell,
+  start: string,
+  end: string,
+  pad?: ScannerSegmentPad
+): Promise<any[]> {
+  const params = scannerSegmentParams(
+    database,
+    "cid" in cell ? { cid: cell.cid } : { arfcn: String(cell.arfcn), pci: String(cell.pci) },
+    start, end, pad,
+  );
+  return requestJson(`/api/nr5g_scanner_raw?${params.toString()}`);
+}
+
+/** Best 5G scanner (FactNR5GScannerBeam, Top 1 SS-RSRP του operator). SS_RSRP/SS_RSRQ → RSRP/RSRQ. */
+export async function fetchNr5gScannerBest(
+  database: string,
+  session_id: string,
+  /** ±N δευτερόλεπτα γύρω από την κλήση (0 = μόνο η κλήση) */
+  windowSec = 0
+): Promise<any[]> {
+  const params = new URLSearchParams({ database, session_id, window_sec: String(windowSec) });
+  return requestJson(`/api/nr5g_scanner_best?${params.toString()}`);
 }
 
 export async function fetchLteMeasurementComparison(
@@ -1425,6 +1478,10 @@ export interface TechnologyTimelineRow {
   NR5GULCarriers: number | null;
   Latitude: number | null;
   Longitude: number | null;
+  /** Πλευρά της συσκευής (CallAnalysis.Side) */
+  Side?: string | null;
+  /** 1 = το αρχείο της κλήσης που άνοιξε (το «A-side» της σελίδας), 0 = το A/B ζευγάρι της */
+  IsCallSide?: number | null;
 }
 
 export async function fetchTechnologyTimeline(
