@@ -80,23 +80,54 @@ def update_call_comment(req: CommentRequest):
             except Exception:
                 pass
 
-        # New way: DwAnalysisCommentToSessionMapping holds one row per SessionId
-        # (SessionId, Comment) — upsert it too.
+        # New way: ίδια βήματα με την live procedure SdwUpdateDmnAnalysisComment
+        # (@Fact = 'FactSession'), αλλά parameterized και μόνο για αυτό το SessionId.
+        # Δεν καλούμε την ίδια την procedure: δεν υπάρχει σε όλες τις βάσεις και το
+        # QUOTENAME(@Comment, '''') της επιστρέφει NULL για σχόλια > 128 chars.
         try:
             cursor.execute(
-                "SELECT 1 FROM DwAnalysisCommentToSessionMapping WHERE SessionId = ?",
+                "SELECT OBJECT_ID('FactSession', 'U'), OBJECT_ID('SdwCleanUpDmnAnalysisComment', 'P')"
+            )
+            fact_obj, cleanup_obj = cursor.fetchone()
+            has_fact = fact_obj is not None
+
+            # 1. σβήνει το παλιό mapping + το DmnId στο fact
+            cursor.execute(
+                "DELETE FROM DwAnalysisCommentToSessionMapping WHERE SessionId = ?",
                 (req.session_id,),
             )
-            if cursor.fetchone():
+            if has_fact:
                 cursor.execute(
-                    "UPDATE DwAnalysisCommentToSessionMapping SET Comment = ? WHERE SessionId = ?",
-                    (req.comment, req.session_id),
+                    "UPDATE FactSession SET DmnIdAnalysisComment = NULL WHERE SessionId = ?",
+                    (req.session_id,),
                 )
-            else:
+
+            # 2. κενό (μετά το trim) σχόλιο = διαγραφή, αλλιώς mapping -> Dmn -> fact
+            dw_comment = (req.comment or "").strip()
+            if dw_comment:
                 cursor.execute(
                     "INSERT INTO DwAnalysisCommentToSessionMapping (SessionId, Comment) VALUES (?, ?)",
-                    (req.session_id, req.comment),
+                    (req.session_id, dw_comment),
                 )
+                if has_fact:
+                    cursor.execute(
+                        "INSERT INTO DmnAnalysisComment (Comment) "
+                        "SELECT ? WHERE NOT EXISTS (SELECT 1 FROM DmnAnalysisComment WHERE Comment = ?)",
+                        (dw_comment, dw_comment),
+                    )
+                    cursor.execute(
+                        """UPDATE fact
+                           SET DmnIdAnalysisComment = dmn.DmnId
+                           FROM FactSession fact
+                             JOIN DwAnalysisCommentToSessionMapping dw ON dw.SessionId = fact.SessionId
+                             JOIN DmnAnalysisComment dmn ON dmn.Comment = dw.Comment
+                           WHERE fact.SessionId = ?""",
+                        (req.session_id,),
+                    )
+
+            # 3. καθαρίζει τα ορφανά DmnAnalysisComment (όπως στο τέλος της procedure)
+            if cleanup_obj is not None:
+                cursor.execute("EXEC SdwCleanUpDmnAnalysisComment")
 
             wrote_dw = True
         except Exception as e:
