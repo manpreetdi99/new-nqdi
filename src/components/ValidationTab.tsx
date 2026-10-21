@@ -1,6 +1,6 @@
 import { useState, useRef, useEffect } from "react";
 import { Play, CheckCircle2, Loader2, Terminal, Map, ArrowLeft } from "lucide-react";
-import { fetchLocations } from "@/lib/api";
+import { API_BASE_URL, fetchLocations } from "@/lib/api";
 
 interface LogEntry {
   time: string;
@@ -15,8 +15,6 @@ interface ValidationTabProps {
   collectionsLoading: boolean;
   onDatabaseChange: (db: string) => void;
 }
-
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://192.168.10.44:8000";
 
 function now() {
   const d = new Date();

@@ -2,10 +2,10 @@
 echo Starting Performance Insights Application...
 
 echo Starting Backend API...
-start "Backend API" cmd /k "call "C:\Users\Mechanical Engineer\Documents\new-nqdi\.venv\Scripts\activate" && cd "C:\Users\Mechanical Engineer\Documents\new-nqdi\backend" && uvicorn app:app --reload --host 0.0.0.0 --port 8000 --workers 4"
+start "Backend API" /D "%~dp0backend" cmd /k ""%~dp0.venv\Scripts\python.exe" -m uvicorn app:app --reload --host 0.0.0.0 --port 8000"
 
 
 echo Starting Vite Frontend...
-start "Frontend" cmd /k "cd "C:\Users\Mechanical Engineer\Documents\new-nqdi" && npm run dev"
+start "Frontend" cmd /k "cd /d "%~dp0" && npm run dev"
 
 echo Both services have been started in separate windows.

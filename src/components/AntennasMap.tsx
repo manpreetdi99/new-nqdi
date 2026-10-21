@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { MapPin, Filter, Loader2, RefreshCw, X } from "lucide-react";
+import { API_BASE_URL } from "@/lib/api";
 
 // We load Leaflet lazily via CDN to avoid SSR issues.
 // The map is rendered into a raw div, so no react-leaflet types needed.
@@ -125,7 +126,7 @@ export default function AntennasMap() {
       selectedVendors.forEach(v => params.append("vendor", v));
       if (selectedStatus) params.set("status", selectedStatus);
 
-      const url = `http://localhost:8000/api/antennas${params.toString() ? "?" + params.toString() : ""}`;
+      const url = `${API_BASE_URL}/api/antennas${params.toString() ? "?" + params.toString() : ""}`;
       const res = await fetch(url);
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
