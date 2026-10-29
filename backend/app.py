@@ -8,6 +8,7 @@
   calls            -> σελίδα Voice Calls (λίστα + σχόλια)
   data_calls       -> σελίδα Data Sessions
   call_detail      -> Call Detail: KPIs, details, MOS, devices, markers, handovers κ.λπ.
+  call_detail_native -> Call Detail: native SmartAnalytics πηγές (CDR, events, PCAP, RTP, traces, UE capability, sync)
   call_radio_lte   -> Call Detail: LTE radio charts (A & B side, neighbors, cell info)
   call_radio_gsm   -> Call Detail: GSM radio charts
   call_radio_other -> Call Detail: WCDMA/NR5G, coverage, ping
@@ -29,8 +30,10 @@ from fastapi.middleware.gzip import GZipMiddleware
 from routers import (
     antennas,
     benchmark,
+    call_analysis,
     call_context,
     call_detail,
+    call_detail_native,
     call_l3,
     call_radio_5g,
     call_radio_gsm,
@@ -68,6 +71,8 @@ for _module in (
     calls,
     data_calls,
     call_detail,
+    call_detail_native,
+    call_analysis,
     call_radio_lte,
     call_radio_gsm,
     call_radio_5g,

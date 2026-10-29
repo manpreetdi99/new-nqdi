@@ -139,6 +139,48 @@ export function percentOfTime(t: number, domain: { start: number; end: number })
   return Math.min(100, Math.max(0, ((t - domain.start) / span) * 100));
 }
 
+export interface TimeRange {
+  start: number;
+  end: number;
+}
+
+/** Μικρότερο παράθυρο zoom — κάτω από αυτό η καμπύλη έχει 1–2 δείγματα και δεν λέει τίποτα. */
+export const MIN_ZOOM_SPAN_MS = 2_000;
+
+/**
+ * Μετατοπίζει/ψαλιδίζει ένα παράθυρο ώστε να χωράει στο domain, κρατώντας το πλάτος του
+ * όσο γίνεται. Πλάτος ≥ domain → ολόκληρο το domain (δηλ. χωρίς zoom).
+ */
+export function clampRange(range: TimeRange, domain: TimeRange): TimeRange {
+  const full = domain.end - domain.start;
+  const span = Math.min(Math.max(range.end - range.start, Math.min(MIN_ZOOM_SPAN_MS, full)), full);
+  let start = Math.max(domain.start, Math.min(range.start, domain.end - span));
+  if (!Number.isFinite(start)) start = domain.start;
+  return { start, end: start + span };
+}
+
+/**
+ * Zoom γύρω από ένα σημείο: factor < 1 μεγεθύνει, > 1 σμικρύνει. Το anchor (0..1, θέση μέσα
+ * στο τρέχον παράθυρο) μένει στο ίδιο σημείο της οθόνης — όπως το Ctrl+wheel στους χάρτες.
+ */
+export function zoomRange(view: TimeRange, domain: TimeRange, factor: number, anchor = 0.5): TimeRange {
+  const span = view.end - view.start;
+  const pivot = view.start + span * Math.min(1, Math.max(0, anchor));
+  const nextSpan = span * factor;
+  return clampRange({ start: pivot - (pivot - view.start) * factor, end: pivot - (pivot - view.start) * factor + nextSpan }, domain);
+}
+
+/** Μετακίνηση του παραθύρου κατά fraction του πλάτους του (αρνητικό → προς τα αριστερά). */
+export function panRange(view: TimeRange, domain: TimeRange, fraction: number): TimeRange {
+  const shift = (view.end - view.start) * fraction;
+  return clampRange({ start: view.start + shift, end: view.end + shift }, domain);
+}
+
+/** Καλύπτει το παράθυρο ολόκληρο το domain; (τότε δεν υπάρχει zoom να δείξουμε/επαναφέρουμε) */
+export function isFullRange(view: TimeRange, domain: TimeRange): boolean {
+  return view.start <= domain.start && view.end >= domain.end;
+}
+
 export interface LaneItem {
   timestamp: number;
 }

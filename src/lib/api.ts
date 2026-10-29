@@ -856,6 +856,12 @@ export interface CallSideComparisonRow {
   callStatus: string | null;
   code: string | null;
   codeDescription: string | null;
+  /** DmnCallInformation.DescriptionA/B — το κείμενο αιτίας όπως το δείχνει το Scene. */
+  description: string | null;
+  descriptionGroup: string | null;
+  mediaClient: string | null;
+  /** Γιατί η γραμμή έμεινε χωρίς ταξινόμηση (code I / S), αλλιώς null. */
+  unclassifiedReason: string | null;
   calls: number | null;
 }
 
@@ -1609,6 +1615,415 @@ export async function fetchMarkers(
 ): Promise<{ markers: MarkerRow[] }> {
   const params = new URLSearchParams({ database, session_id });
   return requestJson(`/api/markers?${params.toString()}`);
+}
+
+/**
+ * Native πηγές του SmartAnalytics Scene — backend/routers/call_detail_native.py.
+ * Όλα δέχονται A ή B session και επιλύουν το ζεύγος (FactCallSession, fallback CallAnalysis);
+ * `pairSource` λέει ποια πηγή χρησιμοποιήθηκε (null = το session δεν είναι κλήση).
+ * `Side` σε κάθε row = πλευρά του ζεύγους· η τυχόν δική του στήλη Side του πίνακα = `NativeSide`.
+ */
+export type PairSource = "FactCallSession" | "CallAnalysis" | null;
+export type CallSide = "A" | "B";
+type CellValue = string | number | null;
+
+/** FactCDRVoice: `call` = στήλες της κλήσης, `a`/`b` = στήλες πλευράς χωρίς το suffix A/B. */
+export interface CallCdrResponse {
+  pairSource: PairSource;
+  call: Record<string, CellValue> | null;
+  a: Record<string, CellValue> | null;
+  b: Record<string, CellValue> | null;
+}
+
+export async function fetchCallCdr(database: string, session_id: string): Promise<CallCdrResponse> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/call_cdr?${params.toString()}`);
+}
+
+export const CALL_EVENT_GROUPS = ["Voice Service", "RRM", "Data Service", "Video Streaming"] as const;
+export type CallEventGroup = (typeof CALL_EVENT_GROUPS)[number];
+
+/** FactAdvancedTriggerEvent + DmnAdvancedTriggerEventInfo. Τα L3* είναι γεμάτα μόνο σε RRM events. */
+export interface CallEventRow {
+  FactId: number;
+  FullDate: string;
+  SessionId: number;
+  Side: CallSide | null;
+  TestId: number | null;
+  KPIId: number | null;
+  EventTopGroup: string | null;
+  EventGroup: string | null;
+  EventFullName: string | null; // "<TopGroup> - <Group> - <όνομα>"
+  EventShortName: string | null;
+  EventSubType: string | null;
+  SummaryInfo: string | null;
+  EventSource: string | null;
+  L3Content: string | null;
+  SCellsLTE: string | null;
+  SCells5GNR: string | null;
+  SignalStrengthBefore: number | null;
+  SignalQualityAfter: number | null;
+  FactIdLayer3Messages: number | null;
+  L3Technology: string | null;
+  L3Layer: string | null;
+  L3Direction: string | null;
+  L3MsgName: string | null;
+  L3MsgInfo: string | null;
+  Latitude: number | null;
+  Longitude: number | null;
+}
+
+export async function fetchCallEvents(
+  database: string,
+  session_id: string,
+  groups: readonly CallEventGroup[] = ["Voice Service", "RRM"]
+): Promise<{ pairSource: PairSource; events: CallEventRow[] }> {
+  const params = new URLSearchParams({ database, session_id, groups: groups.join(",") });
+  return requestJson(`/api/call_events?${params.toString()}`);
+}
+
+export interface PcapSideInfo {
+  available: boolean;
+  sessionId: number | null;
+  fileName: string | null;
+  bytes: number | null;
+}
+
+export async function fetchCallPcapInfo(
+  database: string,
+  session_id: string
+): Promise<{ pairSource: PairSource; a: PcapSideInfo; b: PcapSideInfo }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/call_pcap_info?${params.toString()}`);
+}
+
+/** URL για απευθείας download (Content-Disposition: attachment) του PCAP ενός session. */
+export function callPcapUrl(database: string, session_id: string | number): string {
+  const params = new URLSearchParams({ database, session_id: String(session_id) });
+  return `${API_BASE_URL}/api/call_pcap?${params.toString()}`;
+}
+
+export interface RtpSample {
+  FullDate: string;
+  SessionId: number;
+  Side: CallSide | null;
+  RTPStatId: number | null;
+  Mode: string | null;
+  Codec: string | null;
+  PayloadType: number | null;
+  SSRC: string | null;
+  NumPackets: number | null;
+  NumLostPackets: number | null;
+  PacketLossRate: number | null;
+  MaxConseqLostPackets: number | null;
+  NumOutOfOrderPackets: number | null;
+  AvgPayloadLength: number | null;
+  AvgJitter: number | null;
+  AvgIPDV: number | null;
+  MinIPDV: number | null;
+  MaxIPDV: number | null;
+  AvgPDV: number | null;
+  [sipColumn: `SIP ${string}`]: number | null;
+}
+
+/** Ανά πλευρά: AVG (native Fusion FillSpeechRTPValues), SUM(NumPackets), streams, πρώτο μη-NULL SIP. */
+export interface RtpSummary {
+  SampleCount: number;
+  AvgJitter: number | null;
+  PacketLossRate: number | null;
+  AvgIPDV: number | null;
+  AvgPDV: number | null;
+  NumLostPackets: number | null;
+  MaxConseqLostPackets: number | null;
+  NumOutOfOrderPackets: number | null;
+  NumPackets: number | null;
+  streams: Array<{ Mode: string | null; Codec: string | null; PayloadType: number | null; SSRC: string | null }>;
+  [sipColumn: `SIP ${string}`]: number | null;
+}
+
+export async function fetchCallRtp(
+  database: string,
+  session_id: string
+): Promise<{ pairSource: PairSource; samples: RtpSample[]; summary: { a: RtpSummary; b: RtpSummary } }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/call_rtp?${params.toString()}`);
+}
+
+export interface SystemTraceRow {
+  FactId: number;
+  FullDate: string;
+  SessionId: number;
+  Side: CallSide | null;
+  NativeSide: string | null; // FactSystemTraceLog.Side: A / B / S
+  Info: string | null;
+  MeasId: number | null;
+}
+
+export interface IpTraceRow {
+  FactId: number;
+  FullDate: string;
+  SessionId: number;
+  Side: CallSide | null;
+  TestId: number | null;
+  Source: string | null;
+  Destination: string | null;
+  Direction: string | null;
+  Protocol: string | null;
+  Message: string | null;
+}
+
+/** kind="tracelog": γραμμή TraceLog ή — για πλευρά χωρίς καθόλου TraceLog — γραμμή IP trace. */
+export interface CallTraceLogRow {
+  FactId: number;
+  FullDate: string;
+  SessionId: number;
+  Side: CallSide | null;
+  NativeSide: string | null;
+  TraceSource: "TraceLog" | "IP";
+  Info: string | null; // μόνο TraceLog
+  Source: string | null; // τα υπόλοιπα μόνο IP
+  Destination: string | null;
+  Direction: string | null;
+  Protocol: string | null;
+  Message: string | null;
+}
+
+export interface CallSystemTraceResponse {
+  pairSource: PairSource;
+  limit: number;
+  offset: number;
+  system?: { total: number; rows: SystemTraceRow[] };
+  ip?: { total: number; rows: IpTraceRow[] };
+  /** Πλευρές που πήραν γραμμές από IP trace επειδή δεν είχαν TraceLog. */
+  tracelog?: { total: number; rows: CallTraceLogRow[]; fallbackSides: CallSide[] };
+}
+
+export async function fetchCallSystemTrace(
+  database: string,
+  session_id: string,
+  { kind = "both", limit = 2000, offset = 0 }: { kind?: "tracelog" | "system" | "ip" | "both"; limit?: number; offset?: number } = {}
+): Promise<CallSystemTraceResponse> {
+  const params = new URLSearchParams({
+    database, session_id, kind, limit: String(limit), offset: String(offset),
+  });
+  return requestJson(`/api/call_system_trace?${params.toString()}`);
+}
+
+/** FactMarkers + DmnMarkerInfo (Category/Class). Το παλιό fetchMarkers διαβάζει το classic Markers. */
+export interface CallMarkerV2Row {
+  FactId: number;
+  FullDate: string;
+  SessionId: number;
+  Side: CallSide | null;
+  NativeSide: string | null;
+  MarkerType: string | null;
+  MarkerText: string | null;
+  Category: string | null;
+  Class: string | null;
+  ShortName: string | null;
+  FullName: string | null;
+  Latitude: number | null;
+  Longitude: number | null;
+}
+
+export async function fetchCallMarkersV2(
+  database: string,
+  session_id: string
+): Promise<{ pairSource: PairSource; markers: CallMarkerV2Row[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/call_markers_v2?${params.toString()}`);
+}
+
+/** Ένα πεδίο του UECapabilityInformation.Fields: μία θέση στο `values` ανά εμφάνιση του key
+ *  (τα `| =…` είναι συνέχεια του προηγούμενου key)· τιμές με "; " έρχονται ως λίστα. */
+export interface UeCapabilityField {
+  key: string;
+  values: Array<string | string[]>;
+  raw: string;
+}
+
+export interface UeCapabilityItem {
+  ratType: string;
+  fullDate: string | null;
+  sessionId: number | null;
+  msgId: number | null;
+  fields: UeCapabilityField[];
+  raw: string;
+}
+
+export interface UeCapabilitySide {
+  fileId: number;
+  sessionId: number | null;
+  items: UeCapabilityItem[];
+}
+
+export async function fetchUeCapability(
+  database: string,
+  session_id: string
+): Promise<{ pairSource: PairSource; a: UeCapabilitySide | null; b: UeCapabilitySide | null }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/ue_capability?${params.toString()}`);
+}
+
+export interface SyncDeviceRow {
+  DeviceId: number | null;
+  DeviceName: string | null;
+  IMEI: string | null;
+  Side: string | null; // DmnDevice.Side
+  DeviceType: string | null;
+  Model: string | null;
+  Operator: string | null;
+  SessionId: number;
+  SessionType: string | null;
+  SessionSide: string | null; // DwSession.Side
+  StartTime: string | null;
+  EndTime: string | null;
+  RelatedSessionId: number | null;
+  FileId: number | null;
+}
+
+/** `at`: naive ώρα της βάσης, "YYYY-MM-DDTHH:MM:SS". */
+export async function fetchSyncDevices(
+  database: string,
+  at: string,
+  collection?: string
+): Promise<{ at: string; devices: SyncDeviceRow[] }> {
+  const params = new URLSearchParams({ database, at });
+  if (collection) params.set("collection", collection);
+  return requestJson(`/api/sync_devices?${params.toString()}`);
+}
+
+// ---------------------------------------------------------------------------
+// Call Analysis (backend/routers/call_analysis.py)
+// ---------------------------------------------------------------------------
+
+export interface CallAnalysisGroup {
+  title: string;
+  keys: string[];
+  /** Μετρητές: γραμμές με 0/null και στις δύο πλευρές κρύβονται. */
+  hideZero: boolean;
+}
+
+export interface RadioWindowValues {
+  rsrp: number | null;
+  rsrq: number | null;
+  sinr: number | null;
+  n: number | null;
+}
+
+/** Παράθυρο radio του sqCallAnalysis (8 LTE reports / 20 s πριν το disconnect, Dropped/Failed). */
+export interface RadioWindow {
+  applies: boolean;
+  /** Το disconnect πέφτει μετά το τέλος του session (SIP του επόμενου IDLE session). */
+  outsideCall: boolean;
+  overshootMs: number | null;
+  disconnectNative: string | null;
+  disconnectFixed: string | null;
+  native: RadioWindowValues;
+  fixed: RadioWindowValues | null;
+}
+
+/** Στήλες του CallAnalysis (CallAnalysisGroup.keys) + τα υπολογισμένα του backend. */
+export interface CallAnalysisSide {
+  SessionId: number;
+  Side: CallSide;
+  SetupTime_s: number | null;
+  SetupTimeSentinel: boolean;
+  radioWindow: RadioWindow;
+  [key: string]: CellValue | boolean | RadioWindow;
+}
+
+export interface CallAnalysisResponse {
+  pairSource: PairSource;
+  groups: CallAnalysisGroup[];
+  a: CallAnalysisSide | null;
+  b: CallAnalysisSide | null;
+}
+
+export async function fetchCallAnalysis(database: string, session_id: string): Promise<CallAnalysisResponse> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/call_analysis?${params.toString()}`);
+}
+
+/** FactSpeech ανά δείγμα· `Side` = η πλευρά που άκουσε το δείγμα (SessionId). */
+export interface SpeechSampleRow {
+  FactId: number;
+  FullDate: string;
+  SessionId: number;
+  TestId: number;
+  Side: CallSide | null;
+  Direction: string | null;
+  SpeechAlgorithm: string | null;
+  Band: string | null;
+  SpeechSample: string | null;
+  CodecName: string | null;
+  CodecRate: number | null;
+  LQ: number | null;
+  LQIsBad: number | null;
+  QualityCode: string | null;
+  QualityCategory: string | null;
+  MissedVoiceDecimal: number | null;
+  FrontClippingDecimal: number | null;
+  DelaySpread: number | null;
+  DelayDeviation: number | null;
+  IPAudioRTT: number | null;
+  ASLrcvP56: number | null;
+  NoiseRcv: number | null;
+  StaticSNR: number | null;
+  TotalGain: number | null;
+  LQColoration: number | null;
+  LQDiscontinuity: number | null;
+  LQNoisiness: number | null;
+  LQLoudness: number | null;
+  SilentCount: number | null;
+}
+
+export interface SpeechSummary {
+  SampleCount: number;
+  LQ: number | null;
+  MinLQ: number | null;
+  IPAudioRTT: number | null;
+  MissedVoiceDecimal: number | null;
+  FrontClippingDecimal: number | null;
+  DelaySpread: number | null;
+  DelayDeviation: number | null;
+  ASLrcvP56: number | null;
+  NoiseRcv: number | null;
+  StaticSNR: number | null;
+  LQColoration: number | null;
+  LQDiscontinuity: number | null;
+  LQNoisiness: number | null;
+  LQLoudness: number | null;
+  BadCount: number;
+  SilentCount: number;
+}
+
+export async function fetchSpeechSamples(
+  database: string,
+  session_id: string
+): Promise<{ pairSource: PairSource; samples: SpeechSampleRow[]; summary: Record<CallSide, SpeechSummary> }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/speech_samples?${params.toString()}`);
+}
+
+export interface SpeechTimeDomainPoint {
+  Time: number;
+  Similarity: number | null;
+  Interruptions: number | null;
+  SentSignal: number | null;
+  ReceivedSignal: number | null;
+  SignalAmplification: number | null;
+  SignalAmplificationTrend: number | null;
+  DelayProfile: number | null;
+}
+
+export async function fetchSpeechTimeDomain(
+  database: string,
+  session_id: string,
+  test_id: number | string
+): Promise<{ points: SpeechTimeDomainPoint[] }> {
+  const params = new URLSearchParams({ database, session_id, test_id: String(test_id) });
+  return requestJson(`/api/speech_time_domain?${params.toString()}`);
 }
 
 /**

@@ -951,6 +951,34 @@ describe("PS data KPIs", () => {
     expect(alpha?.total.metrics[0]).toMatchObject({ value: 2, samples: 1 });
   });
 
+  it("counts Newton / Kepler / Kepler +30s Pause as failed when throughput is 0, whatever the status says", () => {
+    const sections = buildDataSections([
+      // "Success" στο CDR, αλλά το KPI 30407 έδωσε Value1 = 0 -> refThroughputKbps = 0.
+      dataTest({ testType: "HTTPS Browser (Newton)", direction: null, throughputKbps: 3000, refThroughputKbps: 0 }),
+      dataTest({ testType: "HTTP Browser (Kepler)", direction: null, refThroughputKbps: 0 }),
+      dataTest({ testType: "HTTP Browser (Kepler_2)", direction: null, refThroughputKbps: 0 }),
+      // Καθόλου throughput (ούτε KPI 30407 ούτε CDR) με "Success" -> επίσης failed.
+      dataTest({ testType: "HTTPS Browser (Newton)", direction: null, scoringStatus: "Success", status: null, refThroughputKbps: null, SessionId: "3" }),
+      // Μη-μηδενικό -> success και κανονικό δείγμα στον μέσο όρο.
+      dataTest({ testType: "HTTPS Browser (Newton)", direction: null, refThroughputKbps: 5000, SessionId: "2" }),
+      // Ένα HTTPS site με 0 throughput ΔΕΝ γίνεται failed — εκεί το 0 σημαίνει "δεν υπάρχει τιμή".
+      dataTest({ testType: "HTTPS Browser (alpha)", direction: null, throughputKbps: 0 }),
+    ]);
+
+    const newton = sections.find((section) => section.key === "HTTPS Browser (Newton)");
+    expect(newton?.total).toMatchObject({ total: 3, success: 1, failed: 2 });
+    expect(newton?.total.metrics[0]).toMatchObject({ value: 5, samples: 1 });
+
+    const kepler = sections.find((section) => section.key === "HTTP Browser (Kepler)");
+    expect(kepler?.total).toMatchObject({ total: 1, success: 0, failed: 1, successRate: 0 });
+
+    const keplerPause = sections.find((section) => section.key === "Kepler +30s Pause");
+    expect(keplerPause?.total).toMatchObject({ total: 1, success: 0, failed: 1 });
+
+    const alpha = sections.find((section) => section.key === "HTTPS Browser (alpha)");
+    expect(alpha?.total).toMatchObject({ total: 1, success: 1, failed: 0 });
+  });
+
   it("counts eGaming RTT / PacketDelay = 0 in the average, like the A-LEVEL pivot", () => {
     const sections = buildDataSections([
       dataTest({ testType: "Interactivity", direction: null, interactivityPacketDelay: 20, interactivityRtt: 30 }),

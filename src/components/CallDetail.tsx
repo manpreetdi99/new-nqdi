@@ -13,12 +13,15 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { useToast } from "@/components/ui/use-toast";
 import { useLocalStorage } from "@/hooks/use-local-storage";
 import type { CallRecord } from "@/lib/callData";
-import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchNr5gValues, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchTracelogValues, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchNr5gScannerBest, fetchNr5gScannerRaw, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchNr5gContextSignal, fetchNr5gContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchCallSrvccDetail, fetchCallCsfbDetail, fetchTechnologyTimeline, fetchTechnologyPeriods, fetchVoiceCodec, fetchMarkers, fetchCallNeighbors, fetchMosTestDetail, type TechnologyPeriodRow, type CallNeighbors, type CallSideComparisonRow, type TraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type SrvccDetailResponse, type SrvccEventRow, type CsfbDetailResponse, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow, type MosTestRow, type Nr5gCell } from "@/lib/api";
+import { fetchLteValues, fetchLteValuesBSide, fetchGsmValues, fetchGsmValuesBSide, fetchNr5gValues, fetchMosValues, updateCallComment, fetchKpiValues, fetchCallSideComparison, fetchCallSystemTrace, fetchCellInfo, fetchCellInfoBSide, fetchAntennas, fetchCallContextSignal, fetchCallContextTechnology, fetchL3Messages, fetchCallDeviceInfo, fetchLteMeasurementComparison, fetchLteScannerMeasurement, fetchLteScannerRaw, fetchLteScannerBest, fetchNr5gScannerBest, fetchNr5gScannerRaw, fetchGsmScannerRaw, fetchGsmScannerBest, fetchGsmContextSignal, fetchCallContextSignalBSide, fetchGsmContextSignalBSide, fetchNr5gContextSignal, fetchNr5gContextSignalBSide, fetchCallKpiTile, fetchHandoverInfo, fetchCallSrvccDetail, fetchCallCsfbDetail, fetchTechnologyTimeline, fetchTechnologyPeriods, fetchVoiceCodec, fetchMarkers, fetchCallNeighbors, type TechnologyPeriodRow, type CallNeighbors, type CallSideComparisonRow, type CallTraceLogRow, type AntennaRow, type CallL3MessagesResponse, type L3MessageRow, type CallDeviceInfo, type LteMeasurementStat, type LteScannerStat, type CallKpiTile, type HandoverInfoRow, type SrvccDetailResponse, type SrvccEventRow, type CsfbDetailResponse, type TechnologyTimelineRow, type VoiceCodecRow, type MarkerRow, type Nr5gCell } from "@/lib/api";
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer, Legend, ReferenceLine, ReferenceArea } from "recharts";
 import { technologyColor } from "@/lib/chartStyles";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { L3SignalingPanel } from "@/components/L3SignalingPanel";
 import { CsfbTransitionPanel } from "@/components/CsfbTransitionPanel";
+import { CallEventsPanel, NativeCallPanels, PcapButtons } from "@/components/NativeCallPanels";
+import type { CallAnalysisResponse, CallEventRow } from "@/lib/api";
+import { cleanDescription, eventName, traceLogInfo } from "@/lib/nativeCallData";
 import { type OverviewLane, type OverviewSegment } from "@/components/SessionOverview";
 import { CallSignalChart, type SignalEvent } from "@/components/CallSignalChart";
 import { resolveCallDetailMode } from "@/lib/callDetailMode";
@@ -71,6 +74,10 @@ const SCANNER_MATCH_MAX_DT_MS = 10_000;
 // και ανοχή όταν ένα scanner sample (best) κολλάει με τη δική του ώρα στην καμπύλη.
 const CONTEXT_SCANNER_MAX_DT_MS = 5_000;
 const SCANNER_ATTACH_TOLERANCE_MS = 2_500;
+
+// Setup time (s) πάνω από το οποίο το tile γίνεται warning. Στη DOD_26H2 ο μέσος όρος των
+// Completed κλήσεων είναι ~4,5 s (VoLTE χαμηλότερα, CS υψηλότερα).
+const SETUP_TIME_WARN_S = 5;
 
 /**
  * Τα scanner τμήματα (ανά serving cell) καλύπτουν μόνο τη διάρκεια της κλήσης· το πρώτο
@@ -270,7 +277,9 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
   const [kpiValues, setKpiValues] = useState<any[]>([]);
   // Ποια γραμμή του KPI πίνακα είναι ανοιχτή (κλικ) και δείχνει όλα τα πεδία του ResultsKPI
   const [expandedKpiRow, setExpandedKpiRow] = useState<string | null>(null);
-  const [tracelogValues, setTracelogValues] = useState<TraceLogRow[]>([]);
+  // TraceLog (FactSystemTraceLog) — για πλευρά χωρίς καθόλου TraceLog, γραμμές FactIPTrace (TraceSource 'IP')
+  const [tracelogValues, setTracelogValues] = useState<CallTraceLogRow[]>([]);
+  const [tracelogFallbackSides, setTracelogFallbackSides] = useState<string[]>([]);
   const [sideComparison, setSideComparison] = useState<CallSideComparisonRow[]>([]);
   const [bSideLteValues, setBSideLteValues] = useState<any[]>([]);
   // Which side (A/B) and which network (LTE/GSM, only relevant for SRVCC calls) the UI currently shows
@@ -349,7 +358,12 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
   const [voiceCodec, setVoiceCodec] = useState<VoiceCodecRow[]>([]);
   // User-placed annotations during the session, merged into the TraceLog panel as timeline events
   const [markers, setMarkers] = useState<MarkerRow[]>([]);
-  const [mosTests, setMosTests] = useState<MosTestRow[]>([]);
+  // Voice Service events (Call Marker / Call Status) του FactAdvancedTriggerEvent — τα φέρνει
+  // το NativeCallPanels και εδώ γίνονται ταμπέλες στο signal chart.
+  const [nativeVoiceEvents, setNativeVoiceEvents] = useState<CallEventRow[]>([]);
+  // CallAnalysis A+B (το φέρνει το panel Call Analysis): το disconnect του classifier γίνεται
+  // ταμπέλα στο signal chart, μαζί με την αρχή του παραθύρου radio (20 s πριν).
+  const [callAnalysis, setCallAnalysis] = useState<CallAnalysisResponse | null>(null);
   // Prev/Next call SessionIds για τα κουμπιά πλοήγησης (null → δεν υπάρχει → disabled)
   const [neighbors, setNeighbors] = useState<CallNeighbors | null>(null);
   const [loadErrors, setLoadErrors] = useState<string[]>([]);
@@ -459,8 +473,6 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
   // source/target), ενώ τις περισσότερες φορές αρκεί η μία γραμμή με την έκβαση.
   const [srvccOpen, setSrvccOpen] = useLocalStorage<boolean>("call-detail-srvcc-open", false);
   const [csfbOpen, setCsfbOpen] = useLocalStorage<boolean>("call-detail-csfb-open", false);
-  // MOS ανά test: κλειστό by default — ο πίνακας codecs & LTE ανά TestId ανοίγει με κλικ.
-  const [mosTestsOpen, setMosTestsOpen] = useLocalStorage<boolean>("call-detail-mos-tests-open", false);
   const hoverIso = (iso: string | null | undefined) => {
     const t = toTimestamp(iso);
     setHoveredTime(Number.isFinite(t) ? t : null);
@@ -517,7 +529,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
           fetchKpiValues(database, call.callId),
           fetchCallSideComparison(database, call.callId),
           wantsLteLeg ? fetchLteValuesBSide(database, call.callId) : Promise.resolve({ lteValuesBSide: [] }),
-          fetchTracelogValues(database, call.callId),
+          fetchCallSystemTrace(database, call.callId, { kind: "tracelog", limit: 20000 }),
           wantsGsmLeg ? fetchGsmValuesBSide(database, call.callId) : Promise.resolve({ gsmValuesBSide: [] }),
           wantsLteLeg ? fetchCellInfo(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
           wantsLteLeg ? fetchCellInfoBSide(database, call.callId) : Promise.resolve({ eNBId: null, EARFCN: null, PCI: null }),
@@ -596,9 +608,11 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
         }
 
         if (tracelogRes.status === "fulfilled") {
-          setTracelogValues(tracelogRes.value.tracelogValues || []);
+          setTracelogValues(tracelogRes.value.tracelog?.rows || []);
+          setTracelogFallbackSides(tracelogRes.value.tracelog?.fallbackSides || []);
         } else {
           setTracelogValues([]);
+          setTracelogFallbackSides([]);
         }
 
         setCellInfo(cellInfoRes.status === "fulfilled" ? (cellInfoRes.value as any) : null);
@@ -742,18 +756,6 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
     })();
     return () => { cancelled = true; };
   }, [csfbDetail, wantsGsmLeg, database, call.callId]);
-
-  // MOS ανά test: POLQA TestId x FactSpeechCodecs (codec ανά κατεύθυνση) + μέσες τιμές LTE του test.
-  // Χωριστό fetch από το loadRadio, ώστε να μην το καθυστερεί.
-  useEffect(() => {
-    setMosTests([]);
-    if (!call.callId || !database) return;
-    let cancelled = false;
-    fetchMosTestDetail(database, String(call.callId))
-      .then((res) => { if (!cancelled) setMosTests(res.mosTests || []); })
-      .catch(() => { if (!cancelled) setMosTests([]); });
-    return () => { cancelled = true; };
-  }, [database, call.callId]);
 
   // Prev/Next call: ρωτάμε το backend ποιο SessionId είναι η προηγούμενη/επόμενη κλήση
   // (στόχος ±2, σειριακός έλεγχος και του ±1) — null σημαίνει δεν υπάρχει → disabled κουμπί
@@ -1098,7 +1100,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
   const metrics = [
     { label: "Download", value: fmtThroughput(downloadMbps), icon: ArrowDown, color: "text-primary" },
     { label: "AVG Mos", value: fmtMetric(avgMos, 2, ""), icon: Gauge, color: "text-warning" },
-    { label: "Setup Time", value: `${call.setupTime_ms} ms`, icon: Timer, color: call.setupTime_ms > 500 ? "text-warning" : "text-success" },
+    // CallAnalysis.setupTime είναι σε δευτερόλεπτα (όχι ms)· null = Failed με τη σημαία 99.9.
+    { label: "Setup Time", value: fmtMetric(call.setupTime_s, 2, " s"), icon: Timer, color: call.setupTime_s != null && call.setupTime_s > SETUP_TIME_WARN_S ? "text-warning" : "text-success" },
   ];
 
   // GSM scanner ανά γραμμή του κινητού: το πλησιέστερο δείγμα της ΙΔΙΑΣ serving CGI (όπως το LTE),
@@ -1477,6 +1480,56 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
       }
     }
 
+    // Native Voice Service events: τα Call Status (Call Failed/Dropped/Completed) κρατιούνται
+    // πάντα· τα Call Marker (Start Dial, Dial, Alerting, …) αραιώνονται όπως τα L3.
+    for (const event of nativeVoiceEvents.filter((item) => item.Side === selectedLteSide)) {
+      const timestamp = new Date(event.FullDate).getTime();
+      if (!Number.isFinite(timestamp) || timestamp < firstTimestamp || timestamp > lastTimestamp) continue;
+      const label = eventName(event);
+      const isStatus = event.EventGroup === "Call Status";
+      candidates.push({
+        timestamp,
+        label,
+        dedupeKey: `voice ${label.toLowerCase()}`,
+        detail: event.SummaryInfo ?? label,
+        technology: null,
+        layer: "Voice",
+        direction: null,
+        color: isStatus ? (/fail|drop/i.test(label) ? "#ef4444" : "#22c55e") : "#38bdf8",
+        priority: isStatus,
+      });
+    }
+
+    // Disconnect του native classifier (callDisconnectTimeStamp) σε Dropped/Failed: εκεί
+    // τελειώνει το παράθυρο radio (8 LTE reports / 20 s) των κανόνων Low RSRP/SINR. Όταν πέφτει
+    // μετά το τέλος του session (σφάλμα SIP join SessionId + 1), μπαίνει και το διορθωμένο.
+    const caSide = selectedLteSide === "B" ? callAnalysis?.b : callAnalysis?.a;
+    const radioWin = caSide?.radioWindow;
+    if (radioWin?.applies) {
+      const points: Array<[string | null, string, string]> = [
+        [radioWin.disconnectNative, "CA disconnect", radioWin.outsideCall
+          ? `Disconnect του classifier ${((radioWin.overshootMs ?? 0) / 1000).toFixed(1)} s μετά το τέλος του session (SIP του επόμενου session)`
+          : "Disconnect του classifier · τέλος του παραθύρου radio (8 reports / 20 s)"],
+        [radioWin.outsideCall ? radioWin.disconnectFixed : null, "CA disconnect (fixed)", "Disconnect κομμένο στο τέλος του session — διορθωμένο παράθυρο radio"],
+      ];
+      for (const [iso, label, detail] of points) {
+        if (!iso) continue;
+        const timestamp = new Date(iso).getTime();
+        if (!Number.isFinite(timestamp) || timestamp < firstTimestamp || timestamp > lastTimestamp) continue;
+        candidates.push({
+          timestamp,
+          label,
+          dedupeKey: label.toLowerCase(),
+          detail,
+          technology: null,
+          layer: "Voice",
+          direction: null,
+          color: radioWin.outsideCall && label === "CA disconnect" ? "#f59e0b" : "#ef4444",
+          priority: true,
+        });
+      }
+    }
+
     const accepted: Candidate[] = [];
     const lastByLabel = new Map<string, number>();
     for (const candidate of candidates.sort((left, right) => left.timestamp - right.timestamp)) {
@@ -1506,7 +1559,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
     })();
 
     return limited.map(({ dedupeKey, priority, ...event }) => event);
-  }, [callMode, unifiedDomain, handoverInfo, isGSMMode, l3Data, l3DataBSide, selectedLteSide, srvccDetail, csfbDetail]);
+  }, [callMode, unifiedDomain, handoverInfo, isGSMMode, l3Data, l3DataBSide, selectedLteSide, srvccDetail, csfbDetail, nativeVoiceEvents, callAnalysis]);
 
   const srvccEvents = useMemo(() => srvccDetail?.events ?? [], [srvccDetail]);
   const activeSrvccEvents = useMemo(
@@ -1577,10 +1630,12 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
 
   // TraceLog rows + user-placed Markers merged into one time-sorted timeline, so annotations
   // the user dropped during the session show up alongside the engine's own trace events.
-  type TimelineEntry = { kind: "trace" | "marker"; time: string | null; side: string | null; sessionId: string | null; info: string | null };
+  // `ip`: γραμμή IP trace που μπήκε επειδή η πλευρά της δεν έχει TraceLog.
+  type TimelineEntry = { kind: "trace" | "marker"; time: string | null; side: string | null; sessionId: string | null; info: string | null; ip?: boolean };
   const combinedTraceLog = useMemo<TimelineEntry[]>(() => {
     const traceEntries: TimelineEntry[] = tracelogValues.map(v => ({
-      kind: "trace", time: v.FullDate, side: v.Side, sessionId: v.SessionId, info: v.Info,
+      kind: "trace", time: v.FullDate, side: v.Side, sessionId: String(v.SessionId), info: traceLogInfo(v),
+      ip: v.TraceSource === "IP",
     }));
     const markerEntries: TimelineEntry[] = markers.map(m => ({
       kind: "marker", time: m.MsgTime, side: null, sessionId: m.SessionId, info: m.MarkerText,
@@ -2497,6 +2552,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
 
             <div className="flex items-center gap-3 flex-wrap">
               <h2 className="text-sm font-bold font-mono text-foreground">{call.region} · {call.callId}</h2>
+              <PcapButtons key={`${database}:${call.callId}`} database={database} sessionId={call.callId} />
             </div>
             {/* Call meta + timing on one line */}
             <div className="text-[10px] text-muted-foreground flex flex-wrap items-center gap-x-3 mt-0.5">
@@ -2506,7 +2562,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
               <span className="font-mono text-foreground">{Math.floor(call.duration_s / 60)}m {call.duration_s % 60}s</span>
             </div>
             {/* Single signalling strip: SRVCC handovers │ voice codec │ serving cell + A/B side status */}
-            {(headerHandoverInfo.length > 0 || voiceCodec.length > 0 || (!isGSMMode && activeCellInfo && activeCellInfo.eNBId !== null)) && (
+            {(headerHandoverInfo.length > 0 || voiceCodec.length > 0 || sideComparison.length > 0 || (!isGSMMode && activeCellInfo && activeCellInfo.eNBId !== null)) && (
               <div className="flex items-center gap-x-2 gap-y-0.5 flex-wrap mt-0.5 text-[10px] font-mono">
                 {headerHandoverInfo.length > 0 && (
                   <>
@@ -2556,21 +2612,33 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
                         )}
                       </>
                     )}
-                    {/* Per-side call outcome (e.g. status/reason code) when both A and B side data is available */}
-                    {sideComparison.length > 0 && (
-                      <>
-                        <span className="text-border">│</span>
-                        {sideComparison.map((row, idx) => (
-                          <span key={idx} className="text-muted-foreground whitespace-nowrap">
-                            <span className="text-foreground font-bold">{row.Side}</span>
-                            {" "}{row.callStatus}{" "}
-                            <span className="text-foreground">{row.code}</span>
-                            {row.codeDescription ? ` ${row.codeDescription}` : ""}
-                            {idx < sideComparison.length - 1 && <span className="text-border mx-1">·</span>}
-                          </span>
-                        ))}
-                      </>
+                  </>
+                )}
+                {/* Per-side call outcome (status/reason code) — ανεξάρτητο από GSM/LTE leg:
+                    παλιά ζούσε μέσα στο LTE cell block και δεν φαινόταν ποτέ σε GSM/UMTS κλήσεις. */}
+                {sideComparison.length > 0 && (
+                  <>
+                    {(headerHandoverInfo.length > 0 || voiceCodec.length > 0 || (!isGSMMode && activeCellInfo && activeCellInfo.eNBId !== null)) && (
+                      <span className="text-border">│</span>
                     )}
+                    {sideComparison.map((row, idx) => (
+                      <span key={idx} className="text-muted-foreground whitespace-nowrap">
+                        <span className="text-foreground font-bold">{row.Side}</span>
+                        {" "}{row.callStatus}{" "}
+                        <span className="text-foreground">{row.code}</span>
+                        {/* Το κείμενο του Scene (DescriptionA/B) αν υπάρχει, αλλιώς το codeDescription·
+                            σε code I/S (Landunit B-side, System Release) η αιτία που έμεινε αταξινόμητη. */}
+                        {row.unclassifiedReason ? (
+                          <span className="text-amber-400" title={row.unclassifiedReason}> {row.unclassifiedReason}</span>
+                        ) : (row.description || row.codeDescription) ? (
+                          <span title={row.descriptionGroup ? `Ομάδα: ${row.descriptionGroup}` : undefined}>
+                            {` ${cleanDescription(row.description || row.codeDescription) ?? ""}`}
+                            {row.descriptionGroup && <span className="text-muted-foreground/70"> [{row.descriptionGroup}]</span>}
+                          </span>
+                        ) : ""}
+                        {idx < sideComparison.length - 1 && <span className="text-border mx-1">·</span>}
+                      </span>
+                    ))}
                   </>
                 )}
               </div>
@@ -2828,6 +2896,14 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
           <h3 className="text-xs font-semibold text-foreground mb-1 flex items-center gap-1.5">
             <Activity className="h-3 w-3 text-primary" />
             TraceLog
+            {tracelogFallbackSides.length > 0 && (
+              <span
+                className="text-[10px] font-normal text-amber-400"
+                title="Η πλευρά αυτή δεν έχει γραμμές FactSystemTraceLog — εμφανίζονται οι γραμμές του FactIPTrace"
+              >
+                ({tracelogFallbackSides.join(", ")}: IP trace)
+              </span>
+            )}
           </h3>
 
           {isLoadingRadio ? (
@@ -2848,7 +2924,7 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
                     const isActive = isHoveredIso(entry.time);
                     const isMarker = entry.kind === "marker";
                     // Flag TraceLog rows containing known failure/teardown keywords so they stand out in red
-                    const isCritical = !isMarker && entry.info != null && [
+                    const isCritical = !isMarker && !entry.ip && entry.info != null && [
                       "No sync signal found",
                       "Task stopped",
                       "Close Engine",
@@ -2880,7 +2956,10 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
                           {isMarker ? <Flag className="h-3 w-3 inline" /> : entry.side ?? "N/A"}
                         </td>
                         <td className="px-1 py-0.5 font-mono">{entry.sessionId ?? "N/A"}</td>
-                        <td className="px-1 py-0.5 font-mono whitespace-pre-wrap break-words max-w-[400px]">{entry.info ?? "N/A"}</td>
+                        <td className="px-1 py-0.5 font-mono whitespace-pre-wrap break-words max-w-[400px]">
+                          {entry.ip && <span className="mr-1 rounded px-1 text-[10px] font-semibold bg-amber-500/15 text-amber-400">IP</span>}
+                          {entry.info ?? "N/A"}
+                        </td>
                       </tr>
                     );
                   })}
@@ -3258,105 +3337,8 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
           Το διάγραμμα σήματος και το Session Overview που βρίσκονταν εδώ έχουν ενωθεί με το
           κύριο διάγραμμα της κάρτας (CallSignalChart) πάνω σε έναν κοινό άξονα χρόνου· εδώ
           μένει ο πίνακας των αλλαγών, που δεν έχει νόημα ως καμπύλη. */}
-      {/* ── MOS ανά test ── Speech-Wideband POLQA x FactSpeechCodecs: ένα row ανά codec (DL/UL,
-          Active, Duration <> 0) κάθε MOS TestId· τα στοιχεία του test (MOS, Status, μέσες τιμές LTE
-          μέσα στο ίδιο TestId) εμφανίζονται μία φορά ανά test με rowSpan. */}
-      {mosTests.length > 0 && (() => {
-        const groupSize = new Map<number, number>();
-        for (const r of mosTests) groupSize.set(r.TestId, (groupSize.get(r.TestId) ?? 0) + 1);
-        const fmt = (v: number | null, d: number) => (v != null ? Number(v).toFixed(d) : "—");
-        const pct = (v: number | null) => (v != null ? `${(Number(v) * 100).toFixed(1)}%` : "—");
-        return (
-        <div className="bg-card border border-border rounded-lg p-3 space-y-2">
-          <button
-            type="button"
-            onClick={() => setMosTestsOpen(!mosTestsOpen)}
-            aria-expanded={mosTestsOpen}
-            className="min-w-0 text-left"
-          >
-            <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-              <ChevronRight className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${mosTestsOpen ? "rotate-90" : ""}`} />
-              MOS ανά test <span className="text-[10px] font-normal text-muted-foreground">({groupSize.size} tests — codecs &amp; LTE μέσα στο ίδιο TestId)</span>
-            </h3>
-          </button>
-          {mosTestsOpen && (
-          <div className="overflow-x-auto max-h-[320px] overflow-y-auto rounded border border-border/50">
-            <table className="w-full text-xs text-center">
-              <thead className="sticky top-0 bg-muted border-b border-border z-10">
-                <tr>
-                  <th className="px-2 py-1 font-semibold">TestId</th>
-                  <th className="px-2 py-1 font-semibold" title="TestInfo.direction · A->B = UL, B->A = DL">Direction</th>
-                  <th className="px-2 py-1 font-semibold">Ώρα</th>
-                  <th className="px-2 py-1 font-semibold" title="vResultsLQAvgP863SWBSimpleCodec.LQWBP863float">MOS</th>
-                  <th className="px-2 py-1 font-semibold" title="DmnTest.Status">Status</th>
-                  <th className="px-2 py-1 font-semibold" title="FactSpeechCodecs.CodecDirection — με έντονα ο codec της κατεύθυνσης του MOS">Codec Dir</th>
-                  <th className="px-2 py-1 font-semibold">Codec</th>
-                  <th className="px-2 py-1 font-semibold">Rate (kbps)</th>
-                  <th className="px-2 py-1 font-semibold">Duration (s)</th>
-                  <th className="px-2 py-1 font-semibold" title="FactSpeechCodecs.CodecRatePerTestRatio">% test</th>
-                  <th className="px-2 py-1 font-semibold">EARFCN</th>
-                  <th className="px-2 py-1 font-semibold">PCI</th>
-                  <th className="px-2 py-1 font-semibold" title="AVG vJointLTEMeasurementReport.RSRP μέσα στο TestId">RSRP</th>
-                  <th className="px-2 py-1 font-semibold">RSRQ</th>
-                  <th className="px-2 py-1 font-semibold">SINR</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-border/50">
-                {mosTests.map((row, i) => {
-                  const first = i === 0 || mosTests[i - 1].TestId !== row.TestId;
-                  const span = groupSize.get(row.TestId) ?? 1;
-                  const mos = row.MOS != null ? Number(row.MOS) : null;
-                  const mosColor = mos == null ? "text-muted-foreground/40" : mos < 3 ? "text-destructive" : mos < 3.5 ? "text-warning" : "text-primary";
-                  const rsrpAbs = row.RSRP != null ? Math.abs(Number(row.RSRP)) : null;
-                  const rsrpColor = rsrpAbs == null ? "text-muted-foreground/40" : rsrpAbs >= 120 ? "text-destructive" : rsrpAbs >= 115 ? "text-warning" : "text-primary";
-                  const rsrqAbs = row.RSRQ != null ? Math.abs(Number(row.RSRQ)) : null;
-                  const rsrqColor = rsrqAbs == null ? "text-muted-foreground/40" : rsrqAbs >= 18 ? "text-destructive" : rsrqAbs >= 16 ? "text-warning" : "text-primary";
-                  // ο codec της κατεύθυνσης του MOS (A->B = UL, B->A = DL) τονίζεται
-                  const isMosDir = (row.Direction === "A->B" && row.CodecDirection === "UL") || (row.Direction === "B->A" && row.CodecDirection === "DL");
-                  const testCell = "px-2 py-0.5 font-mono align-middle";
-                  return (
-                    <tr
-                      key={`${row.TestId}-${i}`}
-                      className={`hover:bg-muted/40 ${first && i > 0 ? "border-t-2 border-border" : ""}`}
-                      onMouseEnter={() => { if (row.FullDate) hoverIso(row.FullDate); }}
-                      onMouseLeave={() => setHoveredTime(null)}
-                    >
-                      {first && <>
-                        <td rowSpan={span} className={testCell}>{row.TestId}</td>
-                        <td rowSpan={span} className={testCell}>
-                          {row.Direction ?? "—"}
-                          {row.Direction === "A->B" && <span className="ml-1 text-[10px] text-muted-foreground">UL</span>}
-                          {row.Direction === "B->A" && <span className="ml-1 text-[10px] text-muted-foreground">DL</span>}
-                        </td>
-                        <td rowSpan={span} className={testCell}>
-                          {row.FullDate ? new Date(row.FullDate).toLocaleTimeString("el-GR", { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : "—"}
-                        </td>
-                        <td rowSpan={span} className={`${testCell} font-bold ${mosColor}`}>{mos != null ? mos.toFixed(2) : "—"}</td>
-                        <td rowSpan={span} className="px-2 py-0.5 align-middle">{row.Status ?? "—"}</td>
-                      </>}
-                      <td className={`px-2 py-0.5 font-mono ${isMosDir ? "font-bold text-foreground" : "text-muted-foreground"}`}>{row.CodecDirection ?? "—"}</td>
-                      <td className={`px-2 py-0.5 ${isMosDir ? "font-bold text-foreground" : ""}`}>{row.CodecName ?? "—"}</td>
-                      <td className="px-2 py-0.5 font-mono">{fmt(row.CodecRate, 2)}</td>
-                      <td className="px-2 py-0.5 font-mono">{row.Duration != null ? (Number(row.Duration) / 1000).toFixed(2) : "—"}</td>
-                      <td className="px-2 py-0.5 font-mono">{pct(row.CodecRatePerTestRatio)}</td>
-                      {first && <>
-                        <td rowSpan={span} className={testCell}>{row.EARFCN ?? "—"}</td>
-                        <td rowSpan={span} className={testCell}>{row.PCI ?? "—"}</td>
-                        <td rowSpan={span} className={`${testCell} font-bold ${rsrpColor}`}>{fmt(row.RSRP, 1)}</td>
-                        <td rowSpan={span} className={`${testCell} font-bold ${rsrqColor}`}>{fmt(row.RSRQ, 1)}</td>
-                        <td rowSpan={span} className={testCell}>{fmt(row.SINR, 1)}</td>
-                      </>}
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
-          )}
-        </div>
-        );
-      })()}
-
+      {/* Το «MOS ανά test» έγινε ένας πίνακας με τα speech samples — panel «MOS ανά test &
+          Speech samples» του NativeCallPanels (join με το TestId). */}
       {mergedTechnology.length > 0 && (
         <div className="bg-card border border-border rounded-lg p-3 space-y-3">
           <h3 className="text-sm font-semibold text-foreground">
@@ -3435,6 +3417,16 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
         </div>
       )}
 
+      {/* ── Event timeline (FactAdvancedTriggerEvent) — τα Voice events του γίνονται και ταμπέλες στο signal chart ── */}
+      <CallEventsPanel
+        key={`events:${database}:${call.callId}`}
+        database={database}
+        sessionId={call.callId}
+        hoveredTime={hoveredTime}
+        onHoverTime={setHoveredTime}
+        onVoiceEvents={setNativeVoiceEvents}
+      />
+
       {/* ── L3 Signaling (RRC / NAS / SIP) ── */}
       <L3SignalingPanel
         key={`${database}:${call.callId}`}
@@ -3444,89 +3436,21 @@ const CallDetail = ({ call, database, onBack, onNavigateToCall, onCommentSaved }
         onHoverTime={setHoveredTime}
       />
 
-      {/* ── Scanner / Device Info ── */}
-      {deviceInfo && (
-        <div className="bg-card border border-border rounded-lg p-3 space-y-3">
-          <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
-            <Signal className="h-4 w-4 text-primary" />
-            Scanner &amp; Κινητό
-          </h3>
+      {/* ── Κάτω από το L3, κλειστά by default: Call Analysis, Markers, MOS ανά test & Speech samples,
+          RTP / VoLTE, UE Capability, Συσκευές την ίδια στιγμή· τελευταίο το Scanner & Κινητό (μόνιμα ανοιχτό) ── */}
+      <NativeCallPanels
+        key={`native:${database}:${call.callId}`}
+        database={database}
+        sessionId={call.callId}
+        callStart={call.startTime}
+        callEnd={call.endTime}
+        hoveredTime={hoveredTime}
+        onHoverTime={setHoveredTime}
+        onNavigateToCall={onNavigateToCall}
+        deviceInfo={deviceInfo}
+        onCallAnalysis={setCallAnalysis}
+      />
 
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-            {/* A-side — each row prefers the dedicated device-info field (d.*) and falls back to
-                whatever was parsed from the trace file name/header (f.*) when the former is missing */}
-            <div className="rounded border border-border/60 bg-muted/20 p-2 space-y-1">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-primary mb-1.5">A-Side</p>
-              {(() => {
-                const d = deviceInfo.aSideDevice;
-                const f = deviceInfo.fileInfo;
-                const rows: [string, string | null | undefined][] = [
-                  ["Device", d?.Model ?? f.ASideDevice],
-                  ["IMEI", d?.IMEI ?? f.IMEI],
-                  ["IMSI", d?.IMSI ?? f.IMSI],
-                  ["Number", d?.Number ?? f.ASideNumber],
-                  ["OS", d?.OS ?? null],
-                  ["Firmware", d?.Firmware ?? f.FirmwareV],
-                  ["BaseBand", d?.BaseBand ?? null],
-                  ["DeviceType", d?.DeviceType ?? null],
-                  ["RF Manufacturer", d?.RFManufacturer ?? null],
-                  ["RF Model", d?.RFModel ?? null],
-                  ["Serial", d?.SerialNumber ?? null],
-                  ["SW Version", f.SWVersion],
-                  ["MF Version", f.MFVersion],
-                  ["Product Ver.", f.ProductVersion],
-                  ["File", f.ASideFileName],
-                  ["Location", f.ASideLocation],
-                ];
-                // Hide any row whose value is missing/empty rather than showing a blank field
-                return rows
-                  .filter(([, v]) => v != null && v !== "")
-                  .map(([label, value]) => (
-                    <div key={label} className="flex items-start gap-2 text-xs">
-                      <span className="text-muted-foreground w-28 shrink-0">{label}</span>
-                      <span className="font-mono text-foreground break-all">{value}</span>
-                    </div>
-                  ));
-              })()}
-            </div>
-
-            {/* B-side — same fallback pattern as A-side above, but with an explicit empty-state message
-                since the B-side leg often has no device info at all */}
-            <div className="rounded border border-border/60 bg-muted/20 p-2 space-y-1">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-accent mb-1.5">B-Side</p>
-              {(() => {
-                const d = deviceInfo.bSideDevice;
-                const f = deviceInfo.fileInfo;
-                const rows: [string, string | null | undefined][] = [
-                  ["Device", d?.Model ?? f.BSideDevice],
-                  ["IMEI", d?.IMEI ?? null],
-                  ["IMSI", d?.IMSI ?? null],
-                  ["Number", d?.Number ?? f.BSideNumber],
-                  ["OS", d?.OS ?? null],
-                  ["Firmware", d?.Firmware ?? null],
-                  ["BaseBand", d?.BaseBand ?? null],
-                  ["DeviceType", d?.DeviceType ?? null],
-                  ["RF Manufacturer", d?.RFManufacturer ?? null],
-                  ["RF Model", d?.RFModel ?? null],
-                  ["Serial", d?.SerialNumber ?? null],
-                  ["File", f.BSideFileName],
-                  ["Location", f.BSideLocation],
-                ];
-                const visible = rows.filter(([, v]) => v != null && v !== "");
-                if (visible.length === 0) {
-                  return <p className="text-xs text-muted-foreground">Δεν υπάρχουν δεδομένα B-side.</p>;
-                }
-                return visible.map(([label, value]) => (
-                  <div key={label} className="flex items-start gap-2 text-xs">
-                    <span className="text-muted-foreground w-28 shrink-0">{label}</span>
-                    <span className="font-mono text-foreground break-all">{value}</span>
-                  </div>
-                ));
-              })()}
-            </div>
-          </div>
-        </div>
-      )}
     </motion.div>
   );
 };

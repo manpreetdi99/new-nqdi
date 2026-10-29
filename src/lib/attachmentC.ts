@@ -142,6 +142,10 @@ export const classifyCustomCallMode = (
 export type DataTestOutcome = "success" | "failed" | "other";
 
 export const classifyDataTest = (row: DataCallRow): DataTestOutcome => {
+  // Ε3 · Browser engines (Newton / Kepler / Kepler +30s Pause): throughput 0 = failed,
+  // ό,τι κι αν λέει το TransferStatus — βλ. isZeroThroughputBrowserEngine.
+  if (isZeroThroughputBrowserEngine(row)) return "failed";
+
   const s = (row.scoringStatus ?? row.status ?? "").toLowerCase();
   if (s.includes("fail") || s === "f") return "failed";
   if (s === "a" || s.includes("success") || s.includes("complet")) return "success";
@@ -1512,6 +1516,33 @@ const sectionRank = (label: string): [number, number, number] => {
 export const sectionGroupOf = (label: string): string => {
   const l = label.toLowerCase();
   return SECTION_ORDER.find((group) => group.match(l, label))?.group ?? "";
+};
+
+/**
+ * Ε3 · Browser engines (Newton / Kepler / Kepler +30s Pause) με throughput 0 ή χωρίς throughput: το test
+ * μετράει ως **failed**, ακόμα κι αν το CDR TransferStatus λέει success. Ένα "Successful"
+ * KPI 30407 με Value1 = 0 (→ refThroughputKbps = 0) δεν είναι επιτυχία με 0 Mbps, και
+ * χωρίς αυτόν τον κανόνα ανέβαινε το Test Success Rate του section ενώ ο μέσος όρος
+ * throughput το αγνοούσε (το `collect` πετάει τα 0) — δύο γραμμές να λένε διαφορετικά
+ * πράγματα για το ίδιο test.
+ *
+ * Μόνο για το Ε3 group (όχι ένα HTTPS site με 0 throughput — εκεί το 0 παραμένει "δεν
+ * υπάρχει τιμή"): `sectionGroupOf` κρατά τον ορισμό του group σε ΕΝΑ σημείο. Το φθηνό
+ * regex test τρέχει πρώτο ώστε τα 100k+ rows των άλλων test types να μην πληρώνουν το
+ * sectionLabel/sectionGroupOf κόστος.
+ */
+const isZeroThroughputBrowserEngine = (row: DataCallRow): boolean => {
+  const testType = row.testType ?? "";
+  if (!/kepler|newton/i.test(testType)) return false;
+  if (sectionGroupOf(sectionLabel(row)) !== SECTION_GROUP_LABELS.browserEngines) return false;
+
+  // Ίδια πηγή με το "Mean application throughput" (βλ. buildDataMetrics): το A-LEVEL
+  // refThroughputKbps όταν υπάρχει, αλλιώς το CDR throughput. Το "καθόλου throughput"
+  // (null: ούτε KPI 30407 ούτε CDR Transfer Throughput) μετράει κι αυτό ως 0 — π.χ.
+  // SAL_THESSALONIKI_MAJOR CITIES_2026H2, Vodafone Newton: 4 tests "Success" στο Scoring
+  // Status χωρίς καμία τιμή throughput, που αλλιώς έβγαιναν success.
+  const throughput = numeric(row.refThroughputKbps !== undefined ? row.refThroughputKbps : row.throughputKbps);
+  return throughput === null || throughput === 0;
 };
 
 /**

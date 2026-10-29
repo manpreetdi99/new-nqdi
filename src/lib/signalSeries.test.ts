@@ -2,7 +2,12 @@ import { describe, it, expect } from "vitest";
 
 import {
   attachNearest,
+  clampRange,
   findMeasurementGaps,
+  isFullRange,
+  MIN_ZOOM_SPAN_MS,
+  panRange,
+  zoomRange,
   labelMeasurementGaps,
   layoutEventLanes,
   mergeSignalSamples,
@@ -154,5 +159,32 @@ describe("signal series", () => {
     expect(nearestIndex([0, 10, 20], 16)).toBe(2);
     expect(nearestIndex([0, 10, 20], -5)).toBe(0);
     expect(nearestIndex([0, 10, 20], 99)).toBe(2);
+  });
+});
+
+describe("zoom window", () => {
+  const domain = { start: at(0), end: at(100_000) };
+
+  it("zooms around the anchor, keeping that instant at the same place on screen", () => {
+    const view = zoomRange(domain, domain, 0.5, 0.2);
+    expect(view).toEqual({ start: at(10_000), end: at(60_000) });
+    // το 20% του νέου παραθύρου είναι ξανά t=20s
+    expect(view.start + (view.end - view.start) * 0.2).toBe(at(20_000));
+  });
+
+  it("never zooms below the minimum span or outside the domain", () => {
+    const tiny = zoomRange({ start: at(50_000), end: at(51_000) }, domain, 0.1);
+    expect(tiny.end - tiny.start).toBe(MIN_ZOOM_SPAN_MS);
+    const out = zoomRange({ start: at(80_000), end: at(100_000) }, domain, 6, 1);
+    expect(out).toEqual(domain);
+    expect(isFullRange(out, domain)).toBe(true);
+  });
+
+  it("pans by a fraction of the window and stops at the domain edges", () => {
+    const view = { start: at(40_000), end: at(60_000) };
+    expect(panRange(view, domain, 0.5)).toEqual({ start: at(50_000), end: at(70_000) });
+    expect(panRange(view, domain, -10)).toEqual({ start: at(0), end: at(20_000) });
+    expect(clampRange({ start: at(95_000), end: at(115_000) }, domain)).toEqual({ start: at(80_000), end: at(100_000) });
+    expect(isFullRange(view, domain)).toBe(false);
   });
 });

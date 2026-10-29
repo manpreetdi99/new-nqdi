@@ -5,6 +5,7 @@ from fastapi import APIRouter, HTTPException, Query
 
 from api_utils import _rows
 from db import get_connection
+from routers.call_analysis import unclassified_reason
 
 router = APIRouter(tags=["call-detail"])
 
@@ -29,9 +30,13 @@ def get_call_kpi_tile(
             DECLARE @sid BIGINT = TRY_CONVERT(BIGINT, ?);
 
             SELECT
-                (SELECT ROUND(MAX(CA.setupTime) / 1000.0, 2)
+                /* CallAnalysis.setupTime είναι ΗΔΗ σε δευτερόλεπτα (float του MF 101, βλ.
+                   REA/…Gaps-Closed §7) — το παλιό "/ 1000" έδινε 0.00x s. Το 99.9 είναι
+                   σημαία αποτυχίας του MF, όχι χρόνος -> NULL. */
+                (SELECT ROUND(MAX(CA.setupTime), 2)
                    FROM CallAnalysis CA
-                  WHERE CA.SessionId = @sid)                    AS SetupTime_s,
+                  WHERE CA.SessionId = @sid
+                    AND ABS(CA.setupTime - 99.9) >= 0.01)      AS SetupTime_s,
 
                 (SELECT ROUND(AVG(COALESCE(LQ.OptionalWB, LQ.OptionalNB)), 2)
                    FROM ResultsLQ08Avg LQ
@@ -356,14 +361,23 @@ def get_call_side_comparison(
                 WHERE CA.SessionId = TRY_CONVERT(BIGINT, ?)
                    OR CA.SessionIdA = TRY_CONVERT(BIGINT, ?)
             )
+            -- Description/DescriptionGroup: όπως τα δείχνει το Scene (DmnCallInformation —
+            -- codeDescription με ';' -> '/' και 'Others' -> ResultsKPI 31101 Value5).
+            -- MediaClient: για το UnclassifiedReason (B-side Landunit -> code 'I').
             SELECT
                 CA.Side,
                 CA.callStatus,
                 CA.code,
                 CA.codeDescription,
+                CASE WHEN CA.Side = 'B' THEN CI.DescriptionB ELSE CI.DescriptionA END AS description,
+                CASE WHEN CA.Side = 'B' THEN CI.DescriptionGroupB ELSE CI.DescriptionGroupA END AS descriptionGroup,
+                CASE WHEN CA.Side = 'B' THEN CS.MediaClientB ELSE CS.MediaClient END AS mediaClient,
                 COUNT(*) AS calls
             FROM CallAnalysis CA
             CROSS JOIN root_session RS
+            LEFT JOIN CallSession CS ON CS.SessionId = RS.ASessionId
+            LEFT JOIN FactCallSession F ON F.SessionIdASide = RS.ASessionId
+            LEFT JOIN DmnCallInformation CI ON CI.DmnId = F.DmnIdCallInformation
             WHERE
                 (CA.Side = 'A' AND CA.SessionId = RS.ASessionId)
                 OR
@@ -372,7 +386,10 @@ def get_call_side_comparison(
                 CA.Side,
                 CA.callStatus,
                 CA.code,
-                CA.codeDescription
+                CA.codeDescription,
+                CASE WHEN CA.Side = 'B' THEN CI.DescriptionB ELSE CI.DescriptionA END,
+                CASE WHEN CA.Side = 'B' THEN CI.DescriptionGroupB ELSE CI.DescriptionGroupA END,
+                CASE WHEN CA.Side = 'B' THEN CS.MediaClientB ELSE CS.MediaClient END
             ORDER BY
                 calls DESC
         """
@@ -384,7 +401,10 @@ def get_call_side_comparison(
 
         data = []
         for row in rows:
-            data.append({columns[idx]: row[idx] for idx in range(len(columns))})
+            item = {columns[idx]: row[idx] for idx in range(len(columns))}
+            item["unclassifiedReason"] = unclassified_reason(
+                item["code"], item["callStatus"], item["Side"], item["mediaClient"])
+            data.append(item)
 
         conn.close()
 

@@ -187,6 +187,34 @@ describe("CallSignalChart", () => {
     expect(onPinnedChange).toHaveBeenCalledWith(false);
   });
 
+  it("zooms with the toolbar: event labels re-spread over the window and reset brings it all back", () => {
+    renderChart({ events: [event(1, "early"), event(9, "middle"), event(18, "late")] });
+    expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Επαναφορά zoom" })).not.toBeInTheDocument();
+
+    // 19s × 0.6 γύρω από το κέντρο (9.5s) → 3.8s..15.2s: μένει μόνο το «middle»
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    expect(screen.getByRole("button", { name: "middle" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "early" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "late" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText(/Signaling events \(1\/3\)/)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole("button", { name: "Επαναφορά zoom" }));
+    expect(screen.getByRole("button", { name: "early" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "late" })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Zoom out" })).toBeDisabled();
+  });
+
+  it("pans the zoomed window and stops at the edges of the domain", () => {
+    renderChart({ events: [event(1, "early"), event(18, "late")] });
+    fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    const left = screen.getByRole("button", { name: "Μετακίνηση αριστερά" });
+    for (let i = 0; i < 5; i += 1) fireEvent.click(left);
+    expect(left).toBeDisabled();
+    expect(screen.getByRole("button", { name: "early" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "late" })).not.toBeInTheDocument();
+  });
+
   it("says so plainly when there is nothing to draw", () => {
     renderChart({ samples: [{ t: at(0) }], domain: null });
     expect(screen.getByText(/Δεν υπάρχουν αρκετά δείγματα/)).toBeInTheDocument();

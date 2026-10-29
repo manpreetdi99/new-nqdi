@@ -27,7 +27,8 @@ export interface CallRecord {
   callMode?: string | null;
   callType: string;
   status: "completed" | "dropped" | "failed" | "system release"; // Ενεργοποιούμε το auto-complete του IDE
-  setupTime_ms: number;
+  /** CallAnalysis.setupTime σε δευτερόλεπτα· null όταν λείπει ή είναι η σημαία 99.9 του MF. */
+  setupTime_s: number | null;
   avgMos: number;
   downloadSpeed: number;
   uploadSpeed: number;
@@ -183,7 +184,7 @@ export function generateCallRecords(count: number = 30): CallRecord[] {
       technology: pick(TECHNOLOGIES),
       callType,
       status,
-      setupTime_ms: Math.round(rand(80, 1200)),
+      setupTime_s: Number(rand(2, 8).toFixed(2)),
       avgMos: rand(2.5, 4.5),
       downloadSpeed: rand(5, 250),
       uploadSpeed: rand(1, 60),

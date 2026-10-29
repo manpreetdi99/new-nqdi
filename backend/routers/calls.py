@@ -467,7 +467,10 @@ def list_calls(
                 CA.callStatus AS status,
                 DF.CollectionName,
                 COALESCE(S.startTime, SB.startTime) AS callStartTimeStamp,
-                ROUND(CA.setupTime, 2) AS setupTime,
+                -- Δευτερόλεπτα. Το 99.9 είναι σημαία αποτυχίας που γράφει το MF (Failed /
+                -- System Release), όχι χρόνος — NULL ώστε να μη μπαίνει σε μέσους όρους.
+                CASE WHEN ABS(CA.setupTime - 99.9) < 0.01 THEN NULL
+                     ELSE ROUND(CA.setupTime, 2) END AS setupTime,
                 AVGMOS.AvgMos AS Avg_mos,
                 MOS.MosUlAvg AS mosUlAvg,
                 MOS.MosUlMin AS mosUlMin,

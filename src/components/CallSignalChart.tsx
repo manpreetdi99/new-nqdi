@@ -15,15 +15,18 @@
  * άξονα dBm, οπότε το «σκαλοπάτι» του handover φαίνεται σε μία γραμμή.
  */
 
-import { useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import {
   CartesianGrid, Line, LineChart, ReferenceArea, ReferenceLine,
   ResponsiveContainer, Tooltip as RechartsTooltip, XAxis, YAxis,
 } from "recharts";
-import { Activity, Pin, PinOff } from "lucide-react";
+import { Activity, ChevronLeft, ChevronRight, Pin, PinOff, RotateCcw, ZoomIn, ZoomOut } from "lucide-react";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { SessionOverview, type OverviewLane } from "@/components/SessionOverview";
-import { findMeasurementGaps, labelMeasurementGaps, layoutEventLanes, nearestIndex, type SignalSample } from "@/lib/signalSeries";
+import {
+  clampRange, findMeasurementGaps, isFullRange, labelMeasurementGaps, layoutEventLanes, MIN_ZOOM_SPAN_MS,
+  nearestIndex, panRange, zoomRange, type SignalSample, type TimeRange,
+} from "@/lib/signalSeries";
 
 export type SignalNetwork = "LTE" | "GSM" | "NR";
 
@@ -131,6 +134,11 @@ const NO_MEASUREMENTS_GAP_MS = 5_000;
 // Σταθερό default, ώστε το useMemo των κενών να μην ξανατρέχει σε κάθε render
 const NO_PERIODS: readonly { from: number; to: number }[] = [];
 
+/** Βήμα των κουμπιών / του Ctrl+wheel: ×0.6 μεγεθύνει, ÷0.6 σμικρύνει. */
+const ZOOM_STEP = 0.6;
+/** Ίδια ανάλυση με το overview του γονέα (CallDetail): 120 ισαπέχοντα βήματα. */
+const OVERVIEW_STEPS = 120;
+
 /** Κατώφλια ανά δίκτυο — ίδιες τιμές με τις χρωματικές κλίμακες του χάρτη. */
 const THRESHOLDS: Record<SignalNetwork, { strength: [number, number]; quality: [number, number] }> = {
   LTE: { strength: [-115, -120], quality: [-16, -18] },
@@ -157,6 +165,23 @@ export function CallSignalChart({
   // Ποιες σειρές scanner έχει ανοίξει ο χρήστης (key → true)· όλες κλειστές από προεπιλογή
   const [shownScanners, setShownScanners] = useState<Record<string, boolean>>({});
   const [showEvents, setShowEvents] = useState(true);
+
+  // ── Zoom ──
+  // Το zoom είναι ένα υπο-παράθυρο του domain· null = ολόκληρο το παράθυρο ±Ns. Σβήνει όταν
+  // αλλάξει το domain (άλλη κλήση / άλλο παράθυρο / άλλη πλευρά), αφού δεν αντιστοιχεί πια σε κάτι.
+  const [zoom, setZoom] = useState<TimeRange | null>(null);
+  // Το τμήμα που σέρνει ο χρήστης με το ποντίκι (drag-to-zoom), σε epoch ms
+  const [selection, setSelection] = useState<{ from: number; to: number } | null>(null);
+  const plotRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    setZoom(null);
+    setSelection(null);
+  }, [domain?.start, domain?.end]);
+
+  const view: TimeRange | null = domain ? (zoom ? clampRange(zoom, domain) : domain) : null;
+  const zoomed = domain != null && view != null && !isFullRange(view, domain);
+  const applyZoom = (next: TimeRange | null) =>
+    setZoom(next && domain && !isFullRange(next, domain) ? next : null);
 
   /**
    * Άγγιξε η κλήση 5G NR; Σε μια κλήση περασμένη σκέτα ως "LTE" το EN-DC μπορεί να δίνει
@@ -226,10 +251,65 @@ export function CallSignalChart({
     [samples, domain, noServicePeriods],
   );
 
+  // Με zoom μπαίνουν μόνο τα events μέσα στο παράθυρο, και οι λωρίδες ξαναμοιράζονται πάνω του —
+  // έτσι οι ταμπέλες που πριν πατούσαν η μία την άλλη ανοίγουν και διαβάζονται.
+  const viewStart = view?.start;
+  const viewEnd = view?.end;
   const laidOutEvents = useMemo(
-    () => (domain ? layoutEventLanes(events, domain, EVENT_LANES) : []),
-    [events, domain],
+    () => (viewStart != null && viewEnd != null
+      ? layoutEventLanes(
+          zoomed ? events.filter((e) => e.timestamp >= viewStart && e.timestamp <= viewEnd) : events,
+          { start: viewStart, end: viewEnd },
+          EVENT_LANES,
+        )
+      : []),
+    [events, viewStart, viewEnd, zoomed],
   );
+
+  // Το Session Overview δένεται σε ισαπέχοντα δείγματα του domain (βλ. CallDetail)· με zoom
+  // ξαναφτιάχνονται πάνω στο παράθυρο, ώστε οι λωρίδες να μένουν κάτω από το ίδιο σημείο της καμπύλης.
+  // Τα segments ΔΕΝ ψαλιδίζονται (το tooltip κρατά την πραγματική διάρκεια) — απλώς φεύγουν όσα
+  // είναι εντελώς έξω, αλλιώς θα άφηναν μια λωρίδα 0.4% στην άκρη.
+  const overview = useMemo(() => {
+    if (!zoomed || viewStart == null || viewEnd == null) return { times: overviewTimes, lanes: overviewLanes };
+    return {
+      times: Array.from({ length: OVERVIEW_STEPS + 1 }, (_, i) => viewStart + ((viewEnd - viewStart) * i) / OVERVIEW_STEPS),
+      lanes: overviewLanes.map((lane) => ({
+        ...lane,
+        segments: lane.segments.filter((seg) => seg.to > viewStart && seg.from < viewEnd),
+      })),
+    };
+  }, [zoomed, viewStart, viewEnd, overviewTimes, overviewLanes]);
+
+  // Ctrl+wheel = zoom γύρω από το ποντίκι, Shift+wheel = μετακίνηση. Σκέτο wheel μένει scroll της
+  // σελίδας (το διάγραμμα είναι συχνά καρφιτσωμένο από πάνω της). Native listener με passive:false,
+  // γιατί το onWheel του React είναι passive και δεν μπορεί να κόψει το zoom του browser.
+  const wheelCtx = useRef({ view, domain, padLeft: 0, padRight: 0 });
+  const hasPlot = domain != null && samples.length >= 2;
+  useEffect(() => {
+    const el = plotRef.current;
+    if (!hasPlot || !el) return;
+    const onWheel = (e: WheelEvent) => {
+      const { view: v, domain: d, padLeft: pl, padRight: pr } = wheelCtx.current;
+      if (!v || !d || !(e.ctrlKey || e.metaKey || e.shiftKey)) return;
+      e.preventDefault();
+      const delta = e.deltaY || e.deltaX;
+      if (!delta) return;
+      if (e.ctrlKey || e.metaKey) {
+        const rect = el.getBoundingClientRect();
+        const left = rect.left + 12 + pl;
+        const width = rect.width - 24 - pl - pr;
+        const anchor = width > 0 ? (e.clientX - left) / width : 0.5;
+        const next = zoomRange(v, d, delta < 0 ? ZOOM_STEP : 1 / ZOOM_STEP, anchor);
+        setZoom(isFullRange(next, d) ? null : next);
+      } else {
+        const next = panRange(v, d, delta > 0 ? 0.2 : -0.2);
+        setZoom(isFullRange(next, d) ? null : next);
+      }
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [hasPlot]);
 
   // Τα κατώφλια εμφανίζονται μόνο με ΜΙΑ ενεργή σειρά, αλλιώς το διάγραμμα γεμίζει γραμμές.
   const visibleStrength = strengthSeries.filter((series) => !series.missing && isShown(series.key));
@@ -253,8 +333,9 @@ export function CallSignalChart({
   // την καμπύλη, οπότε ακολουθούν το πλάτος των αξόνων που όντως σχεδιάζονται.
   const padLeft = showStrengthAxis ? STRENGTH_AXIS_WIDTH : 0;
   const padRight = CHART_MARGIN_RIGHT + (showQualityAxis ? QUALITY_AXIS_WIDTH : 0);
+  wheelCtx.current = { view, domain, padLeft, padRight };
 
-  if (!domain || samples.length < 2) {
+  if (!domain || !view || samples.length < 2) {
     return (
       <div className="rounded-lg border border-border bg-card p-3">
         <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
@@ -270,6 +351,36 @@ export function CallSignalChart({
   const qualityLabel = network === "GSM" ? "RxQual" : network === "NR" ? "SS-RSRQ" : "RSRQ";
   const qualityAxisId = "quality";
 
+  // ReferenceArea έξω από τον άξονα (έστω και κατά ένα άκρο) το recharts την πετάει ολόκληρη,
+  // οπότε με zoom οι ζώνες ψαλιδίζονται στο παράθυρο· null = δεν φαίνεται καθόλου.
+  const clipX = (x1: number, x2: number): [number, number] | null => {
+    const from = Math.max(x1, view.start);
+    const to = Math.min(x2, view.end);
+    return to > from ? [from, to] : null;
+  };
+  const beforeArea = callBounds ? clipX(domain.start, callBounds.start) : null;
+  const duringArea = callBounds ? clipX(callBounds.start, callBounds.end) : null;
+  const afterArea = callBounds ? clipX(callBounds.end, domain.end) : null;
+  const visibleGaps = measurementGaps
+    .map((gap) => ({ gap, x: clipX(gap.from, gap.to) }))
+    .filter((item): item is { gap: (typeof measurementGaps)[number]; x: [number, number] } => item.x != null);
+
+  // Drag-to-zoom: το activeLabel είναι το t του πλησιέστερου δείγματος κάτω από το ποντίκι
+  const labelTime = (state: { activeLabel?: string | number } | null | undefined) => {
+    const value = Number(state?.activeLabel);
+    return Number.isFinite(value) ? value : null;
+  };
+  const finishSelection = () => {
+    if (selection) {
+      const from = Math.min(selection.from, selection.to);
+      const to = Math.max(selection.from, selection.to);
+      // Κάτω από το ελάχιστο είναι κλικ, όχι επιλογή — δεν αλλάζει το zoom
+      if (to - from >= MIN_ZOOM_SPAN_MS / 2) applyZoom(clampRange({ start: from, end: to }, domain));
+    }
+    setSelection(null);
+  };
+  const zoomButton = "inline-flex items-center rounded-md border border-border bg-muted px-1.5 py-1 text-[10px] text-foreground hover:bg-muted/80 disabled:opacity-40 disabled:hover:bg-muted";
+
   return (
     <div className="rounded-lg border border-border bg-card">
       {/* ── Κεφαλίδα: τίτλος, επιλογείς, σειρές ── */}
@@ -284,6 +395,37 @@ export function CallSignalChart({
         </div>
         <div className="flex flex-wrap items-center gap-1.5">
           {controls}
+          {/* Zoom: σύρε πάνω στην καμπύλη για επιλογή, Ctrl+wheel γύρω από το ποντίκι, Shift+wheel μετακίνηση */}
+          <div
+            className="inline-flex items-center gap-0.5"
+            title="Zoom: σύρε με το ποντίκι πάνω στο διάγραμμα · Ctrl+τροχός = zoom · Shift+τροχός = μετακίνηση · διπλό κλικ = επαναφορά"
+          >
+            <button type="button" aria-label="Zoom in" className={zoomButton}
+              disabled={view.end - view.start <= MIN_ZOOM_SPAN_MS}
+              onClick={() => applyZoom(zoomRange(view, domain, ZOOM_STEP))}>
+              <ZoomIn className="h-3 w-3" />
+            </button>
+            <button type="button" aria-label="Zoom out" className={zoomButton} disabled={!zoomed}
+              onClick={() => applyZoom(zoomRange(view, domain, 1 / ZOOM_STEP))}>
+              <ZoomOut className="h-3 w-3" />
+            </button>
+            <button type="button" aria-label="Μετακίνηση αριστερά" className={zoomButton}
+              disabled={!zoomed || view.start <= domain.start}
+              onClick={() => applyZoom(panRange(view, domain, -0.25))}>
+              <ChevronLeft className="h-3 w-3" />
+            </button>
+            <button type="button" aria-label="Μετακίνηση δεξιά" className={zoomButton}
+              disabled={!zoomed || view.end >= domain.end}
+              onClick={() => applyZoom(panRange(view, domain, 0.25))}>
+              <ChevronRight className="h-3 w-3" />
+            </button>
+            {zoomed && (
+              <button type="button" aria-label="Επαναφορά zoom" className={`${zoomButton} gap-1`} onClick={() => applyZoom(null)}>
+                <RotateCcw className="h-3 w-3" />
+                {clock(view.start)}–{clock(view.end)}
+              </button>
+            )}
+          </div>
           <button
             type="button"
             aria-pressed={pinned}
@@ -328,10 +470,11 @@ export function CallSignalChart({
             {series.name}
           </label>
         ))}
-        {laidOutEvents.length > 0 && (
+        {events.length > 0 && (
           <label className="inline-flex items-center gap-1 cursor-pointer">
             <input type="checkbox" checked={showEvents} onChange={(e) => setShowEvents(e.target.checked)} className="h-3 w-3" />
-            Signaling events ({laidOutEvents.length})
+            {/* Με zoom: πόσα φαίνονται στο παράθυρο / πόσα έχει όλη η κλήση */}
+            Signaling events ({zoomed ? `${laidOutEvents.length}/${events.length}` : laidOutEvents.length})
           </label>
         )}
         <span className="ml-auto flex flex-wrap items-center gap-x-2 gap-y-0.5 text-muted-foreground">
@@ -350,23 +493,38 @@ export function CallSignalChart({
       </div>
 
       {/* ── Καμπύλη ── */}
-      <div className="relative px-3 pb-1" style={{ height: plotHeight }}>
+      <div
+        ref={plotRef}
+        className={`relative px-3 pb-1 select-none ${selection ? "cursor-col-resize" : "cursor-crosshair"}`}
+        style={{ height: plotHeight }}
+        onDoubleClick={() => applyZoom(null)}
+      >
         <ResponsiveContainer width="100%" height="100%">
           <LineChart
             data={samples}
             margin={{ top: topMargin, right: CHART_MARGIN_RIGHT, left: 0, bottom: 0 }}
-            onMouseMove={(state: { activeLabel?: string | number }) => {
-              const value = Number(state?.activeLabel);
-              if (Number.isFinite(value)) onHoverTime(value);
+            onMouseDown={(state: { activeLabel?: string | number }) => {
+              const t = labelTime(state);
+              if (t != null) setSelection({ from: t, to: t });
             }}
-            onMouseLeave={() => onHoverTime(null)}
+            onMouseMove={(state: { activeLabel?: string | number }) => {
+              const t = labelTime(state);
+              if (t == null) return;
+              onHoverTime(t);
+              if (selection) setSelection((prev) => (prev ? { ...prev, to: t } : prev));
+            }}
+            onMouseUp={finishSelection}
+            onMouseLeave={() => {
+              onHoverTime(null);
+              setSelection(null);
+            }}
           >
             <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" opacity={0.4} vertical={false} />
             <XAxis
               dataKey="t"
               type="number"
               scale="time"
-              domain={[domain.start, domain.end]}
+              domain={[view.start, view.end]}
               allowDataOverflow
               tickFormatter={(value: number) => clock(value)}
               tick={{ fontSize: 9, fill: "hsl(var(--muted-foreground))" }}
@@ -401,12 +559,14 @@ export function CallSignalChart({
             {/* Ζώνες πριν / κατά / μετά — σε απόλυτο χρόνο, ίδια θέση με το overview */}
             {callBounds && showStrengthAxis && (
               <>
-                {callBounds.start > domain.start && (
-                  <ReferenceArea yAxisId="strength" x1={domain.start} x2={callBounds.start} fill="#f59e0b" fillOpacity={0.18} stroke="#f59e0b" strokeOpacity={0.35} />
+                {beforeArea && (
+                  <ReferenceArea yAxisId="strength" x1={beforeArea[0]} x2={beforeArea[1]} fill="#f59e0b" fillOpacity={0.18} stroke="#f59e0b" strokeOpacity={0.35} />
                 )}
-                <ReferenceArea yAxisId="strength" x1={Math.max(callBounds.start, domain.start)} x2={Math.min(callBounds.end, domain.end)} fill="#3b82f6" fillOpacity={0.16} stroke="#3b82f6" strokeOpacity={0.45} />
-                {domain.end > callBounds.end && (
-                  <ReferenceArea yAxisId="strength" x1={callBounds.end} x2={domain.end} fill="#f97316" fillOpacity={0.18} stroke="#f97316" strokeOpacity={0.35} />
+                {duringArea && (
+                  <ReferenceArea yAxisId="strength" x1={duringArea[0]} x2={duringArea[1]} fill="#3b82f6" fillOpacity={0.16} stroke="#3b82f6" strokeOpacity={0.45} />
+                )}
+                {afterArea && (
+                  <ReferenceArea yAxisId="strength" x1={afterArea[0]} x2={afterArea[1]} fill="#f97316" fillOpacity={0.18} stroke="#f97316" strokeOpacity={0.35} />
                 )}
               </>
             )}
@@ -462,14 +622,14 @@ export function CallSignalChart({
 
             {/* «No measurements»: ΠΑΝΩ από τις καμπύλες (σειρά στο SVG), ώστε η γραμμή που τα
                 connectNulls ενώνουν πάνω από ένα κενό να μη φαίνεται — το κενό μένει κενό */}
-            {(showStrengthAxis || showQualityAxis) && measurementGaps.map((gap) => {
+            {(showStrengthAxis || showQualityAxis) && visibleGaps.map(({ gap, x }) => {
               const noService = gap.reason === "no-service";
               return (
                 <ReferenceArea
                   key={`gap-${gap.from}`}
                   yAxisId={showStrengthAxis ? "strength" : qualityAxisId}
-                  x1={gap.from}
-                  x2={gap.to}
+                  x1={x[0]}
+                  x2={x[1]}
                   fill="hsl(var(--card))"
                   fillOpacity={0.92}
                   stroke={noService ? "#ef4444" : "hsl(var(--border))"}
@@ -499,6 +659,19 @@ export function CallSignalChart({
                 strokeWidth={2}
                 strokeOpacity={hoverFromOtherSide ? 0.35 : 1}
                 strokeDasharray={hoverFromOtherSide ? "3 3" : undefined}
+              />
+            )}
+
+            {/* Το τμήμα που σέρνει ο χρήστης για zoom */}
+            {selection && selection.from !== selection.to && (showStrengthAxis || showQualityAxis) && (
+              <ReferenceArea
+                yAxisId={showStrengthAxis ? "strength" : qualityAxisId}
+                x1={Math.min(selection.from, selection.to)}
+                x2={Math.max(selection.from, selection.to)}
+                fill="hsl(var(--primary))"
+                fillOpacity={0.15}
+                stroke="hsl(var(--primary))"
+                strokeOpacity={0.8}
               />
             )}
           </LineChart>
@@ -550,10 +723,11 @@ export function CallSignalChart({
       {overviewLanes.length > 0 && (
         <div className="px-3 pb-1.5" title="Session Overview · 1η λωρίδα: IDLE / CALL · 2η λωρίδα: τεχνολογία / band">
           <SessionOverview
-            times={overviewTimes}
-            lanes={overviewLanes}
-            callStart={callBounds?.start ?? null}
-            callEnd={callBounds?.end ?? null}
+            times={overview.times}
+            lanes={overview.lanes}
+            // Όρια κλήσης έξω από το zoom θα κάθονταν κολλημένα στην άκρη — παραλείπονται
+            callStart={callBounds && callBounds.start >= view.start && callBounds.start <= view.end ? callBounds.start : null}
+            callEnd={callBounds && callBounds.end >= view.start && callBounds.end <= view.end ? callBounds.end : null}
             padLeft={padLeft}
             padRight={padRight}
             hoverTime={hoveredTime}
