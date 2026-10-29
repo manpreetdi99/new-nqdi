@@ -87,6 +87,15 @@ SQL Server
 
 ---
 
+## Deep dives
+
+- [docs/SUMMARY_TAB.md](docs/SUMMARY_TAB.md) — το Summary tab (Attachment C: TABLE 20/21/22): ροή δεδομένων, οι 11 πηγές, KPI formulas, compact vs full.
+- [docs/ALL_SESSIONS_TAB.md](docs/ALL_SESSIONS_TAB.md) — το All Sessions tab: φίλτρα, file groups (±5min runs), data session cycles.
+- [docs/CALL_DETAIL.md](docs/CALL_DETAIL.md) — το Call Detail: call-mode flags, τα 28 endpoints, ο κοινός cursor, το ενιαίο διάγραμμα σήματος, τα panels.
+- [docs/DATA_SESSION_DETAIL.md](docs/DATA_SESSION_DETAIL.md) — το Data Detail: props-driven view, TraceLog, technology distribution.
+
+---
+
 ## 2. Project structure
 
 ```text
@@ -748,33 +757,28 @@ This is the main component for inspecting raw SQL output.
 
 ## 8.8 Call analytics components
 
-The project also contains a second feature area that uses generated/mock telecom call data rather than backend SQL data.
+Two components render a single selected call, driven by **real backend data**:
 
-These include:
+- `CallDetail.tsx` → per-call detail view
+- `CallsMap.tsx` → Greece SVG map with city bubbles
+- `src/lib/callData.ts` → the `CallRecord` interface these two consume
 
-- `CallsList.tsx`
-- `CallDetail.tsx`
-- `CallsFilter.tsx`
-- `CallsSummary.tsx`
-- `CallsMap.tsx`
-- `src/lib/callData.ts`
+### Where their data comes from
 
-### What they do
+`Index.tsx` fetches `AllCallsRow[]` from the SQL backend and translates it through
+`mapAllCallsRows` into the `CallRecord` shape that `CallDetail` expects.
 
-- generate synthetic call records,
-- filter calls by operator, status, technology, region, and call type,
-- display per-call detail,
-- summarize call KPIs,
-- show a Greece SVG map with city bubbles.
+### Important caveat
 
-### Important distinction
+`CallRecord` is a leftover from the project's first day, when this area ran on generated
+mock data. It still carries fields the voice backend does not provide — `downloadSpeed`,
+`jitter`, `packetLoss` and similar. `mapAllCallsRows` fills these with `0`.
 
-This area is currently **UI/demo data driven**, not connected to the FastAPI SQL backend.
+**Do not read those zeros as real measurements.** See
+[docs/ALL_SESSIONS_TAB.md §3](docs/ALL_SESSIONS_TAB.md).
 
-So the project really has **two parallel experiences**:
-
-1. **real backend-driven SQL benchmarking**, and
-2. **frontend-only telecom analytics demo UI**.
+The rest of that mock-data feature area (`CallsList.tsx`, `CallsFilter.tsx`,
+`CallsSummary.tsx`) was dead code and has been removed.
 
 ---
 
@@ -921,12 +925,9 @@ The builder uses hardcoded table and field names instead of live schema introspe
 - `src/components/BenchmarkCharts.tsx` → chart rendering
 - `src/components/ResultsTable.tsx` → raw query output tables
 
-### Frontend telecom demo UI
+### Per-call views
 
-- `src/lib/callData.ts` → generated sample call records
-- `src/components/CallsFilter.tsx` → call filters
-- `src/components/CallsSummary.tsx` → aggregated call KPIs
-- `src/components/CallsList.tsx` → call list
+- `src/lib/callData.ts` → the `CallRecord` shape consumed by `CallDetail`
 - `src/components/CallDetail.tsx` → selected call view
 - `src/components/CallsMap.tsx` → Greece map with regional call breakdown
 
