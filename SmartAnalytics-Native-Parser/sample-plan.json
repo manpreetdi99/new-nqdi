@@ -1,0 +1,69 @@
+{
+  "collection": "DOD_KOS_TOURISTIC AREAS_2026H2",
+  "database": "DEMO",
+  "files": [
+    {
+      "sqc": "CSM30102303-2026-09-29-15-18-40-6454-2303-0000-0000.sqc",
+      "md5_verified": true,
+      "members": [
+        {
+          "mf": "2026-09-29-15-18-50-6454-2303-1462-4917-S.mf",
+          "operator": "Cosmote Data",
+          "measurement_header": "MeasurementType=4",
+          "start": "2026-09-29T15:18:46.249000",
+          "end": "2026-09-29T15:36:30.383000",
+          "source_messages": 272103,
+          "source_types": 143,
+          "mapped": {
+            "positions": 1455,
+            "sessions": 22,
+            "tests": 149,
+            "lte": 2286,
+            "lte_secondary": 3753,
+            "lte_neighbors": 15305,
+            "nr": 3997,
+            "ip": 4236
+          }
+        },
+        {
+          "mf": "2026-09-29-15-18-50-6454-2303-1462-6631-S.mf",
+          "operator": "Nova Data",
+          "measurement_header": "MeasurementType=4",
+          "start": "2026-09-29T15:18:46.304000",
+          "end": "2026-09-29T15:36:31.134000",
+          "source_messages": 257245,
+          "source_types": 146,
+          "mapped": {
+            "positions": 1445,
+            "sessions": 22,
+            "tests": 149,
+            "lte": 3206,
+            "lte_secondary": 4858,
+            "lte_neighbors": 23603,
+            "nr": 2077,
+            "ip": 4240
+          }
+        },
+        {
+          "mf": "2026-09-29-15-18-50-6454-2303-1462-4966-S.mf",
+          "operator": "Vodafone Data",
+          "measurement_header": "MeasurementType=4",
+          "start": "2026-09-29T15:18:46.328000",
+          "end": "2026-09-29T15:36:30.554000",
+          "source_messages": 263904,
+          "source_types": 146,
+          "mapped": {
+            "positions": 1458,
+            "sessions": 22,
+            "tests": 149,
+            "lte": 3112,
+            "lte_secondary": 3998,
+            "lte_neighbors": 20223,
+            "nr": 2001,
+            "ip": 4238
+          }
+        }
+      ]
+    }
+  ]
+}

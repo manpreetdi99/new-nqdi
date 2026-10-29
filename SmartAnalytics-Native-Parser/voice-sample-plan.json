@@ -1,0 +1,192 @@
+{
+  "collection": "REA_VOICE_PREVIEW",
+  "database": "DEMO",
+  "files": [
+    {
+      "sqc": "CSM30102303-2026-09-29-15-17-13-1111-2303-0000-0000.sqc",
+      "md5_verified": true,
+      "members": [
+        {
+          "mf": "2026-09-29-15-17-23-1111-2303-5166-1033-A.mf",
+          "operator": "Cosmote Free A",
+          "measurement_header": "MeasurementType=0",
+          "start": "2026-09-29T15:17:20.820000",
+          "end": "2026-09-29T15:36:42.021000",
+          "source_messages": 93105,
+          "source_types": 121,
+          "mapped": {
+            "positions": 1547,
+            "sessions": 44,
+            "tests": 45,
+            "lte": 2048,
+            "lte_neighbors": 4628,
+            "nr": 461,
+            "ip": 4630
+          }
+        },
+        {
+          "mf": "2026-09-29-15-17-23-1111-2303-5166-1033-B.mf",
+          "operator": "Cosmote Free B",
+          "measurement_header": "MeasurementType=0",
+          "start": "2026-09-29T15:17:20.351000",
+          "end": "2026-09-29T15:36:39.747000",
+          "source_messages": 93776,
+          "source_types": 133,
+          "mapped": {
+            "positions": 1540,
+            "sessions": 44,
+            "tests": 45,
+            "lte": 1988,
+            "lte_neighbors": 5339,
+            "nr": 498,
+            "ip": 4620
+          }
+        },
+        {
+          "mf": "2026-09-29-15-17-23-1111-2303-5214-5614-A.mf",
+          "operator": "Cosmote GSM",
+          "measurement_header": "MeasurementType=0",
+          "start": "2026-09-29T15:17:20.521000",
+          "end": "2026-09-29T15:36:48.569000",
+          "source_messages": 50005,
+          "source_types": 65,
+          "mapped": {
+            "positions": 1561,
+            "sessions": 26,
+            "tests": 36,
+            "lte": 0,
+            "lte_neighbors": 0,
+            "nr": 0,
+            "ip": 4656
+          }
+        },
+        {
+          "mf": "2026-09-29-15-17-23-1111-2303-5166-2353-A.mf",
+          "operator": "Nova Free A",
+          "measurement_header": "MeasurementType=0",
+          "start": "2026-09-29T15:17:20.184000",
+          "end": "2026-09-29T15:36:40.876000",
+          "source_messages": 91875,
+          "source_types": 113,
+          "mapped": {
+            "positions": 1546,
+            "sessions": 44,
+            "tests": 45,
+            "lte": 2184,
+            "lte_neighbors": 5016,
+            "nr": 610,
+            "ip": 4624
+          }
+        },
+        {
+          "mf": "2026-09-29-15-17-23-1111-2303-5166-2353-B.mf",
+          "operator": "Nova Free B",
+          "measurement_header": "MeasurementType=0",
+          "start": "2026-09-29T15:17:20.369000",
+          "end": "2026-09-29T15:36:39.303000",
+          "source_messages": 87513,
+          "source_types": 103,
+          "mapped": {
+            "positions": 1536,
+            "sessions": 44,
+            "tests": 45,
+            "lte": 2136,
+            "lte_neighbors": 5265,
+            "nr": 0,
+            "ip": 4618
+          }
+        },
+        {
+          "mf": "2026-09-29-15-17-23-1111-2303-5214-3635-A.mf",
+          "operator": "Nova GSM",
+          "measurement_header": "MeasurementType=0",
+          "start": "2026-09-29T15:17:18.634000",
+          "end": "2026-09-29T15:36:49.398000",
+          "source_messages": 45602,
+          "source_types": 64,
+          "mapped": {
+            "positions": 1562,
+            "sessions": 26,
+            "tests": 32,
+            "lte": 0,
+            "lte_neighbors": 0,
+            "nr": 0,
+            "ip": 4658
+          }
+        },
+        {
+          "mf": "2026-09-29-15-17-23-1111-2303-9822-5616-S.mf",
+          "operator": "Scanner RuS TSME (102403)",
+          "measurement_header": "MeasurementType=19",
+          "start": "2026-09-29T15:17:23.739000",
+          "end": "2026-09-29T15:36:35",
+          "source_messages": 48338,
+          "source_types": 14,
+          "mapped": {
+            "positions": 0,
+            "sessions": 1,
+            "tests": 0,
+            "lte": 0,
+            "lte_neighbors": 0,
+            "nr": 0,
+            "ip": 0
+          }
+        },
+        {
+          "mf": "2026-09-29-15-17-23-1111-2303-5166-2759-A.mf",
+          "operator": "Vodafone Free A",
+          "measurement_header": "MeasurementType=0",
+          "start": "2026-09-29T15:17:20.205000",
+          "end": "2026-09-29T15:36:40.894000",
+          "source_messages": 85589,
+          "source_types": 120,
+          "mapped": {
+            "positions": 1542,
+            "sessions": 44,
+            "tests": 45,
+            "lte": 2082,
+            "lte_neighbors": 3718,
+            "nr": 503,
+            "ip": 4624
+          }
+        },
+        {
+          "mf": "2026-09-29-15-17-23-1111-2303-5166-2759-B.mf",
+          "operator": "Vodafone Free B",
+          "measurement_header": "MeasurementType=0",
+          "start": "2026-09-29T15:17:20.163000",
+          "end": "2026-09-29T15:36:39.453000",
+          "source_messages": 82932,
+          "source_types": 120,
+          "mapped": {
+            "positions": 1559,
+            "sessions": 44,
+            "tests": 45,
+            "lte": 2055,
+            "lte_neighbors": 3827,
+            "nr": 490,
+            "ip": 4618
+          }
+        },
+        {
+          "mf": "2026-09-29-15-17-23-1111-2303-5214-3692-A.mf",
+          "operator": "Vodafone GSM",
+          "measurement_header": "MeasurementType=0",
+          "start": "2026-09-29T15:17:18.742000",
+          "end": "2026-09-29T15:36:49.171000",
+          "source_messages": 43430,
+          "source_types": 65,
+          "mapped": {
+            "positions": 1549,
+            "sessions": 26,
+            "tests": 36,
+            "lte": 0,
+            "lte_neighbors": 0,
+            "nr": 0,
+            "ip": 4658
+          }
+        }
+      ]
+    }
+  ]
+}
