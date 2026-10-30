@@ -1,0 +1,149 @@
+[
+ {
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Cause": "RLF",
+  "Band": "B3",
+  "Mobility": "Static"
+ },
+ {
+  "Technology": "LTE",
+  "Vendor": "Nokia",
+  "Cause": "HO_FAIL",
+  "Band": "B7",
+  "Mobility": "Walk"
+ },
+ {
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Cause": "SRVCC_FAIL",
+  "Band": "B20",
+  "Mobility": "Car"
+ },
+ {
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Cause": "HO_FAIL",
+  "Band": "B20",
+  "Mobility": "Highway"
+ },
+ {
+  "Technology": "NR-NSA",
+  "Vendor": "Nokia",
+  "Cause": "RLF",
+  "Band": "n78",
+  "Mobility": "Car"
+ },
+ {
+  "Technology": "NR-NSA",
+  "Vendor": "Huawei",
+  "Cause": "RTP_TIMEOUT",
+  "Band": "B3",
+  "Mobility": "Walk"
+ },
+ {
+  "Technology": "NR-NSA",
+  "Vendor": "Huawei",
+  "Cause": "CORE_RELEASE",
+  "Band": "B7",
+  "Mobility": "Static"
+ },
+ {
+  "Technology": "LTE",
+  "Vendor": "Nokia",
+  "Cause": "CORE_RELEASE",
+  "Band": "B3",
+  "Mobility": "Highway"
+ },
+ {
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Cause": "RTP_TIMEOUT",
+  "Band": "B7",
+  "Mobility": "Car"
+ },
+ {
+  "Technology": "LTE",
+  "Vendor": "Nokia",
+  "Cause": "RTP_TIMEOUT",
+  "Band": "B20",
+  "Mobility": "Static"
+ },
+ {
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Cause": "CORE_RELEASE",
+  "Band": "n78",
+  "Mobility": "Walk"
+ },
+ {
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Cause": "RLF",
+  "Band": "B7",
+  "Mobility": "Highway"
+ },
+ {
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Cause": "HO_FAIL",
+  "Band": "B3",
+  "Mobility": "Car"
+ },
+ {
+  "Technology": "NR-NSA",
+  "Vendor": "Huawei",
+  "Cause": "RTP_TIMEOUT",
+  "Band": "n78",
+  "Mobility": "Highway"
+ },
+ {
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Cause": "RLF",
+  "Band": "B20",
+  "Mobility": "Walk"
+ },
+ {
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Cause": "SRVCC_FAIL",
+  "Band": "B3",
+  "Mobility": "Static"
+ },
+ {
+  "Technology": "LTE",
+  "Vendor": "Nokia",
+  "Cause": "SRVCC_FAIL",
+  "Band": "B7",
+  "Mobility": "Walk"
+ },
+ {
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Cause": "CORE_RELEASE",
+  "Band": "B20",
+  "Mobility": "Car"
+ },
+ {
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Cause": "SRVCC_FAIL",
+  "Band": "B3",
+  "Mobility": "Highway"
+ },
+ {
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Cause": "RLF",
+  "Band": "n78",
+  "Mobility": "Static"
+ },
+ {
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Cause": "HO_FAIL",
+  "Band": "n78",
+  "Mobility": "Walk"
+ }
+]

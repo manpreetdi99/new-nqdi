@@ -18,6 +18,7 @@ import ValidationTab from "@/components/ValidationTab";
 import SummaryTab from "@/components/SummaryTab";
 import HistoricTab from "@/components/HistoricTab";
 import UserManualTab from "@/components/UserManualTab";
+import DemoTab from "@/components/DemoTab";
 import { useDebouncedValue } from "@/hooks/use-debounced-value"; //καθυστερεί το fetch μεχρι να ησυχασει η επιλογη
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import { useUrlNullableStringState, useUrlStringListState, useUrlStringState } from "@/hooks/use-url-state"; //state που ζει στο URL (shareable link), με localStorage fallback
@@ -1449,7 +1450,7 @@ const Index = () => {
             </div>
           </div>
 
-          {!["queries", "query-map", "map2", "validation", "Summary", "manual"].includes(activeTab) && (
+          {!["queries", "query-map", "map2", "validation", "Summary", "manual", "demo"].includes(activeTab) && (
             <div className="flex items-center gap-2">
               {/* Edit Filters button */}
               <button
@@ -1478,7 +1479,7 @@ const Index = () => {
           )}
 
           <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-            {!["queries", "query-map", "map2", "validation", "Summary", "manual"].includes(activeTab) && (
+            {!["queries", "query-map", "map2", "validation", "Summary", "manual", "demo"].includes(activeTab) && (
               <button
                 type="button"
                 onClick={clearCallsFilters}
@@ -1503,7 +1504,7 @@ const Index = () => {
                 </motion.button>
               )}
             </AnimatePresence>
-            {!["queries", "query-map", "map2", "validation", "Summary", "manual"].includes(activeTab) && (
+            {!["queries", "query-map", "map2", "validation", "Summary", "manual", "demo"].includes(activeTab) && (
               <span className="hidden xl:inline">{filteredCallRecords.length} calls recorded</span>
             )}
           </div>
@@ -1540,6 +1541,9 @@ const Index = () => {
               </TabsTrigger>
               <TabsTrigger value="manual" className="gap-1.5 text-xs">
                 <BookOpen className="h-3.5 w-3.5 text-sky-400" /> User Manual
+              </TabsTrigger>
+              <TabsTrigger value="demo" className="gap-1.5 text-xs">
+                <Activity className="h-3.5 w-3.5 text-rose-400" /> Demo
               </TabsTrigger>
             </TabsList>
           </div>
@@ -2413,6 +2417,10 @@ const Index = () => {
 
           <TabsContent value="manual">
             <UserManualTab />
+          </TabsContent>
+
+          <TabsContent value="demo">
+            <DemoTab databases={databases} />
           </TabsContent>
         </Tabs>
       </main>

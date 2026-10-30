@@ -1,0 +1,418 @@
+[
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Stage": "RRC",
+  "SipCode": "NONE",
+  "Band": "B3"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Nokia",
+  "Stage": "PRECONDITION",
+  "SipCode": "408",
+  "Band": "B7"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "LTE",
+  "Vendor": "Nokia",
+  "Stage": "INVITE",
+  "SipCode": "480",
+  "Band": "B20"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "RINGING",
+  "SipCode": "487",
+  "Band": "n78"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Huawei",
+  "Stage": "IMS_REG",
+  "SipCode": "NONE",
+  "Band": "B20"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Stage": "PRECONDITION",
+  "SipCode": "503",
+  "Band": "B3"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Huawei",
+  "Stage": "INVITE",
+  "SipCode": "486",
+  "Band": "n78"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Stage": "RINGING",
+  "SipCode": "487",
+  "Band": "B7"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Stage": "PAGING",
+  "SipCode": "NONE",
+  "Band": "B7"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Stage": "PRECONDITION",
+  "SipCode": "580",
+  "Band": "B20"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "INVITE",
+  "SipCode": "500",
+  "Band": "B3"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Nokia",
+  "Stage": "BEARER",
+  "SipCode": "NONE",
+  "Band": "n78"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Stage": "INVITE",
+  "SipCode": "504",
+  "Band": "B7"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Nokia",
+  "Stage": "INVITE",
+  "SipCode": "603",
+  "Band": "B3"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "PRECONDITION",
+  "SipCode": "503",
+  "Band": "n78"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Stage": "INVITE",
+  "SipCode": "408",
+  "Band": "B3"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Nokia",
+  "Stage": "RINGING",
+  "SipCode": "487",
+  "Band": "B3"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "INVITE",
+  "SipCode": "480",
+  "Band": "B3"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Stage": "IMS_REG",
+  "SipCode": "NONE",
+  "Band": "B3"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Stage": "BEARER",
+  "SipCode": "NONE",
+  "Band": "B3"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Stage": "INVITE",
+  "SipCode": "486",
+  "Band": "B3"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "LTE",
+  "Vendor": "Nokia",
+  "Stage": "INVITE",
+  "SipCode": "500",
+  "Band": "B7"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "INVITE",
+  "SipCode": "603",
+  "Band": "B7"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "NR-NSA",
+  "Vendor": "Nokia",
+  "Stage": "RRC",
+  "SipCode": "NONE",
+  "Band": "B7"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "NR-NSA",
+  "Vendor": "Nokia",
+  "Stage": "PRECONDITION",
+  "SipCode": "580",
+  "Band": "B3"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "NR-NSA",
+  "Vendor": "Nokia",
+  "Stage": "INVITE",
+  "SipCode": "504",
+  "Band": "B3"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Nokia",
+  "Stage": "INVITE",
+  "SipCode": "503",
+  "Band": "B7"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "NR-NSA",
+  "Vendor": "Nokia",
+  "Stage": "PAGING",
+  "SipCode": "NONE",
+  "Band": "B3"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Stage": "RINGING",
+  "SipCode": "487",
+  "Band": "B20"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Nokia",
+  "Stage": "IMS_REG",
+  "SipCode": "NONE",
+  "Band": "B7"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Nokia",
+  "Stage": "INVITE",
+  "SipCode": "486",
+  "Band": "B7"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Stage": "RRC",
+  "SipCode": "NONE",
+  "Band": "B20"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Stage": "BEARER",
+  "SipCode": "NONE",
+  "Band": "B7"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Stage": "PRECONDITION",
+  "SipCode": "408",
+  "Band": "B20"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Stage": "PRECONDITION",
+  "SipCode": "580",
+  "Band": "B7"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Stage": "INVITE",
+  "SipCode": "480",
+  "Band": "B7"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Stage": "INVITE",
+  "SipCode": "500",
+  "Band": "B20"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Stage": "INVITE",
+  "SipCode": "504",
+  "Band": "B20"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Stage": "INVITE",
+  "SipCode": "603",
+  "Band": "B20"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "LTE",
+  "Vendor": "Huawei",
+  "Stage": "PAGING",
+  "SipCode": "NONE",
+  "Band": "B20"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Stage": "BEARER",
+  "SipCode": "NONE",
+  "Band": "B20"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Stage": "PRECONDITION",
+  "SipCode": "503",
+  "Band": "B20"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "LTE",
+  "Vendor": "Ericsson",
+  "Stage": "INVITE",
+  "SipCode": "486",
+  "Band": "B20"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "RRC",
+  "SipCode": "NONE",
+  "Band": "n78"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "IMS_REG",
+  "SipCode": "NONE",
+  "Band": "n78"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "PRECONDITION",
+  "SipCode": "408",
+  "Band": "n78"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "PRECONDITION",
+  "SipCode": "580",
+  "Band": "n78"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "INVITE",
+  "SipCode": "480",
+  "Band": "n78"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "INVITE",
+  "SipCode": "500",
+  "Band": "n78"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "INVITE",
+  "SipCode": "504",
+  "Band": "n78"
+ },
+ {
+  "Direction": "MO",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "INVITE",
+  "SipCode": "603",
+  "Band": "n78"
+ },
+ {
+  "Direction": "MT",
+  "Technology": "NR-NSA",
+  "Vendor": "Ericsson",
+  "Stage": "PAGING",
+  "SipCode": "NONE",
+  "Band": "n78"
+ }
+]

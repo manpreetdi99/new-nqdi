@@ -1,0 +1,10 @@
+# volte-drop-fail-analysis.md §4.1 — drop model
+Technology: LTE, NR-NSA
+Vendor:     Ericsson, Nokia, Huawei
+Cause:      RLF, HO_FAIL, SRVCC_FAIL, RTP_TIMEOUT, CORE_RELEASE
+Band:       B3, B7, B20, n78
+Mobility:   Static, Walk, Car, Highway
+
+IF [Technology] = "LTE" THEN [Band] <> "n78";
+IF [Cause] = "SRVCC_FAIL" THEN [Technology] = "LTE";
+IF [Mobility] = "Static" THEN [Cause] <> "HO_FAIL";

@@ -1,0 +1,18 @@
+# volte-drop-fail-analysis.md §4.2 — fail model
+# Αλλαγή έναντι του md: προστέθηκε 487 και το RINGING παίρνει μόνο 487 (CANCEL από timer, §1.4),
+# γιατί με 408/480 το RINGING δεν ξεχωρίζει από το INVITE. Το IMS_REG δεν έχει κωδικό INVITE
+# (οι 403/408/5xx του §1.4 αφορούν το REGISTER, όχι το INVITE).
+Direction:  MO, MT
+Technology: LTE, NR-NSA
+Vendor:     Ericsson, Nokia, Huawei
+Stage:      RRC, PAGING, IMS_REG, BEARER, PRECONDITION, INVITE, RINGING
+SipCode:    NONE, 408, 480, 486, 487, 500, 503, 504, 580, 603
+Band:       B3, B7, B20, n78
+
+IF [Stage] = "PAGING" THEN [Direction] = "MT";
+IF [Stage] IN {"RRC", "PAGING", "BEARER", "IMS_REG"} THEN [SipCode] = "NONE";
+IF [Stage] IN {"INVITE", "PRECONDITION", "RINGING"} THEN [SipCode] <> "NONE";
+IF [Stage] = "PRECONDITION" THEN [SipCode] IN {"580", "408", "503"};
+IF [Stage] = "RINGING" THEN [SipCode] = "487";
+IF [Stage] = "INVITE" THEN [SipCode] IN {"408", "480", "486", "500", "503", "504", "603"};
+IF [Technology] = "LTE" THEN [Band] <> "n78";

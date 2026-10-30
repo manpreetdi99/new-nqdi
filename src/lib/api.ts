@@ -52,7 +52,7 @@ const MAX_RETRIES = readNumberEnv(import.meta.env.VITE_API_RETRIES, 2);
  * Ό,τι δέχεται το fetch (άρα και `signal`, π.χ. από το react-query queryFn ({ signal })),
  * συν per-request override του timeout. 0 = καθόλου όριο.
  */
-export type RequestOptions = RequestInit & { timeoutMs?: number };
+export type RequestOptions = RequestInit & { timeoutMs?: number; retries?: number };
 
 /**
  * Transient = αξίζει retry: χαμένο/μισό δίκτυο, δικό μας timeout, ή gateway/overload
@@ -100,7 +100,8 @@ const withTimeout = (timeoutMs: number, external?: AbortSignal) => {
 
 async function requestJson<T>(path: string, options?: RequestOptions): Promise<T> {
   const endpoint = `${API_BASE_URL}${path}`;
-  const { timeoutMs = DEFAULT_TIMEOUT_MS, signal: externalSignal, ...init } = options ?? {};
+  const { timeoutMs = DEFAULT_TIMEOUT_MS, retries, signal: externalSignal, ...init } = options ?? {};
+  const maxRetries = retries != null ? retries : MAX_RETRIES;
 
   let lastError: unknown;
 
@@ -156,7 +157,7 @@ async function requestJson<T>(path: string, options?: RequestOptions): Promise<T
                 "The preview cannot reach localhost on your computer. Run the frontend locally too, or expose the Python API with a public tunnel URL.",
             });
 
-      if (attempt === MAX_RETRIES || !isRetryable(lastError)) throw lastError;
+      if (attempt === maxRetries || !isRetryable(lastError)) throw lastError;
 
       // 1s, 2s, 4s ... — δίνει χρόνο στον SQL Server να αποσυμφορηθεί πριν ξαναρωτήσουμε.
       await sleep(1000 * 2 ** attempt);
@@ -173,9 +174,9 @@ export async function fetchDatabases(): Promise<string[]> {
   return json.databases;
 }
 
-export async function fetchCollectionNames(database: string): Promise<string[]> {
+export async function fetchCollectionNames(database: string, options?: RequestOptions): Promise<string[]> {
   const params = new URLSearchParams({ database });
-  const json = await requestJson<{ collections: string[] }>(`/api/collections?${params.toString()}`);
+  const json = await requestJson<{ collections: string[] }>(`/api/collections?${params.toString()}`, options);
   return json.collections;
 }
 
@@ -984,20 +985,22 @@ export async function fetchCellInfoAllBSide(
 
 export async function fetchTracelogValues(
   database: string,
-  session_id?: string
+  session_id?: string,
+  options?: RequestOptions
 ): Promise<{ tracelogValues: TraceLogRow[] }> {
   const params = new URLSearchParams({ database });
   if (session_id) params.append("session_id", session_id);
-  return requestJson(`/api/tracelog_values?${params.toString()}`);
+  return requestJson(`/api/tracelog_values?${params.toString()}`, options);
 }
 
 export async function fetchCallContextSignal(
   database: string,
   session_id: string,
-  window_sec = 10
+  window_sec = 10,
+  options?: RequestOptions
 ): Promise<{ signal: any[] }> {
   const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
-  return requestJson(`/api/call_context_signal?${params.toString()}`);
+  return requestJson(`/api/call_context_signal?${params.toString()}`, options);
 }
 
 export async function fetchCallContextTechnology(
@@ -1283,7 +1286,8 @@ export async function fetchLteScannerMeasurement(
 export async function fetchL3Messages(
   database: string,
   session_id: string,
-  options?: { side?: "A" | "B"; technology?: string; layer?: string; before_seconds?: number; after_seconds?: number }
+  options?: { side?: "A" | "B"; technology?: string; layer?: string; before_seconds?: number; after_seconds?: number },
+  requestOptions?: RequestOptions
 ): Promise<CallL3MessagesResponse> {
   const params = new URLSearchParams({
     database,
@@ -1294,34 +1298,57 @@ export async function fetchL3Messages(
   });
   if (options?.technology) params.append("technology", options.technology);
   if (options?.layer) params.append("layer", options.layer);
-  return requestJson(`/api/l3_messages?${params.toString()}`);
+  return requestJson(`/api/l3_messages?${params.toString()}`, requestOptions);
+}
+
+export interface L3SummaryRow {
+  Technology: string | null;
+  Layer: string | null;
+  Direction: string | null;
+  SimpleMsgName: string | null;
+  cnt: number;
+  firstSeen: string | null;
+  lastSeen: string | null;
+}
+
+/** Πλήθος μηνυμάτων L3 ανά τύπο/κατεύθυνση για ένα SessionId (/api/l3_summary). */
+export async function fetchL3Summary(
+  database: string,
+  session_id: string,
+  options?: RequestOptions
+): Promise<{ l3Summary: L3SummaryRow[] }> {
+  const params = new URLSearchParams({ database, session_id });
+  return requestJson(`/api/l3_summary?${params.toString()}`, options);
 }
 
 export async function fetchGsmContextSignal(
   database: string,
   session_id: string,
-  window_sec = 10
+  window_sec = 10,
+  options?: RequestOptions
 ): Promise<{ signal: any[] }> {
   const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
-  return requestJson(`/api/gsm_context_signal?${params.toString()}`);
+  return requestJson(`/api/gsm_context_signal?${params.toString()}`, options);
 }
 
 export async function fetchCallContextSignalBSide(
   database: string,
   session_id: string,
-  window_sec = 10
+  window_sec = 10,
+  options?: RequestOptions
 ): Promise<{ signal: any[] }> {
   const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
-  return requestJson(`/api/call_context_signal_b_side?${params.toString()}`);
+  return requestJson(`/api/call_context_signal_b_side?${params.toString()}`, options);
 }
 
 export async function fetchGsmContextSignalBSide(
   database: string,
   session_id: string,
-  window_sec = 10
+  window_sec = 10,
+  options?: RequestOptions
 ): Promise<{ signal: any[] }> {
   const params = new URLSearchParams({ database, session_id, window_sec: String(window_sec) });
-  return requestJson(`/api/gsm_context_signal_b_side?${params.toString()}`);
+  return requestJson(`/api/gsm_context_signal_b_side?${params.toString()}`, options);
 }
 
 // 5G NR SS-RSRP/SS-RSRQ γύρω από την κλήση (FactNR5GRadio) — το NR αντίστοιχο των
@@ -1940,9 +1967,9 @@ export interface CallAnalysisResponse {
   b: CallAnalysisSide | null;
 }
 
-export async function fetchCallAnalysis(database: string, session_id: string): Promise<CallAnalysisResponse> {
+export async function fetchCallAnalysis(database: string, session_id: string, options?: RequestOptions): Promise<CallAnalysisResponse> {
   const params = new URLSearchParams({ database, session_id });
-  return requestJson(`/api/call_analysis?${params.toString()}`);
+  return requestJson(`/api/call_analysis?${params.toString()}`, options);
 }
 
 /** FactSpeech ανά δείγμα· `Side` = η πλευρά που άκουσε το δείγμα (SessionId). */
