@@ -6,6 +6,8 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import Index from "./pages/Index.tsx";
 import DemoCharts from "./pages/DemoCharts.tsx";
 import NotFound from "./pages/NotFound.tsx";
+import { AuthProvider, useAuth } from "@/components/auth/AuthProvider";
+import LoginScreen from "@/components/auth/LoginScreen";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -21,19 +23,35 @@ const queryClient = new QueryClient({
   },
 });
 
+// Χωρίς έγκυρο session δεν φορτώνει καμία σελίδα της εφαρμογής — μόνο login / αίτημα πρόσβασης.
+const AuthGate = () => {
+  const { status } = useAuth();
+
+  if (status === "checking") {
+    return <div className="flex min-h-screen items-center justify-center text-sm text-muted-foreground">Loading…</div>;
+  }
+  if (status === "signed-out") return <LoginScreen />;
+
+  return (
+    <Routes>
+      <Route path="/" element={<Index />} />
+      <Route path="/demo-charts" element={<DemoCharts />} />
+      {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
+      <Route path="*" element={<NotFound />} />
+    </Routes>
+  );
+};
+
 const App = () => (
   <QueryClientProvider client={queryClient}>
     <TooltipProvider>
       <Toaster />
       <Sonner />
-      <BrowserRouter>
-        <Routes>
-          <Route path="/" element={<Index />} />
-          <Route path="/demo-charts" element={<DemoCharts />} />
-          {/* ADD ALL CUSTOM ROUTES ABOVE THE CATCH-ALL "*" ROUTE */}
-          <Route path="*" element={<NotFound />} />
-        </Routes>
-      </BrowserRouter>
+      <AuthProvider>
+        <BrowserRouter>
+          <AuthGate />
+        </BrowserRouter>
+      </AuthProvider>
     </TooltipProvider>
   </QueryClientProvider>
 );

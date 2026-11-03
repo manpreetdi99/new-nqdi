@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { MapPin, Filter, Loader2, RefreshCw, X } from "lucide-react";
 
+import { authHeaders } from "@/lib/api";
+
 // We load Leaflet lazily via CDN to avoid SSR issues.
 // The map is rendered into a raw div, so no react-leaflet types needed.
 declare global {
@@ -126,7 +128,7 @@ export default function AntennasMap() {
       if (selectedStatus) params.set("status", selectedStatus);
 
       const url = `http://localhost:8000/api/antennas${params.toString() ? "?" + params.toString() : ""}`;
-      const res = await fetch(url);
+      const res = await fetch(url, { headers: authHeaders() });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
       const json = await res.json();
       allDataRef.current = json.antennas as AntennaRow[];

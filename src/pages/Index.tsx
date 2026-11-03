@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useRef, useCallback, Fragment } from "react";
 import { useQueries } from "@tanstack/react-query";
 import { motion, AnimatePresence } from "framer-motion";
-import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp, History, Search, BookOpen } from "lucide-react";
+import { Activity, BarChart3, Phone, Database, MapPin, ArrowLeft, ChevronRight, ChevronLeft, SlidersHorizontal, X, Wifi, ArrowUp, History, Search, BookOpen, Users, LogOut } from "lucide-react";
 import { toast } from "@/hooks/use-toast";
 import QueryEditor from "@/components/QueryEditor";
 import ResultsTable from "@/components/ResultsTable";
@@ -19,6 +19,8 @@ import SummaryTab from "@/components/SummaryTab";
 import HistoricTab from "@/components/HistoricTab";
 import UserManualTab from "@/components/UserManualTab";
 import DemoTab from "@/components/DemoTab";
+import UserManagementTab from "@/components/UserManagementTab";
+import { useAuth } from "@/components/auth/AuthProvider";
 import { useDebouncedValue } from "@/hooks/use-debounced-value"; //καθυστερεί το fetch μεχρι να ησυχασει η επιλογη
 import { useLocalStorage } from "@/hooks/use-local-storage"; //βιβλιοθηκη για αποθηκευση τιμων στο local storage του browser
 import { useUrlNullableStringState, useUrlStringListState, useUrlStringState } from "@/hooks/use-url-state"; //state που ζει στο URL (shareable link), με localStorage fallback
@@ -282,7 +284,10 @@ const formatGroupDeviceCount = (callDeviceCount: number, dataDeviceCount: number
   return parts.join(" + ");
 };
 
+const ADMIN_ONLY_TABS: readonly string[] = ["demo", "users"];
+
 const Index = () => {
+  const { user: sessionUser, signOut } = useAuth();
   const [databases, setDatabases] = useState<string[]>([]);
   const [selectedDatabase, setSelectedDatabase] = useUrlStringState<string>("db", "", { storageKey: "perf-insights-selected-db" });
   const [collectionNames, setCollectionNames] = useState<string[]>([]);
@@ -339,6 +344,10 @@ const Index = () => {
     [callRecords, selectedCallId]
   );
   const [activeTab, setActiveTab] = useUrlStringState<string>("tab", "queries", { storageKey: "perf-insights-active-tab" });
+  // Τα tabs Demo/Users είναι μόνο για admin· ένας απλός χρήστης που έχει αποθηκευμένο/URL tab=demo δεν πρέπει να μένει σε κενή σελίδα.
+  useEffect(() => {
+    if (!sessionUser?.is_admin && ADMIN_ONLY_TABS.includes(activeTab)) setActiveTab("queries");
+  }, [sessionUser?.is_admin, activeTab, setActiveTab]);
 
   // Το ύψος του sticky header δημοσιεύεται ως CSS variable, ώστε ό,τι άλλο κολλάει στην
   // κορυφή (π.χ. το καρφιτσωμένο διάγραμμα σήματος στο Call Detail) να ξεκινά ακριβώς από
@@ -1450,7 +1459,7 @@ const Index = () => {
             </div>
           </div>
 
-          {!["queries", "query-map", "map2", "validation", "Summary", "manual", "demo"].includes(activeTab) && (
+          {!["queries", "query-map", "map2", "validation", "Summary", "manual", "demo", "users"].includes(activeTab) && (
             <div className="flex items-center gap-2">
               {/* Edit Filters button */}
               <button
@@ -1479,7 +1488,19 @@ const Index = () => {
           )}
 
           <div className="flex shrink-0 items-center gap-2 text-xs text-muted-foreground">
-            {!["queries", "query-map", "map2", "validation", "Summary", "manual", "demo"].includes(activeTab) && (
+            <span className="hidden sm:inline" title={sessionUser?.is_admin ? "Administrator" : undefined}>
+              {sessionUser?.username}
+            </span>
+            <button
+              type="button"
+              onClick={() => signOut()}
+              className="flex items-center gap-1.5 px-2 py-1 rounded border border-border bg-muted hover:bg-muted/70 text-xs"
+              aria-label="Sign out"
+            >
+              <LogOut className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Sign out</span>
+            </button>
+            {!["queries", "query-map", "map2", "validation", "Summary", "manual", "demo", "users"].includes(activeTab) && (
               <button
                 type="button"
                 onClick={clearCallsFilters}
@@ -1504,7 +1525,7 @@ const Index = () => {
                 </motion.button>
               )}
             </AnimatePresence>
-            {!["queries", "query-map", "map2", "validation", "Summary", "manual", "demo"].includes(activeTab) && (
+            {!["queries", "query-map", "map2", "validation", "Summary", "manual", "demo", "users"].includes(activeTab) && (
               <span className="hidden xl:inline">{filteredCallRecords.length} calls recorded</span>
             )}
           </div>
@@ -1542,9 +1563,16 @@ const Index = () => {
               <TabsTrigger value="manual" className="gap-1.5 text-xs">
                 <BookOpen className="h-3.5 w-3.5 text-sky-400" /> User Manual
               </TabsTrigger>
-              <TabsTrigger value="demo" className="gap-1.5 text-xs">
-                <Activity className="h-3.5 w-3.5 text-rose-400" /> Demo
-              </TabsTrigger>
+              {sessionUser?.is_admin && (
+                <TabsTrigger value="demo" className="gap-1.5 text-xs">
+                  <Activity className="h-3.5 w-3.5 text-rose-400" /> Demo
+                </TabsTrigger>
+              )}
+              {sessionUser?.is_admin && (
+                <TabsTrigger value="users" className="gap-1.5 text-xs">
+                  <Users className="h-3.5 w-3.5 text-violet-400" /> Users
+                </TabsTrigger>
+              )}
             </TabsList>
           </div>
 
@@ -2419,9 +2447,17 @@ const Index = () => {
             <UserManualTab />
           </TabsContent>
 
-          <TabsContent value="demo">
-            <DemoTab databases={databases} />
-          </TabsContent>
+          {sessionUser?.is_admin && (
+            <TabsContent value="demo">
+              <DemoTab databases={databases} />
+            </TabsContent>
+          )}
+
+          {sessionUser?.is_admin && (
+            <TabsContent value="users">
+              <UserManagementTab />
+            </TabsContent>
+          )}
         </Tabs>
       </main>
     </div>

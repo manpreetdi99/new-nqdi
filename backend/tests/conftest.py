@@ -23,4 +23,9 @@ def db_name():
 def client():
     from fastapi.testclient import TestClient
     from app import app
-    return TestClient(app)
+    from auth import AuthUser, require_user
+
+    # Τα DB tests ελέγχουν τα data endpoints, όχι το login: παρακάμπτουμε μόνο το session check.
+    app.dependency_overrides[require_user] = lambda: AuthUser(id=0, username="pytest", is_admin=True)
+    yield TestClient(app)
+    app.dependency_overrides.clear()

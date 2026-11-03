@@ -3,6 +3,29 @@ import type { BenchmarkResult } from "@/types/benchmark";
 // Βάλε εδώ το public (local) tunnel URL σου, π.χ. "https://my-tunnel.ngrok.io" ή χρησιμοποίησε το environment variable
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://192.168.10.44:8000";
 
+const AUTH_TOKEN_KEY = "nqdi-auth-token";
+
+// sessionStorage (όχι localStorage): το token φεύγει όταν κλείσει το tab και δεν μοιράζεται μεταξύ tabs/παραθύρων.
+export const getAuthToken = (): string | null => sessionStorage.getItem(AUTH_TOKEN_KEY);
+
+export const setAuthToken = (token: string | null): void => {
+  if (token) sessionStorage.setItem(AUTH_TOKEN_KEY, token);
+  else sessionStorage.removeItem(AUTH_TOKEN_KEY);
+};
+
+/** Headers με το Bearer token — για κλήσεις που δεν περνούν από το requestJson (π.χ. direct fetch). */
+export const authHeaders = (): Record<string, string> => {
+  const token = getAuthToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
+};
+
+let unauthorizedHandler: (() => void) | null = null;
+
+/** Καλείται όταν το backend απαντήσει 401 ενώ υπήρχε token (έληξε το session) — το AuthProvider κάνει sign-out. */
+export const setUnauthorizedHandler = (handler: (() => void) | null): void => {
+  unauthorizedHandler = handler;
+};
+
 export class ApiClientError extends Error {
   code: string;
   status?: number;
@@ -112,9 +135,14 @@ async function requestJson<T>(path: string, options?: RequestOptions): Promise<T
     const guard = withTimeout(timeoutMs, externalSignal ?? undefined);
 
     try {
-      const res = await fetch(endpoint, { ...init, signal: guard.signal });
+      const headers = new Headers(init.headers);
+      const token = getAuthToken();
+      if (token && !headers.has("Authorization")) headers.set("Authorization", `Bearer ${token}`);
+
+      const res = await fetch(endpoint, { ...init, headers, signal: guard.signal });
 
       if (!res.ok) {
+        if (res.status === 401 && token) unauthorizedHandler?.();
         let serverMessage = `Request failed with status ${res.status}`;
 
         try {
@@ -2649,4 +2677,86 @@ export async function runMapGenerator(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ database, collection, gpx_path, max_workers }),
   });
+}
+
+export type UserStatus = "pending" | "active" | "rejected";
+
+export interface AppUser {
+  id: number;
+  username: string;
+  full_name: string | null;
+  email: string | null;
+  created_at: string | null;
+  is_admin: boolean;
+  status: UserStatus;
+}
+
+export interface SessionUser {
+  id: number;
+  username: string;
+  is_admin: boolean;
+}
+
+const jsonPost = (body?: unknown): RequestOptions => ({
+  method: "POST",
+  headers: { "Content-Type": "application/json" },
+  body: body === undefined ? undefined : JSON.stringify(body),
+  retries: 0,
+});
+
+export function loginRequest(username: string, password: string): Promise<{ token: string; user: SessionUser }> {
+  return requestJson("/api/auth/login", jsonPost({ username, password }));
+}
+
+export function registerRequest(user: NewAppUser): Promise<{ status: "pending" }> {
+  return requestJson("/api/auth/register", jsonPost(user));
+}
+
+export function logoutRequest(token: string): Promise<{ ok: boolean }> {
+  return requestJson("/api/auth/logout", { ...jsonPost(), headers: { Authorization: `Bearer ${token}` } });
+}
+
+export function fetchMe(): Promise<SessionUser> {
+  return requestJson<SessionUser>("/api/auth/me", { retries: 0 });
+}
+
+export function pingSession(): Promise<{ ok: boolean }> {
+  return requestJson("/api/auth/ping", jsonPost());
+}
+
+export function approveUser(id: number): Promise<AppUser> {
+  return requestJson<AppUser>(`/api/users/${id}/approve`, jsonPost());
+}
+
+export function resetUserPassword(id: number, password: string): Promise<{ updated: number }> {
+  return requestJson(`/api/users/${id}/password`, jsonPost({ password }));
+}
+
+export function rejectUser(id: number): Promise<AppUser> {
+  return requestJson<AppUser>(`/api/users/${id}/reject`, jsonPost());
+}
+
+export interface NewAppUser {
+  username: string;
+  password: string;
+  full_name?: string;
+  email?: string;
+}
+
+export async function fetchUsers(): Promise<AppUser[]> {
+  const json = await requestJson<{ users: AppUser[] }>("/api/users");
+  return json.users;
+}
+
+export function createUser(user: NewAppUser): Promise<AppUser> {
+  return requestJson<AppUser>("/api/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(user),
+    retries: 0,
+  });
+}
+
+export function deleteUser(id: number): Promise<{ deleted: number }> {
+  return requestJson<{ deleted: number }>(`/api/users/${id}`, { method: "DELETE", retries: 0 });
 }

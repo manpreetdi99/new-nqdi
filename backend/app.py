@@ -22,11 +22,14 @@
   historic_pages   -> σελίδα Historic: GREECE MAP / GRADES / VOICE M->F, M->M / RADIO TECH-CODECS
   historic_data_pages -> σελίδα Historic: DATA (Browsing … Video), DATA/NR maps, NR tech, scanner
   historic_comparison -> σελίδα Historic: Comparison Voice / Data / GRADES (χρονοσειρές ανά Scope)
+  auth             -> login / αίτημα εγγραφής / logout (δημόσιο· όλα τα υπόλοιπα απαιτούν session)
+  users            -> σελίδα User Management (λίστα / προσθήκη / διαγραφή χρηστών)
 """
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.middleware.gzip import GZipMiddleware
 
+from auth import require_user
 from routers import (
     antennas,
     benchmark,
@@ -47,8 +50,10 @@ from routers import (
     historic_comparison,
     historic_data_pages,
     historic_pages,
+    users,
     validation,
 )
+from routers import auth as auth_router
 
 app = FastAPI()
 
@@ -87,5 +92,10 @@ for _module in (
     historic_pages,
     historic_data_pages,
     historic_comparison,
+    users,
 ):
-    app.include_router(_module.router)
+    # Όλα τα data endpoints απαιτούν έγκυρο (μη idle) session — το users.py απαιτεί επιπλέον admin.
+    app.include_router(_module.router, dependencies=[Depends(require_user)])
+
+# Μόνο το auth router είναι δημόσιο (login / register).
+app.include_router(auth_router.router)

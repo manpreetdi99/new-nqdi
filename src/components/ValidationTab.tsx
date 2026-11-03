@@ -1,6 +1,8 @@
 import { useState, useRef, useEffect } from "react";
 import { Play, CheckCircle2, Loader2, Terminal, Map, ArrowLeft } from "lucide-react";
 
+import { authHeaders } from "@/lib/api";
+
 interface LogEntry {
   time: string;
   message: string;
@@ -106,7 +108,7 @@ export default function ValidationTab({
     try {
       const res = await fetch(`${API_BASE_URL}/api/run_map`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...authHeaders() },
         body: JSON.stringify({
           database: selectedDb,
           collection: selectedCollection,
