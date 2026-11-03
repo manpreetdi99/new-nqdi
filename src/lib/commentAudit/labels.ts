@@ -25,6 +25,7 @@ export const AUDIT_LABELS = [
   "FAKE_UE_STUCK_NO_CM",
   "FAKE_UE_STUCK_NO_PAGING_RESPONSE",
   "USER_SIDE",
+  "TAU",
 ] as const;
 
 export type AuditLabel = (typeof AUDIT_LABELS)[number];
@@ -57,6 +58,7 @@ export const LABEL_TITLES: Record<AuditLabel, string> = {
   FAKE_UE_STUCK_NO_CM: "FAKE UE STUCK (NO CM SERVICE REQUEST)",
   FAKE_UE_STUCK_NO_PAGING_RESPONSE: "FAKE UE STUCK (NO RESPONSE AFTER PAGING)",
   USER_SIDE: "USER SIDE",
+  TAU: "TAU",
 };
 
 /**
@@ -117,6 +119,8 @@ export function parseComment(comment: string | null | undefined): ParsedComment 
   if (!raw) return null;
   const text = raw.toUpperCase().replace(/_/g, " ");
   const side = parseSide(text);
+  // Κανόνας χρήστη: «TAU» = Tracking Area Update Request σε καλό ράδιο (και «CORE NETWORK (TAU)»).
+  if (/\bTAU\b|TRACKING AREA UPDATE/.test(text)) return { raw, label: "TAU", side };
 
   if (text.includes("FAKE")) return { raw, label: parseFake(text), side };
   if (text.includes("CORE")) return { raw, label: parseCore(text), side };

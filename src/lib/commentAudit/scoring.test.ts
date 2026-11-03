@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { FEATURE_KEYS, type FeatureKey, type FeatureVector } from "./evidence";
 import { parseComment } from "./labels";
-import { auditComments, collaborativeScores, cosine, priorScore, verdictFor, type AuditItem } from "./scoring";
+import { AUDIT_LABELS, type AuditLabel } from "./labels";
+import { auditComments, collaborativeScores, cosine, labelMix, priorScore, toPercentages, verdictFor, type AuditItem, type LabelScores } from "./scoring";
 
 const features = (set: Partial<Record<FeatureKey, number>>): FeatureVector =>
   Object.fromEntries(FEATURE_KEYS.map((k) => [k, set[k] ?? 0])) as Record<FeatureKey, number>;
@@ -183,5 +184,42 @@ describe("auditComments", () => {
     const res = auditComments([item("a", "LC LTE", lcLte)]);
     expect(res[0].collaborative).toBeNull();
     expect(res[0].verdict).toBe("correct");
+  });
+});
+
+const scores = (set: Partial<Record<AuditLabel, number>>): LabelScores =>
+  Object.fromEntries(AUDIT_LABELS.map((l) => [l, set[l] ?? 0])) as Record<AuditLabel, number>;
+
+describe("label mix (percentages)", () => {
+  it("rounds to integers that always add up to 100", () => {
+    expect(toPercentages([1, 1, 1])).toEqual([34, 33, 33]);
+    expect(toPercentages([0.5, 0.5])).toEqual([50, 50]);
+    expect(toPercentages([0, 0])).toEqual([0, 0]);
+  });
+
+  it("splits between close causes and drops the weak ones", () => {
+    const hybrid = scores({ FAKE_UE_STUCK_UL_DISCONNECT: 0.6, LC_LTE: 0.6, LQ_LTE: 0.2 });
+    const mix = labelMix(hybrid, ["FAKE_UE_STUCK_UL_DISCONNECT", "LC_LTE", "LQ_LTE"], "LC_LTE", "correct");
+    expect(mix).toEqual([
+      { label: "FAKE_UE_STUCK_UL_DISCONNECT", pct: 50 },
+      { label: "LC_LTE", pct: 50 },
+    ]);
+  });
+
+  it("always shows the user label on partial, even below 50% of the top", () => {
+    const hybrid = scores({ CORE_SIP_5XX: 0.8, LC_GSM: 0.2 });
+    const mix = labelMix(hybrid, ["CORE_SIP_5XX", "LC_GSM"], "LC_GSM", "partial");
+    expect(mix).toEqual([{ label: "CORE_SIP_5XX", pct: 80 }, { label: "LC_GSM", pct: 20 }]);
+  });
+
+  it("is empty when there is not enough evidence", () => {
+    expect(labelMix(scores({ LC_LTE: 0.1 }), ["LC_LTE"], "LC_LTE", "insufficient")).toEqual([]);
+  });
+
+  it("is attached to every audit score and sums to 100", () => {
+    for (const s of auditComments(dataset())) {
+      if (s.mix.length) expect(s.mix.reduce((t, m) => t + m.pct, 0)).toBe(100);
+      if (s.rule) expect(s.mix).toEqual([{ label: s.topLabel, pct: 100 }]);
+    }
   });
 });

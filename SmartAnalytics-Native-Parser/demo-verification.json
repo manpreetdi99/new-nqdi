@@ -1,0 +1,86 @@
+{
+  "database": "DEMO",
+  "files": {
+    "150": {
+      "counts": {
+        "FileList": 1,
+        "FactFile": 1,
+        "Sessions": 22,
+        "FactSession": 22,
+        "FactTest": 149,
+        "Position": 1454,
+        "FactPosition": 1454,
+        "FactLTERadio": 2286,
+        "FactLTENeighbors": 15305,
+        "FactNR5GRadio": 3997,
+        "FactIPThroughput": 4236,
+        "LTEMeasurementReport": 2286
+      },
+      "file": [
+        [
+          "2026-09-29-15-18-50-6454-2303-1462-4917-S.mf",
+          "REA_PARSER_TEST_20261020",
+          0
+        ]
+      ],
+      "invalid_sessions": 22,
+      "orphan_tests": 0,
+      "orphan_positions": 0,
+      "orphan_neighbors": 0
+    },
+    "151": {
+      "counts": {
+        "FileList": 1,
+        "FactFile": 1,
+        "Sessions": 22,
+        "FactSession": 22,
+        "FactTest": 149,
+        "Position": 1444,
+        "FactPosition": 1444,
+        "FactLTERadio": 3206,
+        "FactLTENeighbors": 23603,
+        "FactNR5GRadio": 2077,
+        "FactIPThroughput": 4240,
+        "LTEMeasurementReport": 3206
+      },
+      "file": [
+        [
+          "2026-09-29-15-18-50-6454-2303-1462-6631-S.mf",
+          "REA_PARSER_TEST_20261020",
+          0
+        ]
+      ],
+      "invalid_sessions": 22,
+      "orphan_tests": 0,
+      "orphan_positions": 0,
+      "orphan_neighbors": 0
+    },
+    "152": {
+      "counts": {
+        "FileList": 1,
+        "FactFile": 1,
+        "Sessions": 22,
+        "FactSession": 22,
+        "FactTest": 149,
+        "Position": 1457,
+        "FactPosition": 1457,
+        "FactLTERadio": 3112,
+        "FactLTENeighbors": 20223,
+        "FactNR5GRadio": 2001,
+        "FactIPThroughput": 4238,
+        "LTEMeasurementReport": 3112
+      },
+      "file": [
+        [
+          "2026-09-29-15-18-50-6454-2303-1462-4966-S.mf",
+          "REA_PARSER_TEST_20261020",
+          0
+        ]
+      ],
+      "invalid_sessions": 22,
+      "orphan_tests": 0,
+      "orphan_positions": 0,
+      "orphan_neighbors": 0
+    }
+  }
+}

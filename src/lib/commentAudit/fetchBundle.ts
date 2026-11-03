@@ -3,6 +3,7 @@
  * Όλα τα requests τρέχουν παράλληλα· ένα endpoint που αποτυγχάνει δίνει κενά δεδομένα
  * (και μετράει στο `failedSources`), ώστε μία κλήση να μην παγώνει όλο το audit.
  */
+import { fetchScannerBundle } from "./scannerBundle";
 import {
   fetchCallAnalysis,
   fetchCallContextSignal,
@@ -35,8 +36,8 @@ const DRB_AFTER_SEC = 2;
 type L3Page = Pick<CallL3MessagesResponse, "callWindow" | "l3Messages">;
 
 /**
- * Για κάθε πλευρά: τα LTE RRC μηνύματα (DCCH-RRCConnectionReconfiguration με drb-ToReleaseList)
- * και τα SIP (για το «IMS SIP ACK: Request» από το οποίο μετράμε τη σειρά των Reconfiguration).
+ * Για κάθε πλευρά: τα LTE και NR RRC μηνύματα (drb-ToReleaseList σε DCCH-RRCConnectionReconfiguration
+ * ή σε NR IE-RadioBearerConfig) και τα SIP (ACK και BYE, από τα οποία μετράμε τη σειρά των Reconfiguration).
  */
 async function fetchDrbReleases(database: string, sessionId: string, safe: Safe): Promise<DrbReleaseHit[]> {
   const page = (side: "A" | "B", layer: string) =>
@@ -47,8 +48,13 @@ async function fetchDrbReleases(database: string, sessionId: string, safe: Safe)
     );
   const sides = await Promise.all(
     (["A", "B"] as const).map(async (side): Promise<SideRrcMessages> => {
-      const [rrc, sip] = await Promise.all([page(side, "LTE-RRC"), page(side, "SIP")]);
-      return { side, messages: rrc.l3Messages ?? [], sipMessages: sip.l3Messages ?? [], callEnd: rrc.callWindow?.CallEnd as string | undefined };
+      const [rrc, nr, sip] = await Promise.all([page(side, "LTE-RRC"), page(side, "5GNR-RRC"), page(side, "SIP")]);
+      return {
+        side,
+        messages: [...(rrc.l3Messages ?? []), ...(nr.l3Messages ?? [])],
+        sipMessages: sip.l3Messages ?? [],
+        callEnd: rrc.callWindow?.CallEnd as string | undefined,
+      };
     }),
   );
   return drbReleasesForCall(sides);
@@ -67,7 +73,7 @@ export async function fetchCallEvidence(database: string, sessionId: string, con
       return fallback;
     });
 
-  const [analysis, lteA, lteB, gsmA, gsmB, trace, l3A] = await Promise.all([
+  const [analysis, lteA, lteB, gsmA, gsmB, trace, l3A, scannerResult] = await Promise.all([
     safe("call_analysis", fetchCallAnalysis(database, sessionId, OPTIONS), null),
     safe("lte A", fetchCallContextSignal(database, sessionId, WINDOW_SEC, OPTIONS), { signal: [] }),
     safe("lte B", fetchCallContextSignalBSide(database, sessionId, WINDOW_SEC, OPTIONS), { signal: [] }),
@@ -75,7 +81,9 @@ export async function fetchCallEvidence(database: string, sessionId: string, con
     safe("gsm B", fetchGsmContextSignalBSide(database, sessionId, WINDOW_SEC, OPTIONS), { signal: [] }),
     safe("tracelog", fetchTracelogValues(database, sessionId, OPTIONS), { tracelogValues: [] }),
     safe("l3 A", fetchL3Summary(database, sessionId, OPTIONS), { l3Summary: [] }),
+    fetchScannerBundle(database, sessionId),
   ]);
+  failed.push(...scannerResult.failed);
 
   const analysisA = (analysis?.a ?? null) as AnalysisSide | null;
   const analysisB = (analysis?.b ?? null) as AnalysisSide | null;
@@ -98,6 +106,7 @@ export async function fetchCallEvidence(database: string, sessionId: string, con
       l3B: l3B.l3Summary ?? [],
       drbReleases,
       isLastCallOfFile: context.isLastCallOfFile ?? false,
+      scanner: scannerResult.scanner,
     },
     failedSources: failed,
   };

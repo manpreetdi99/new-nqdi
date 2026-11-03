@@ -1,9 +1,14 @@
 import { Fragment, useMemo, useState } from "react";
 import type { AllCallsRow } from "@/lib/api";
+import { callDetailUrl } from "@/lib/commentAudit/callDetailUrl";
 import type { CallEvidence, CallEvidenceBundle } from "@/lib/commentAudit/evidence";
 import { LABEL_TITLES, type AuditLabel, type ParsedComment } from "@/lib/commentAudit/labels";
-import { narrativeText, type Narrative } from "@/lib/commentAudit/narrative";
-import type { AuditScore, Verdict } from "@/lib/commentAudit/scoring";
+import { blendMix, formatBlend, formatWeights } from "@/lib/commentAudit/blend";
+import { factText, narrativeText, type Narrative } from "@/lib/commentAudit/narrative";
+import { OVERRIDABLE_VERDICTS } from "@/lib/commentAudit/overrides";
+import type { AuditScore, LabelShare, Verdict } from "@/lib/commentAudit/scoring";
+import LabelOverrideSelect from "./LabelOverrideSelect";
+import { nextSort, sortRows, type Sort, type SortKey } from "./commentAuditSort";
 
 export interface AuditRow {
   row: AllCallsRow;
@@ -16,7 +21,18 @@ export interface AuditRow {
   narrative: Narrative;
 }
 
-type Props = { results: readonly AuditRow[] };
+type Props = {
+  results: readonly AuditRow[];
+  /** Βάση των κλήσεων, για το link προς το Call Detail. */
+  database: string;
+  /** SessionId → αιτία που διάλεξε ο χρήστης ότι υπερισχύει (μόνο για μερικώς/λάθος). */
+  overrides: Readonly<Record<string, AuditLabel>>;
+  onOverride: (sessionId: string, label: AuditLabel | null) => void;
+  /** SessionId → ποσοστά αιτιών του Historic, για το «Κατά τα δεδομένα». */
+  historicMix: ReadonlyMap<string, readonly LabelShare[]>;
+  /** Βάρος του Historic στη μπάρα (0..1)· το Standard παίρνει το υπόλοιπο. */
+  historicWeight: number;
+};
 
 const VERDICT_TEXT: Record<Verdict, string> = {
   correct: "Σωστό",
@@ -36,8 +52,8 @@ const VERDICT_CLASS: Record<Verdict, string> = {
   no_comment: "bg-muted/50 text-muted-foreground border-border",
 };
 
-/** "drb" = μόνο οι κλήσεις όπου εφαρμόστηκε ο κανόνας DRB 3. */
-type VerdictFilter = Verdict | "all" | "drb";
+/** "drb" = μόνο οι κλήσεις όπου εφαρμόστηκε ο κανόνας DRB 3· "manual" = με επιλογή χρήστη. */
+type VerdictFilter = Verdict | "all" | "drb" | "manual";
 
 interface LabelSummary {
   label: AuditLabel;
@@ -80,15 +96,39 @@ function gradeClass(grade: number | null) {
   return "text-red-400";
 }
 
-export default function CommentAuditResults({ results }: Props) {
+export default function CommentAuditResults({ results, database, overrides, onOverride, historicMix, historicWeight }: Props) {
   const [filter, setFilter] = useState<VerdictFilter>("all");
   const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
+  const [sort, setSort] = useState<Sort | null>(null);
 
   const byLabel = useMemo(() => summarizeByLabel(results), [results]);
   const auditable = results.filter((r) => r.score.verdict !== "not_auditable" && r.score.verdict !== "insufficient" && r.score.verdict !== "no_comment");
   const agreement = auditable.length ? Math.round((100 * auditable.filter((r) => r.score.verdict === "correct").length) / auditable.length) : null;
   const drbRows = results.filter((r) => r.score.topLabel === "CORE_DRB_RELEASE" && r.score.rule);
-  const visible = filter === "all" ? results : filter === "drb" ? drbRows : results.filter((r) => r.score.verdict === filter);
+  const overrideOf = (r: AuditRow) => (OVERRIDABLE_VERDICTS.has(r.score.verdict) ? overrides[String(r.row.SessionId)] ?? null : null);
+  const manualRows = results.filter((r) => overrideOf(r));
+  const filtered =
+    filter === "all" ? results
+    : filter === "drb" ? drbRows
+    : filter === "manual" ? manualRows
+    : results.filter((r) => r.score.verdict === filter);
+  const visible = sortRows(filtered, sort);
+  const sortHeader = (key: SortKey, title: string, align: "left" | "right") => {
+    const active = sort?.key === key ? sort.dir : null;
+    return (
+      <th className={`px-2 py-1.5 text-${align}`} aria-sort={active === "asc" ? "ascending" : active === "desc" ? "descending" : "none"}>
+        <button
+          type="button"
+          onClick={() => setSort((s) => nextSort(s, key))}
+          title="Ταξινόμηση: φθίνουσα → αύξουσα → χωρίς"
+          className={`inline-flex items-center gap-1 hover:text-primary ${active ? "text-primary" : ""}`}
+        >
+          {title}
+          <span aria-hidden="true">{active === "desc" ? "▼" : active === "asc" ? "▲" : "↕"}</span>
+        </button>
+      </th>
+    );
+  };
 
   const toggle = (id: string) =>
     setExpanded((prev) => {
@@ -126,6 +166,16 @@ export default function CommentAuditResults({ results }: Props) {
         >
           <div>Κανόνας DRB</div>
           <div className="text-xl font-bold">{drbRows.length}</div>
+        </button>
+        <button
+          type="button"
+          onClick={() => setFilter(filter === "manual" ? "all" : "manual")}
+          aria-pressed={filter === "manual"}
+          title="Κλήσεις μερικώς/λάθος όπου διάλεξες εσύ ποια αιτία υπερισχύει"
+          className={`rounded-md border px-3 py-2 text-left transition-colors border-primary/40 bg-primary/10 text-primary ${filter === "manual" ? "ring-2 ring-primary" : "hover:brightness-125"}`}
+        >
+          <div>Επιλογή χρήστη</div>
+          <div className="text-xl font-bold">{manualRows.length}</div>
         </button>
       </div>
 
@@ -169,9 +219,10 @@ export default function CommentAuditResults({ results }: Props) {
               <th className="px-2 py-1.5 text-left">A-side Location</th>
               <th className="px-2 py-1.5 text-left">Status</th>
               <th className="px-2 py-1.5 text-left">Σχόλιο χρήστη</th>
-              <th className="px-2 py-1.5 text-right">Βαθμός</th>
-              <th className="px-2 py-1.5 text-left">Ετυμηγορία</th>
+              {sortHeader("grade", "Βαθμός", "right")}
+              {sortHeader("verdict", "Ετυμηγορία", "left")}
               <th className="px-2 py-1.5 text-left">Κατά τα δεδομένα</th>
+              <th className="px-2 py-1.5 text-left">Υπερισχύει</th>
               <th className="px-2 py-1.5 text-left">Περίληψη</th>
             </tr>
           </thead>
@@ -179,11 +230,25 @@ export default function CommentAuditResults({ results }: Props) {
             {visible.map((r) => {
               const id = String(r.row.SessionId);
               const isOpen = expanded.has(id);
-              const text = narrativeText(r.narrative);
+              const override = overrideOf(r);
+              const blend = blendMix(r.score.mix, historicMix.get(id) ?? null, historicWeight);
+              const blendText = blend.length ? `Κατά τα δεδομένα (${formatWeights(historicMix.has(id) ? historicWeight : 0)}): ${formatBlend(blend)}.` : null;
+              const base = narrativeText({ ...r.narrative, mix: blendText });
+              const text = override ? `${base} Επιλογή χρήστη: υπερισχύει «${LABEL_TITLES[override]}».` : base;
               return (
                 <Fragment key={id}>
                   <tr className="border-t border-border/60 align-top">
-                    <td className="px-2 py-1.5 font-mono">{id}</td>
+                    <td className="px-2 py-1.5 font-mono">
+                      <a
+                        href={callDetailUrl(database, id, r.row.CollectionName, window.location.pathname)}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        title="Άνοιγμα της κλήσης στο Call Detail σε νέο tab"
+                        className="text-primary hover:underline"
+                      >
+                        {id}
+                      </a>
+                    </td>
                     <td className="px-2 py-1.5">{r.row.CollectionName || "—"}</td>
                     <td className="px-2 py-1.5">{r.row.Location || "—"}</td>
                     <td className="px-2 py-1.5">{r.row.status}</td>
@@ -192,7 +257,19 @@ export default function CommentAuditResults({ results }: Props) {
                     <td className="px-2 py-1.5">
                       <span className={`inline-block rounded border px-1.5 py-0.5 ${VERDICT_CLASS[r.score.verdict]}`}>{VERDICT_TEXT[r.score.verdict]}</span>
                     </td>
-                    <td className="px-2 py-1.5">{LABEL_TITLES[r.score.topLabel]}</td>
+                    <td className="px-2 py-1.5">
+                      <div title={blend.map((c) => `${LABEL_TITLES[c.label]}: Historic ${c.historicPct}% · Standard ${c.standardPct}%`).join("\n")}>
+                        {LABEL_TITLES[blend[0]?.label ?? r.score.topLabel]}
+                      </div>
+                      {blend.length > 1 && <div className="text-[10px] text-muted-foreground">{formatBlend(blend)}</div>}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {OVERRIDABLE_VERDICTS.has(r.score.verdict) ? (
+                        <LabelOverrideSelect sessionId={id} score={r.score} mix={blend} value={override} onChange={onOverride} />
+                      ) : (
+                        <span className="text-muted-foreground">—</span>
+                      )}
+                    </td>
                     <td className="px-2 py-1.5 max-w-[520px]">
                       <button type="button" onClick={() => toggle(id)} aria-expanded={isOpen} className="text-left hover:underline">
                         <span className={isOpen ? "" : "line-clamp-2"}>{text}</span>
@@ -201,10 +278,10 @@ export default function CommentAuditResults({ results }: Props) {
                   </tr>
                   {isOpen && (
                     <tr className="bg-muted/30">
-                      <td colSpan={9} className="px-3 py-2 space-y-1">
+                      <td colSpan={10} className="px-3 py-2 space-y-1">
                         <div className="font-semibold">Όλα τα ευρήματα:</div>
                         <ul className="list-disc pl-5">
-                          {r.evidence.facts.map((f, i) => <li key={i}>{f.text}</li>)}
+                          {r.evidence.facts.map((f, i) => <li key={i}>{factText(f)}</li>)}
                           {r.evidence.facts.length === 0 && <li>Καμία ένδειξη.</li>}
                         </ul>
                         <div className="text-muted-foreground">

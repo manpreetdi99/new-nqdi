@@ -3,6 +3,7 @@ import { useDebouncedValue } from "@/hooks/use-debounced-value";
 import { fetchCollectionNames, fetchAllCalls } from "@/lib/api";
 import type { AllCallsRow } from "@/lib/api";
 import CommentAuditPanel from "./CommentAuditPanel";
+import ScoringIllustrations from "./ScoringIllustrations";
 
 
 export interface DemoTabProps {
@@ -150,6 +151,8 @@ export default function DemoTab({ databases }: DemoTabProps) {
         </div>
         {(rowsLoading || selectionSettling) && <p className="text-[11px] text-muted-foreground">Loading calls…</p>}
       </div>
+
+      <ScoringIllustrations />
 
       {error && <div className="text-sm text-red-400">{error}</div>}
 

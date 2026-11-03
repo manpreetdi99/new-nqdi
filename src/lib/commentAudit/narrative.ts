@@ -5,7 +5,7 @@
 import { LABEL_TITLES, type ParsedComment } from "./labels";
 import { BAD_RADIO_FEATURES, type CallEvidence, type EvidenceFact } from "./evidence";
 import { profileFor } from "./profiles";
-import type { AuditScore } from "./scoring";
+import type { AuditScore, LabelShare } from "./scoring";
 
 export interface Narrative {
   why: string;
@@ -13,12 +13,19 @@ export interface Narrative {
   alternative: string | null;
   sideNote: string | null;
   verdict: string;
+  /** Κατανομή αιτιών σε ποσοστά, π.χ. «Κατά τα δεδομένα: 50% LC LTE · 50% FAKE UE STUCK (UL DISCONNECT).» */
+  mix: string | null;
 }
 
 const MAX_OTHER_FACTS = 3;
 const RADIO_FEATURES: ReadonlySet<string> = new Set(BAD_RADIO_FEATURES);
 
-const joinFacts = (facts: readonly EvidenceFact[]) => facts.map((f) => f.text).join("· ");
+/** «50% LC LTE · 50% FAKE UE STUCK (UL DISCONNECT)» */
+export const formatMix = (mix: readonly LabelShare[]) => mix.map((s) => `${s.pct}% ${LABEL_TITLES[s.label]}`).join(" · ");
+
+/** Κάθε εύρημα με την πηγή του: «… [tracelog B]». */
+export const factText = (f: EvidenceFact) => `${f.text} [${f.source}]`;
+const joinFacts = (facts: readonly EvidenceFact[]) => facts.map(factText).join("· ");
 
 function ruleVerdictText(score: AuditScore, rule: string): string {
   const top = `«${LABEL_TITLES[score.topLabel]}»`;
@@ -82,6 +89,8 @@ export function buildNarrative(comment: ParsedComment | null, evidence: CallEvid
     alternative: alternativeText(score, evidence, contradicting),
     sideNote: comment ? sideNote(comment, evidence) : null,
     verdict: verdictText(score),
+    // Με κανόνα η αιτία είναι 100% και το λέει ήδη η ετυμηγορία.
+    mix: !score.rule && score.mix.length ? `Κατά τα δεδομένα: ${formatMix(score.mix)}.` : null,
   };
 }
 
@@ -98,5 +107,5 @@ function alternativeText(score: AuditScore, evidence: CallEvidence, alreadyShown
 }
 
 export function narrativeText(n: Narrative): string {
-  return [n.why, n.against, n.alternative, n.sideNote, n.verdict].filter(Boolean).join(" ");
+  return [n.why, n.against, n.alternative, n.sideNote, n.verdict, n.mix].filter(Boolean).join(" ");
 }

@@ -176,6 +176,13 @@ export interface AuditScore {
   verdict: Verdict;
   /** Κανόνας που αποφάσισε την ετικέτα (υπερισχύει του content/CF), αλλιώς null. */
   rule: string | null;
+  /** Κατανομή των πιθανών αιτιών σε ποσοστά (άθροισμα 100), από την πιο πιθανή. Κενή όταν δεν κρίνεται. */
+  mix: readonly LabelShare[];
+}
+
+export interface LabelShare {
+  label: AuditLabel;
+  pct: number;
 }
 
 /** Λιγότερες ετικέτες από αυτό → το MF δεν έχει τι να μάθει, μένει μόνο το content. */
@@ -198,8 +205,45 @@ export function verdictFor(userScore: number, topScore: number, isTop: boolean, 
   return "wrong";
 }
 
+const MIX_MAX_LABELS = 3;
+/** Στην κατανομή μπαίνουν αιτίες με σκορ τουλάχιστον τόσο σε σχέση με την πρώτη. */
+const MIX_RELATIVE = 0.5;
+
+/** Ποσοστά ακέραια με άθροισμα ακριβώς 100 (μέθοδος μεγαλύτερου υπολοίπου). */
+export function toPercentages(values: readonly number[]): number[] {
+  const total = values.reduce((a, b) => a + b, 0);
+  if (total <= 0) return values.map(() => 0);
+  const exact = values.map((v) => (100 * v) / total);
+  const floors = exact.map(Math.floor);
+  let left = 100 - floors.reduce((a, b) => a + b, 0);
+  const byRemainder = exact.map((v, i) => [v - floors[i], i] as const).sort((a, b) => b[0] - a[0]);
+  const out = [...floors];
+  for (const [, i] of byRemainder) {
+    if (left <= 0) break;
+    out[i] += 1;
+    left -= 1;
+  }
+  return out;
+}
+
+/**
+ * Κατανομή των αιτιών που στηρίζουν τα δεδομένα (π.χ. 50% UL disconnect · 50% LC LTE):
+ * έως 3 αιτίες με σκορ ≥ 50% της πρώτης, κανονικοποιημένες στο 100. Στο "μερικώς"
+ * μπαίνει πάντα και η ετικέτα του χρήστη, ώστε να φαίνεται πόσο τη στηρίζουν.
+ */
+export function labelMix(hybrid: LabelScores, candidates: readonly AuditLabel[], userLabel: AuditLabel | null, verdict: Verdict): LabelShare[] {
+  const ranked = [...candidates].sort((a, b) => hybrid[b] - hybrid[a]);
+  const top = ranked.length ? hybrid[ranked[0]] : 0;
+  if (top < MIN_EVIDENCE) return [];
+  const picked = ranked.filter((l) => hybrid[l] >= Math.max(MIN_EVIDENCE, MIX_RELATIVE * top)).slice(0, MIX_MAX_LABELS);
+  const needsUser = verdict === "partial" && userLabel && hybrid[userLabel] > 0 && !picked.some((l) => labelMatches(userLabel, l));
+  const labels = needsUser && userLabel ? [...picked, userLabel] : picked;
+  const pcts = toPercentages(labels.map((l) => hybrid[l]));
+  return labels.map((label, i) => ({ label, pct: pcts[i] })).filter((s) => s.pct > 0);
+}
+
 export interface AuditOptions {
-  /** Πώς εφαρμόζεται ο κανόνας DRB 3 (βλ. DrbRuleMode). */
+  /** Πώς εφαρμόζεται ο κανόνας DRB 3 του audit (βλ. DrbRuleMode). */
   drbRule?: DrbRuleMode;
 }
 
@@ -217,18 +261,18 @@ export function auditComments(items: readonly AuditItem[], mf: MfOptions = DEFAU
     const userLabel = item.comment?.label ?? null;
     const rule = rules.find((r) => r.applies(item.features));
     if (rule) {
-      const base = { id: item.id, content, collaborative, hybrid, userLabel, topLabel: rule.label, topScore: 1, rule: rule.description };
+      const base = { id: item.id, content, collaborative, hybrid, userLabel, topLabel: rule.label, topScore: 1, rule: rule.description, mix: [{ label: rule.label, pct: 100 }] };
       if (!userLabel) return { ...base, userScore: null, grade: null, verdict: item.comment ? "not_auditable" : "no_comment" };
       const match = labelMatches(userLabel, rule.label);
       return { ...base, userScore: match ? 1 : 0, grade: match ? 100 : 0, verdict: match ? "correct" : "wrong" };
     }
 
     // Πρώτη ετικέτα = η πιο συγκεκριμένη (όχι γενική) και όχι ετικέτα κανόνα που δεν ισχύει.
-    const [topLabel, topScore] = SPECIFIC_LABELS.filter((l) => !rules.some((r) => r.label === l))
-      .map((l) => [l, hybrid[l]] as const)
-      .reduce((best, cur) => (cur[1] > best[1] ? cur : best));
+    const candidates = SPECIFIC_LABELS.filter((l) => !rules.some((r) => r.exclusive && r.label === l));
+    const [topLabel, topScore] = candidates.map((l) => [l, hybrid[l]] as const).reduce((best, cur) => (cur[1] > best[1] ? cur : best));
     if (!userLabel) {
-      return { id: item.id, content, collaborative, hybrid, userLabel, topLabel, topScore, userScore: null, grade: null, verdict: item.comment ? "not_auditable" : "no_comment", rule: null };
+      const verdict: Verdict = item.comment ? "not_auditable" : "no_comment";
+      return { id: item.id, content, collaborative, hybrid, userLabel, topLabel, topScore, userScore: null, grade: null, verdict, rule: null, mix: labelMix(hybrid, candidates, null, verdict) };
     }
     const userScore = hybrid[userLabel];
     const relative = topScore > 0 ? userScore / topScore : 0;
@@ -240,6 +284,7 @@ export function auditComments(items: readonly AuditItem[], mf: MfOptions = DEFAU
     const verdict = unverifiableRadio
       ? "insufficient"
       : verdictFor(userScore, topScore, labelMatches(userLabel, topLabel), primaryEvidence(userLabel, item.features));
-    return { id: item.id, content, collaborative, hybrid, userLabel, topLabel, topScore, userScore, grade, verdict, rule: null };
+    const mix = verdict === "insufficient" ? [] : labelMix(hybrid, candidates, userLabel, verdict);
+    return { id: item.id, content, collaborative, hybrid, userLabel, topLabel, topScore, userScore, grade, verdict, rule: null, mix };
   });
 }

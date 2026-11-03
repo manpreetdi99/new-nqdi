@@ -47,6 +47,8 @@ export const PRIOR_PROFILES: Readonly<Record<AuditLabel, Profile>> = {
   // pptx #19 (χωρίς slide): Paging Request χωρίς Paging Response, καλό ράδιο.
   FAKE_UE_STUCK_NO_PAGING_RESPONSE: { noPagingResponse: 1, ...NEEDS_GOOD_RADIO(0.5) },
   USER_SIDE: { userSide: 1 },
+  // Κανόνας χρήστη: Tracking Area Update Request (A ή B) με καλό ράδιο.
+  TAU: { tauRequest: 1, ...NEEDS_GOOD_RADIO(0.5) },
 };
 
 /** Κατηγορίες που δεν είναι στο pptx: κρατιούνται, με χαμηλότερη προτεραιότητα. */
@@ -81,12 +83,16 @@ export function primaryEvidence(label: AuditLabel, x: FeatureVector): number {
 }
 
 /** Αποδεκτό ράδιο κατά το pptx: κανένα κακό δείγμα και χωρίς αποτυχημένο re-establishment. */
-export const radioAcceptable = (x: FeatureVector) => BAD_RADIO_FEATURES.every((k) => x[k] === 0) && x.reestFailure < 1 && x.noRadio === 0;
+/** Καλές μετρήσεις ράδιο (κινητό και scanner), χωρίς άλλον έλεγχο. */
+export const radioMeasurementsGood = (x: FeatureVector) => BAD_RADIO_FEATURES.every((k) => x[k] === 0) && x.noRadio === 0;
+export const radioAcceptable = (x: FeatureVector) => radioMeasurementsGood(x) && x.reestFailure < 1;
 
 export interface HardRule {
   label: AuditLabel;
   description: string;
   applies: (x: FeatureVector) => boolean;
+  /** Η ετικέτα βγαίνει ΜΟΝΟ από τον κανόνα (όχι από τα σκορ) — ισχύει για το DRB. */
+  exclusive?: boolean;
 }
 
 /**
@@ -100,16 +106,26 @@ const DRB_RULES: Readonly<Record<DrbRuleMode, HardRule>> = {
     label: "CORE_DRB_RELEASE",
     description: "drb-ToReleaseList { 3 } στο 1ο/2ο RRC Reconfiguration μετά το IMS SIP ACK (A ή B), με Reconfiguration Complete και αποδεκτό ράδιο → CORE NETWORK (DRB RELEASE 3)",
     applies: (x) => x.drbRelease3 === 1 && radioAcceptable(x),
+    exclusive: true,
   },
   unconditional: {
     label: "CORE_DRB_RELEASE",
     description: "drb-ToReleaseList { 3 } στο 1ο/2ο RRC Reconfiguration μετά το IMS SIP ACK (A ή B), χωρίς έλεγχο ράδιο → CORE NETWORK (DRB RELEASE 3)",
     applies: (x) => x.drbRelease3 > 0,
+    exclusive: true,
   },
 };
 
-/** Κανόνες του χρήστη: όταν ισχύουν, ορίζουν το σωστό σχόλιο ανεξάρτητα από τα σκορ. */
-export const hardRules = (drbMode: DrbRuleMode = "strict"): readonly HardRule[] => [DRB_RULES[drbMode]];
+/** Κανόνας χρήστη: UL Tracking Area Update Request στο L3 έστω ενός κινητού, με καλό ράδιο → TAU. */
+const TAU_RULE: HardRule = {
+  label: "TAU",
+  description: "UL Tracking Area Update Request στο L3 (A ή B) με καλές μετρήσεις ράδιο → TAU",
+  applies: (x) => x.tauRequest === 1 && radioMeasurementsGood(x),
+  exclusive: true,
+};
+
+/** Κανόνες του Standard (pptx + κανόνες DRB και TAU του χρήστη) που ορίζουν το σωστό σχόλιο ανεξάρτητα από τα σκορ. */
+export const hardRules = (drbMode: DrbRuleMode = "strict"): readonly HardRule[] => [DRB_RULES[drbMode], TAU_RULE];
 
 export const HARD_RULES = hardRules("strict");
 

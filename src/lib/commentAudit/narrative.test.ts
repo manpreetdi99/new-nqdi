@@ -30,7 +30,7 @@ describe("buildNarrative", () => {
     });
     expect(n.against).toContain("καλό ράδιο σε όλη την κλήση (min RxLev -60 dBm)");
     expect(n.verdict).toContain("«CORE NETWORK (DL CHANNEL RELEASE)»");
-    expect(n.alternative).toBe("Για «CORE NETWORK (DL CHANNEL RELEASE)» μιλούν: το δίκτυο ξεκίνησε τον τερματισμό (πρώτο μήνυμα DL Disconnect/Release) στην A πλευρά.");
+    expect(n.alternative).toBe("Για «CORE NETWORK (DL CHANNEL RELEASE)» μιλούν: το δίκτυο ξεκίνησε τον τερματισμό (πρώτο μήνυμα DL Disconnect/Release) στην A πλευρά [L3 A].");
   });
 
   it("warns when the declared side differs from the worst radio side", () => {
@@ -42,7 +42,7 @@ describe("buildNarrative", () => {
     const goodLte = Array.from({ length: 6 }, () => ({ RSRP: -95, RSRQ: -9, phase: "during" }));
     const n = narrate("LC LTE", { ...empty, lteA: goodLte, drbReleases: [{ side: "B", drbIds: [3], secondsFromEnd: -0.2, confirmed: true, reconfigAfterAck: 1 }] });
     expect(n.alternative).toBe(
-      "Για «CORE NETWORK (DRB RELEASE 3)» μιλούν: drb-ToReleaseList { 3 } στο 1ο RRC Connection Reconfiguration μετά το IMS SIP ACK στην B πλευρά, 0.2 s πριν το τέλος της κλήσης, το UE απάντησε Reconfiguration Complete.",
+      "Για «CORE NETWORK (DRB RELEASE 3)» μιλούν: drb-ToReleaseList { 3 } στο 1ο RRC Connection Reconfiguration μετά το IMS SIP ACK στην B πλευρά, 0.2 s πριν το τέλος της κλήσης, το UE απάντησε Reconfiguration Complete [RRC B + SIP].",
     );
     expect(n.verdict).toBe(
       "Κανόνας: drb-ToReleaseList { 3 } στο 1ο/2ο RRC Reconfiguration μετά το IMS SIP ACK (A ή B), με Reconfiguration Complete και αποδεκτό ράδιο → CORE NETWORK (DRB RELEASE 3). Το σχόλιο έπρεπε να είναι «CORE NETWORK (DRB RELEASE 3)» — βαθμός 0/100.",

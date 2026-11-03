@@ -1,13 +1,19 @@
 import { useCallback, useMemo, useRef, useState } from "react";
 import { Loader2, ScanSearch } from "lucide-react";
 import type { AllCallsRow } from "@/lib/api";
+import { useLocalStorage } from "@/hooks/use-local-storage";
+import type { AuditLabel } from "@/lib/commentAudit/labels";
+import { OVERRIDABLE_VERDICTS, OVERRIDES_STORAGE_KEY, overrideFor, withOverride, type LabelOverrides } from "@/lib/commentAudit/overrides";
 import { extractEvidence } from "@/lib/commentAudit/evidence";
 import { fetchCallEvidence } from "@/lib/commentAudit/fetchBundle";
 import { parseComment } from "@/lib/commentAudit/labels";
 import { buildNarrative } from "@/lib/commentAudit/narrative";
+import { buildKpiRow, toCsv } from "@/lib/commentAudit/kpiExport";
+import { DEFAULT_HISTORIC_WEIGHT, formatWeights } from "@/lib/commentAudit/blend";
+import { HISTORIC_MODEL, historicFor, isTrained } from "@/lib/commentAudit/historic";
 import { auditComments, type DrbRuleMode } from "@/lib/commentAudit/scoring";
 import CommentAuditResults, { type AuditRow } from "./CommentAuditResults";
-import MdComparisonTable from "./MdComparisonTable";
+import StandardHistoricTable from "./StandardHistoricTable";
 
 type Props = {
   database: string;
@@ -30,8 +36,21 @@ function lastCallOfEachFile(rows: readonly AllCallsRow[]): ReadonlySet<string> {
 }
 
 const AUDIT_CONCURRENCY = 3;
+const HISTORIC_WEIGHT_STORAGE_KEY = "commentAudit.historicWeightPct";
 
 type Fetched = Omit<AuditRow, "score" | "narrative">;
+
+/** Historic: μοντέλο από το audit-kpis-historic.csv, μόνο από τις μετρήσεις κάθε κλήσης. */
+function historicAll(fetched: readonly Fetched[], database: string): AuditRow[] {
+  return fetched.flatMap((f) => {
+    const h = historicFor(HISTORIC_MODEL, { database, row: f.row, bundle: f.bundle, evidence: f.evidence, comment: f.comment });
+    return h ? [{ ...f, ...h }] : [];
+  });
+}
+
+const HISTORIC_TRAINED_ON = isTrained(HISTORIC_MODEL)
+  ? `${HISTORIC_MODEL.rows} κλήσεις με σχόλιο από ${HISTORIC_MODEL.databases.join(", ")}`
+  : "δεν έχει εκπαιδευτεί ακόμη";
 
 /** Το MF χρειάζεται όλες τις κλήσεις μαζί, γι' αυτό η βαθμολόγηση γίνεται στο τέλος. */
 function scoreAll(fetched: readonly Fetched[], drbRule: DrbRuleMode): AuditRow[] {
@@ -47,15 +66,62 @@ export default function CommentAuditPanel({ database, rows, allRows }: Props) {
   // Κρατάμε τα δεδομένα του backend: το κουμπί «DRB without rules» ξαναβαθμολογεί χωρίς νέο fetch.
   const [fetchedRows, setFetchedRows] = useState<readonly Fetched[]>([]);
   const [drbWithoutRules, setDrbWithoutRules] = useState(false);
+  const [isRunning, setIsRunning] = useState(false);
+  const [progress, setProgress] = useState(0);
+  const [error, setError] = useState<string | null>(null);
   const allResults = useMemo(() => scoreAll(fetchedRows, drbWithoutRules ? "unconditional" : "strict"), [fetchedRows, drbWithoutRules]);
+  // Standard με τον αυστηρό κανόνα DRB (δεν επηρεάζεται από το «DRB without rules») και Historic στις ίδιες κλήσεις.
+  const strictResults = useMemo(() => scoreAll(fetchedRows, "strict"), [fetchedRows]);
+  const historicResults = useMemo(() => historicAll(fetchedRows, database), [fetchedRows, database]);
+  // Επιλογές του χρήστη «ποια αιτία υπερισχύει» (μερικώς/λάθος), ανά βάση, μόνιμα στον browser.
+  const [allOverrides, setAllOverrides] = useLocalStorage<LabelOverrides>(OVERRIDES_STORAGE_KEY, {});
+  const overrides = useMemo(() => {
+    const stored = allOverrides?.[database] ?? {};
+    return Object.fromEntries(
+      Object.keys(stored).flatMap((sid) => {
+        const label = overrideFor(allOverrides, database, sid);
+        return label ? [[sid, label] as const] : [];
+      }),
+    ) as Readonly<Record<string, AuditLabel>>;
+  }, [allOverrides, database]);
+  // Μπάρα «Κατά τα δεδομένα»: % Historic (το Standard παίρνει το υπόλοιπο), μόνιμα στον browser.
+  const [storedWeight, setStoredWeight] = useLocalStorage<number>(HISTORIC_WEIGHT_STORAGE_KEY, Math.round(100 * DEFAULT_HISTORIC_WEIGHT));
+  const historicPct = Number.isFinite(storedWeight) ? Math.max(0, Math.min(100, Math.round(storedWeight))) : Math.round(100 * DEFAULT_HISTORIC_WEIGHT);
+  const historicWeight = historicPct / 100;
+  const historicMix = useMemo(() => new Map(historicResults.map((h) => [String(h.row.SessionId), h.score.mix])), [historicResults]);
+
+  const handleOverride = (sessionId: string, label: AuditLabel | null) =>
+    setAllOverrides((prev) => withOverride(prev, database, sessionId, label));
+
+  /** Μία γραμμή KPI ανά κλήση (μετρήσεις + scanner + Standard + Historic), για φόρτωση σε βάση / εκπαίδευση του Historic. */
+  const handleExportKpis = useCallback(() => {
+    if (strictResults.length === 0) return;
+    setError(null);
+    try {
+      // Ο scanner ήρθε ήδη με το Analyze (bundle.scanner), οπότε το export δεν κάνει νέα requests.
+      const historicBySession = new Map(historicResults.map((h) => [String(h.row.SessionId), h]));
+      const rows = strictResults.map((r) => {
+        const sid = String(r.row.SessionId);
+        const override = OVERRIDABLE_VERDICTS.has(r.score.verdict) ? overrides[sid] ?? null : null;
+        const historic = historicBySession.get(sid) ?? null;
+        return buildKpiRow({ database, row: r.row, bundle: r.bundle, evidence: r.evidence, comment: r.comment, standard: r, historic, override, historicWeight });
+      });
+      const blob = new Blob([toCsv(rows)], { type: "text/csv;charset=utf-8" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `audit-kpis-${database}-${new Date().toISOString().slice(0, 10)}.csv`;
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (e) {
+      setError(`Το export KPI σταμάτησε: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }, [database, strictResults, historicResults, overrides, historicWeight]);
   // Με «DRB without rules» απομονώνονται οι κλήσεις όπου έπιασε ο κανόνας DRB 3.
   const results = useMemo(
     () => (drbWithoutRules ? allResults.filter((r) => r.score.rule && r.score.topLabel === "CORE_DRB_RELEASE") : allResults),
     [allResults, drbWithoutRules],
   );
-  const [isRunning, setIsRunning] = useState(false);
-  const [progress, setProgress] = useState(0);
-  const [error, setError] = useState<string | null>(null);
   const cancelRef = useRef(false);
 
   const handleRun = useCallback(async () => {
@@ -99,10 +165,10 @@ export default function CommentAuditPanel({ database, rows, allRows }: Props) {
     <section className="rounded-lg border border-border bg-card p-3 space-y-3" aria-labelledby="comment-audit-heading">
       <div className="flex items-start justify-between gap-3 flex-wrap">
         <div>
-          <h3 id="comment-audit-heading" className="text-sm font-bold">User comment audit</h3>
+          <h3 id="comment-audit-heading" className="text-sm font-bold">User comment audit — Standard (pptx)</h3>
           <p className="text-[11px] text-muted-foreground max-w-3xl">
             Αναλύει τις {calls.length} drop/fail κλήσεις ({commentedCount} με σχόλιο χρήστη): μαζεύει από το backend ράδιο A/B (RSRP/RSRQ/SINR, RxLev/RxQual),
-            SIP, L3 και tracelog, βγάζει την αιτία κατά τα δεδομένα και, όπου υπάρχει σχόλιο, βαθμολογεί αν στέκει: content-based (προφίλ ανά κατηγορία) +
+            SIP, L3, tracelog και scanner (καλύτερη κυψέλη), βγάζει την αιτία κατά τα δεδομένα και, όπου υπάρχει σχόλιο, βαθμολογεί αν στέκει: content-based (προφίλ ανά κατηγορία) +
             collaborative filtering (παραγοντοποίηση πίνακα).
           </p>
         </div>
@@ -127,6 +193,15 @@ export default function CommentAuditPanel({ database, rows, allRows }: Props) {
           >
             DRB without rules{drbWithoutRules ? ": ON" : ""}
           </button>
+          <button
+            type="button"
+            onClick={handleExportKpis}
+            disabled={isRunning || strictResults.length === 0}
+            title="KPIs ανά κλήση (ράδιο A/B, scanner, σηματοδοσία, σχόλιο, Standard, Historic) σε CSV για φόρτωση σε βάση"
+            className="flex items-center gap-2 px-3 py-1.5 rounded-md border border-border bg-muted hover:bg-muted/70 text-xs font-medium disabled:opacity-50"
+          >
+            Export KPIs (CSV)
+          </button>
           {isRunning && (
             <button
               type="button"
@@ -140,6 +215,31 @@ export default function CommentAuditPanel({ database, rows, allRows }: Props) {
       </div>
 
       {error && <p className="text-xs text-amber-400">{error}</p>}
+      {strictResults.length > 0 && historicResults.length > 0 && (
+        <div className="flex flex-wrap items-center gap-3 rounded-md border border-border px-3 py-2 text-xs">
+          <label htmlFor="historic-weight" className="font-medium">«Κατά τα δεδομένα»</label>
+          <span className="text-muted-foreground">Standard</span>
+          <input
+            id="historic-weight"
+            type="range"
+            min={0}
+            max={100}
+            step={5}
+            value={historicPct}
+            onChange={(e) => setStoredWeight(Number(e.target.value))}
+            aria-valuetext={formatWeights(historicWeight)}
+            className="w-48 accent-primary"
+          />
+          <span className="text-muted-foreground">Historic</span>
+          <span className="font-mono font-semibold">{formatWeights(historicWeight)}</span>
+          <span className="text-muted-foreground">ανά αιτία: Historic% × πιθανότητα Historic + Standard% × πιθανότητα Standard</span>
+          {historicPct !== Math.round(100 * DEFAULT_HISTORIC_WEIGHT) && (
+            <button type="button" onClick={() => setStoredWeight(Math.round(100 * DEFAULT_HISTORIC_WEIGHT))} className="rounded border border-border px-2 py-0.5 hover:bg-muted">
+              Default 65 / 35
+            </button>
+          )}
+        </div>
+      )}
       {drbWithoutRules && allResults.length > 0 && (
         <p className="text-xs text-amber-300">
           {results.length
@@ -147,8 +247,19 @@ export default function CommentAuditPanel({ database, rows, allRows }: Props) {
             : `Καμία από τις ${allResults.length} κλήσεις δεν έχει drb-ToReleaseList { 3 } στο 1ο/2ο RRC Reconfiguration μετά το IMS SIP ACK.`}
         </p>
       )}
-      {results.length > 0 && <CommentAuditResults results={results} />}
-      {results.length > 0 && <MdComparisonTable results={results} />}
+      {results.length > 0 && (
+        <CommentAuditResults
+          results={results}
+          database={database}
+          overrides={overrides}
+          onOverride={handleOverride}
+          historicMix={historicMix}
+          historicWeight={historicWeight}
+        />
+      )}
+      {strictResults.length > 0 && historicResults.length > 0 && (
+        <StandardHistoricTable standard={strictResults} historic={historicResults} database={database} trainedOn={HISTORIC_TRAINED_ON} />
+      )}
     </section>
   );
 }

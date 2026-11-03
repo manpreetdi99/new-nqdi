@@ -1203,10 +1203,11 @@ export async function fetchLteScannerRaw(
 
 export async function fetchLteServingVsScanner(
   database: string,
-  session_id: string
+  session_id: string,
+  options?: RequestOptions
 ): Promise<{ serving: any[]; scanner: any[]; missedHandoverHint: any | null }> {
   const params = new URLSearchParams({ database, session_id });
-  return requestJson(`/api/lte_serving_vs_scanner?${params.toString()}`);
+  return requestJson(`/api/lte_serving_vs_scanner?${params.toString()}`, options);
 }
 
 export async function fetchGsmScannerRaw(
@@ -1224,20 +1225,22 @@ export async function fetchGsmScannerBest(
   database: string,
   session_id: string,
   /** ±N δευτερόλεπτα γύρω από την κλήση (0 = μόνο η κλήση) */
-  windowSec = 0
+  windowSec = 0,
+  options?: RequestOptions
 ): Promise<any[]> {
   const params = new URLSearchParams({ database, session_id, window_sec: String(windowSec) });
-  return requestJson(`/api/gsm_scanner_best?${params.toString()}`);
+  return requestJson(`/api/gsm_scanner_best?${params.toString()}`, options);
 }
 
 export async function fetchLteScannerBest(
   database: string,
   session_id: string,
   /** ±N δευτερόλεπτα γύρω από την κλήση (0 = μόνο η κλήση) */
-  windowSec = 0
+  windowSec = 0,
+  options?: RequestOptions
 ): Promise<any[]> {
   const params = new URLSearchParams({ database, session_id, window_sec: String(windowSec) });
-  return requestJson(`/api/lte_scanner_best?${params.toString()}`);
+  return requestJson(`/api/lte_scanner_best?${params.toString()}`, options);
 }
 
 /** Κοινό 5G scanner: FactNR5GScannerBeam για το serving CID του κινητού στο [start, end], ισχυρότερο beam ανά χρονική στιγμή. */
@@ -1261,10 +1264,11 @@ export async function fetchNr5gScannerBest(
   database: string,
   session_id: string,
   /** ±N δευτερόλεπτα γύρω από την κλήση (0 = μόνο η κλήση) */
-  windowSec = 0
+  windowSec = 0,
+  options?: RequestOptions
 ): Promise<any[]> {
   const params = new URLSearchParams({ database, session_id, window_sec: String(windowSec) });
-  return requestJson(`/api/nr5g_scanner_best?${params.toString()}`);
+  return requestJson(`/api/nr5g_scanner_best?${params.toString()}`, options);
 }
 
 export async function fetchLteMeasurementComparison(

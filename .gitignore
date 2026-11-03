@@ -32,3 +32,11 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+# Local notes / scratch files
+/COSMOTE_BI_lineage_ana_selida_1.md
+/COSMOTE_BI_lineage_fields.csv
+/DEMO_TAB_SUMMARY.md
+/diko_mou_readme.txt
+/research.md
+/ΓΙΑ CRETE ALL CALL.TXT
